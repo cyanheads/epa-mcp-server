@@ -17,8 +17,8 @@ RUN bun install --frozen-lockfile
 # Copy the rest of the source code
 COPY . .
 
-# Build the application
-RUN bun run build
+# Build: run tsc + tsc-alias directly (bypasses the tsx build wrapper)
+RUN node_modules/.bin/tsc --project tsconfig.build.json && node_modules/.bin/tsc-alias --project tsconfig.build.json
 
 
 # ==============================================================================

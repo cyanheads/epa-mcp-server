@@ -28,8 +28,7 @@
       "type": "string",
       "title": "AirNow API Key",
       "description": "Required for air quality tools. Free registration at docs.airnowapi.org.",
-      "required": true,
-      "secret": true
+      "required": true
     }
   }
 }
