@@ -2,6 +2,14 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.3](changelog/0.1.x/0.1.3.md) — 2026-05-26
+
+Ecosystem metadata alignment — scoped package scripts, author/funding fields, FUNDING.yml, README install badges
+
+## [0.1.2](changelog/0.1.x/0.1.2.md) — 2026-05-26
+
+mcpName for MCP Registry, publish-mcp script, Dockerfile build-stage fix
+
 ## [0.1.1](changelog/0.1.x/0.1.1.md) — 2026-05-25
 
 Bug fixes from field testing — TRI field mapping, Superfund site lookup, SDWIS query, AirNow cache keys, ECHO headers, and server.json env var config
