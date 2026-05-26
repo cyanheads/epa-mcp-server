@@ -38,7 +38,7 @@ ENV NODE_ENV=production
 
 # OCI image metadata (https://github.com/opencontainers/image-spec/blob/main/annotations.md)
 LABEL org.opencontainers.image.title="epa-mcp-server"
-LABEL org.opencontainers.image.description=""
+LABEL org.opencontainers.image.description="Access EPA environmental data — facility compliance (ECHO), toxic releases (TRI), Superfund sites, drinking water systems, and real-time air quality (AirNow) via MCP."
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 # Copy dependency manifests
