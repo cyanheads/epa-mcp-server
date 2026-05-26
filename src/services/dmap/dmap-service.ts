@@ -11,6 +11,7 @@ import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { httpErrorFromResponse, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
 import type {
+  RawSdwisViolation,
   RawSdwisWaterSystem,
   RawSemsSite,
   RawTriFacility,
@@ -31,23 +32,13 @@ function parseNum(val: string | number | undefined): number | undefined {
 function normalizeTriRelease(raw: RawTriReportingForm): TriRelease {
   const result: TriRelease = {
     facilityId: raw.tri_facility_id ?? '',
-    chemicalName: raw.chemical_name_text ?? '',
+    // tri_reporting_form uses cas_chem_name, not chemical_name_text
+    chemicalName: raw.cas_chem_name ?? '',
     reportingYear: Number(raw.reporting_year ?? 0),
   };
-  const total = parseNum(raw.total_releases);
-  const air = parseNum(raw.air_releases);
-  const water = parseNum(raw.water_releases);
-  const land = parseNum(raw.land_releases);
-  const ug = parseNum(raw.underground_injection);
-  const onSite = parseNum(raw.on_site_release_total);
-  const offSite = parseNum(raw.off_site_release_total);
-  if (total !== undefined) result.totalReleasesInLbs = total;
-  if (air !== undefined) result.airReleasesInLbs = air;
-  if (water !== undefined) result.waterReleasesInLbs = water;
-  if (land !== undefined) result.landReleasesInLbs = land;
-  if (ug !== undefined) result.undergroundInjectionInLbs = ug;
-  if (onSite !== undefined) result.onSiteReleaseTotalInLbs = onSite;
-  if (offSite !== undefined) result.offSiteReleaseTotalInLbs = offSite;
+  // tri_reporting_form only has one_time_release_qty; air/water/land breakdowns are not in this table
+  const oneTime = parseNum(raw.one_time_release_qty);
+  if (oneTime !== undefined) result.totalReleasesInLbs = oneTime;
   return result;
 }
 
@@ -57,13 +48,16 @@ function normalizeSemsSite(raw: RawSemsSite): SuperfundSite {
   const lng = parseNum(raw.primary_longitude_decimal_val);
   return {
     siteId: raw.site_id ?? '',
-    name: raw.site_name ?? '',
-    ...(raw.street_address_1 && { street: raw.street_address_1 as string }),
+    // actual field is `name`, not `site_name` (site_name is null in SEMS)
+    name: raw.name ?? '',
+    // actual field is `street_addr_txt`, not `street_address_1`
+    ...(raw.street_addr_txt && { street: raw.street_addr_txt as string }),
     ...(raw.city_name && { city: raw.city_name as string }),
     ...(raw.fk_ref_state_code && { state: raw.fk_ref_state_code as string }),
     ...(raw.zip_code && { zip: raw.zip_code as string }),
     ...(raw.county_name && { county: raw.county_name as string }),
-    ...(raw.county_fips_code && { fipsCode: raw.county_fips_code as string }),
+    // actual field is `fips_code`, not `county_fips_code`
+    ...(raw.fips_code && { fipsCode: raw.fips_code as string }),
     ...(raw.npl_status_code && { nplStatus: raw.npl_status_code as string }),
     ...(raw.cleanup_status && { cleanupStatus: raw.cleanup_status as string }),
     ...(lat !== undefined && { latitude: lat }),
@@ -72,19 +66,25 @@ function normalizeSemsSite(raw: RawSemsSite): SuperfundSite {
 }
 
 /** Normalize a raw SDWIS water system record. */
-function normalizeSdwisWaterSystem(raw: RawSdwisWaterSystem): WaterSystem {
+function normalizeSdwisWaterSystem(
+  raw: RawSdwisWaterSystem,
+  violatingPwsids?: Set<string>,
+): WaterSystem {
   const pop = parseNum(raw.population_served_count);
+  const pwsid = raw.pwsid ?? '';
   return {
-    pwsid: raw.pwsid ?? '',
+    pwsid,
     name: raw.pws_name ?? '',
     ...(raw.primacy_agency_code && { state: raw.primacy_agency_code as string }),
-    ...(raw.city_served && { city: raw.city_served as string }),
+    // actual field is city_name, not city_served
+    ...(raw.city_name && { city: raw.city_name as string }),
     ...(raw.zip_code && { zip: raw.zip_code as string }),
     ...(raw.pws_type_code && { type: raw.pws_type_code as string }),
     ...(raw.primary_source_code && { primarySourceCode: raw.primary_source_code as string }),
     ...(pop !== undefined && { populationServed: pop }),
-    ...(raw.violation_flag !== undefined && { hasViolation: raw.violation_flag === 'Y' }),
-    ...(raw.active_flag !== undefined && { isActive: raw.active_flag === 'Y' }),
+    ...(violatingPwsids !== undefined && { hasViolation: violatingPwsids.has(pwsid) }),
+    // actual field is pws_activity_code, not active_flag; 'A' = active
+    ...(raw.pws_activity_code !== undefined && { isActive: raw.pws_activity_code === 'A' }),
   };
 }
 
@@ -171,8 +171,9 @@ export class DmapService {
       filters.push({ column: 'reporting_year', operator: 'equals', value: String(params.year) });
     }
     if (params.chemicalName) {
+      // actual field is cas_chem_name, not chemical_name_text
       filters.push({
-        column: 'chemical_name_text',
+        column: 'cas_chem_name',
         operator: 'contains',
         value: params.chemicalName,
       });
@@ -229,8 +230,9 @@ export class DmapService {
       });
     }
     if (params.chemicalName) {
+      // actual field is cas_chem_name, not chemical_name_text
       releaseFilters.push({
-        column: 'chemical_name_text',
+        column: 'cas_chem_name',
         operator: 'contains',
         value: params.chemicalName,
       });
@@ -320,6 +322,19 @@ export class DmapService {
     return sites.slice(0, limit);
   }
 
+  /** Fetch a single Superfund site by exact SEMS site ID. */
+  async searchSuperfundById(siteId: string, ctx: Context): Promise<SuperfundSite[]> {
+    const url = this.buildTableUrl(
+      'sems',
+      'envirofacts_site',
+      [{ column: 'site_id', operator: 'equals', value: siteId }],
+      { first: 0, last: 1 },
+    );
+    ctx.log.debug('DMAP Superfund by ID', { siteId });
+    const rows = await this.fetchTable<RawSemsSite>(url, ctx);
+    return rows.map(normalizeSemsSite);
+  }
+
   /** Search drinking water systems by state or ZIP code. */
   async searchWaterSystems(
     params: {
@@ -340,9 +355,6 @@ export class DmapService {
     if (params.zipCode) {
       filters.push({ column: 'zip_code', operator: 'equals', value: params.zipCode });
     }
-    if (params.hasViolation) {
-      filters.push({ column: 'violation_flag', operator: 'equals', value: 'Y' });
-    }
     if (params.pwsType) {
       const typeMap: Record<string, string> = {
         community: 'CWS',
@@ -355,11 +367,50 @@ export class DmapService {
 
     if (filters.length === 0) return [];
 
+    // When has_violation is requested, first collect violating PWS IDs from sdwis.violation.
+    // water_system has no violation_flag column — violations are in a separate table.
+    let violatingPwsids: Set<string> | undefined;
+    if (params.hasViolation) {
+      const violFilters: Array<{ column: string; operator: string; value: string }> = [];
+      if (params.state) {
+        violFilters.push({
+          column: 'primacy_agency_code',
+          operator: 'equals',
+          value: params.state,
+        });
+      }
+      if (params.zipCode) {
+        // sdwis.violation has no zip column; fall back to post-filter on the system level
+        // by still fetching all violations for the state
+      }
+      if (violFilters.length > 0) {
+        const violUrl = this.buildTableUrl('sdwis', 'violation', violFilters, {
+          first: 0,
+          last: 999,
+        });
+        ctx.log.debug('DMAP SDWIS violation query', { state: params.state });
+        const violRows = await this.fetchTable<RawSdwisViolation>(violUrl, ctx);
+        violatingPwsids = new Set(
+          violRows.map((r) => r.pwsid).filter((id): id is string => typeof id === 'string'),
+        );
+        // If filtering by violation, restrict the main query to only violating PWS IDs
+        if (violatingPwsids.size > 0) {
+          filters.push({
+            column: 'pwsid',
+            operator: 'in',
+            value: Array.from(violatingPwsids).slice(0, 100).join(','),
+          });
+        } else {
+          return [];
+        }
+      }
+    }
+
     const url = this.buildTableUrl('sdwis', 'water_system', filters, { first: 0, last: limit - 1 });
     ctx.log.debug('DMAP water systems query', { state: params.state });
 
     const rows = await this.fetchTable<RawSdwisWaterSystem>(url, ctx);
-    return rows.map(normalizeSdwisWaterSystem);
+    return rows.map((r) => normalizeSdwisWaterSystem(r, violatingPwsids));
   }
 }
 

@@ -10,7 +10,7 @@ import { getDmapService } from '@/services/dmap/dmap-service.js';
 export const searchTriReleasesTool = tool('epa_search_tri_releases', {
   title: 'Search TRI Releases by Region',
   description:
-    'Search Toxic Release Inventory data across facilities in a state or county for a given reporting year. Returns facility name, TRI ID, chemical name, total releases by medium, and facility coordinates. Use to identify top polluters in an area or build an environmental exposure profile. Use epa_get_tri_releases for detailed release breakdown for a single facility. TRI data lags ~18 months from the current calendar year.',
+    'Search Toxic Release Inventory data across facilities in a state or county for a given reporting year. Returns facility name, TRI ID, chemical name, and release quantity. Use to identify top polluters in an area or build an environmental exposure profile. Use epa_get_tri_releases for detailed release records for a single facility. TRI data lags ~18 months from the current calendar year.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -53,30 +53,13 @@ export const searchTriReleasesTool = tool('epa_search_tri_releases', {
         z
           .object({
             facilityId: z.string().describe('TRI facility identifier'),
+            facilityName: z.string().optional().describe('Facility name'),
             chemicalName: z.string().describe('Chemical name as reported to TRI'),
             reportingYear: z.number().describe('Year of the TRI submission'),
             totalReleasesInLbs: z
               .number()
               .optional()
-              .describe('Total releases across all media in pounds'),
-            airReleasesInLbs: z.number().optional().describe('Air releases in pounds'),
-            waterReleasesInLbs: z
-              .number()
-              .optional()
-              .describe('Water discharge releases in pounds'),
-            landReleasesInLbs: z.number().optional().describe('Land disposal releases in pounds'),
-            undergroundInjectionInLbs: z
-              .number()
-              .optional()
-              .describe('Underground injection releases in pounds'),
-            onSiteReleaseTotalInLbs: z
-              .number()
-              .optional()
-              .describe('Total on-site releases in pounds'),
-            offSiteReleaseTotalInLbs: z
-              .number()
-              .optional()
-              .describe('Total off-site releases in pounds'),
+              .describe('One-time release quantity in pounds (from tri_reporting_form)'),
           })
           .describe('TRI release record for a facility-chemical-year combination'),
       )
@@ -141,21 +124,10 @@ export const searchTriReleasesTool = tool('epa_search_tri_releases', {
     if (result.message) lines.push(`\n> ${result.message}`);
 
     for (const r of result.releases) {
-      lines.push(`\n### ${r.chemicalName} — Facility ${r.facilityId} (${r.reportingYear})`);
+      const facilityLabel = r.facilityName ? `${r.facilityName} (${r.facilityId})` : r.facilityId;
+      lines.push(`\n### ${r.chemicalName} — ${facilityLabel} (${r.reportingYear})`);
       if (r.totalReleasesInLbs !== undefined)
-        lines.push(`**Total:** ${r.totalReleasesInLbs.toLocaleString()} lbs`);
-      if (r.airReleasesInLbs !== undefined)
-        lines.push(`**Air:** ${r.airReleasesInLbs.toLocaleString()} lbs`);
-      if (r.waterReleasesInLbs !== undefined)
-        lines.push(`**Water:** ${r.waterReleasesInLbs.toLocaleString()} lbs`);
-      if (r.landReleasesInLbs !== undefined)
-        lines.push(`**Land:** ${r.landReleasesInLbs.toLocaleString()} lbs`);
-      if (r.undergroundInjectionInLbs !== undefined)
-        lines.push(`**Underground:** ${r.undergroundInjectionInLbs.toLocaleString()} lbs`);
-      if (r.onSiteReleaseTotalInLbs !== undefined)
-        lines.push(`**On-Site Total:** ${r.onSiteReleaseTotalInLbs.toLocaleString()} lbs`);
-      if (r.offSiteReleaseTotalInLbs !== undefined)
-        lines.push(`**Off-Site Total:** ${r.offSiteReleaseTotalInLbs.toLocaleString()} lbs`);
+        lines.push(`**Release Quantity:** ${r.totalReleasesInLbs.toLocaleString()} lbs`);
     }
 
     return [{ type: 'text', text: lines.join('\n') }];

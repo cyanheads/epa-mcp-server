@@ -74,8 +74,8 @@ export class AirNowService {
     const stable = Object.entries(params)
       .filter(([, v]) => v !== undefined)
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([k, v]) => `${k}=${v}`)
-      .join('&');
+      .map(([k, v]) => `${k}-${v}`)
+      .join('_');
     return `airnow:${kind}:${stable}`;
   }
 

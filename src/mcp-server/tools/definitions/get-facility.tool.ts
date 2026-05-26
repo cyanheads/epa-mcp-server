@@ -10,7 +10,7 @@ import { getEchoService } from '@/services/echo/echo-service.js';
 export const getFacilityTool = tool('epa_get_facility', {
   title: 'Get EPA Facility Compliance Profile',
   description:
-    'Retrieve a full compliance profile for a single EPA-regulated facility by EPA Registry ID. Aggregates facility metadata, per-program compliance status, inspection history, formal enforcement actions, penalty amounts, and TRI release totals from multiple ECHO DFR endpoints in parallel. Use epa_search_facilities to discover Registry IDs. For area-level enforcement discovery use epa_search_violations instead.',
+    'Retrieve a full compliance profile for a single EPA-regulated facility by EPA Registry ID. Returns facility metadata, per-program compliance status, inspection history, formal enforcement actions, penalty totals, and TRI release summary. Use epa_search_facilities to discover Registry IDs. For area-level enforcement discovery use epa_search_violations instead.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({

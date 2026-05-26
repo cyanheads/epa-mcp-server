@@ -23,12 +23,6 @@ const benzeneRelease = {
   chemicalName: 'BENZENE',
   reportingYear: 2022,
   totalReleasesInLbs: 1240,
-  airReleasesInLbs: 980,
-  waterReleasesInLbs: 0,
-  landReleasesInLbs: 0,
-  undergroundInjectionInLbs: 0,
-  onSiteReleaseTotalInLbs: 980,
-  offSiteReleaseTotalInLbs: 260,
 };
 
 describe('getTriReleasesTool', () => {
@@ -115,10 +109,7 @@ describe('getTriReleasesTool', () => {
     expect(text).toContain('BENZENE');
     expect(text).toContain('2022');
     expect(text).toContain('1,240');
-    expect(text).toContain('Air');
-    expect(text).toContain('980');
-    expect(text).toContain('On-Site Total');
-    expect(text).toContain('Off-Site Total');
+    expect(text).toContain('Release Quantity');
   });
 
   it('formats empty result with message', () => {

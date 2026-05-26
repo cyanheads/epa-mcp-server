@@ -90,7 +90,10 @@ export class EchoService {
   private async fetchJson<T>(url: string, ctx: Context): Promise<T> {
     return withRetry(
       async () => {
-        const response = await fetch(url, { signal: ctx.signal });
+        const response = await fetch(url, {
+          signal: ctx.signal,
+          headers: { 'User-Agent': '@cyanheads/epa-mcp-server/0.1.0' },
+        });
         if (!response.ok) {
           throw await httpErrorFromResponse(response, { service: 'ECHO', data: { url } });
         }
@@ -101,7 +104,14 @@ export class EchoService {
             { url },
           );
         }
-        return JSON.parse(text) as T;
+        const parsed = JSON.parse(text) as Record<string, unknown>;
+        // ECHO returns bot-blocking errors in Results.Error.ErrorMessage rather than HTTP error codes
+        const errorMsg = (parsed as { Results?: { Error?: { ErrorMessage?: string } } }).Results
+          ?.Error?.ErrorMessage;
+        if (errorMsg) {
+          throw serviceUnavailable(`ECHO API error: ${errorMsg}`, { url });
+        }
+        return parsed as T;
       },
       {
         operation: 'EchoService.fetchJson',

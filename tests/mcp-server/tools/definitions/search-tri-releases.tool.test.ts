@@ -20,15 +20,10 @@ vi.mock('@/services/dmap/dmap-service.js', () => ({
 
 const waRelease = {
   facilityId: 'WA0001234',
+  facilityName: 'TEST FACILITY',
   chemicalName: 'BENZENE',
   reportingYear: 2022,
   totalReleasesInLbs: 580,
-  airReleasesInLbs: 520,
-  waterReleasesInLbs: 60,
-  landReleasesInLbs: 0,
-  undergroundInjectionInLbs: 0,
-  onSiteReleaseTotalInLbs: 520,
-  offSiteReleaseTotalInLbs: 60,
 };
 
 describe('searchTriReleasesTool', () => {
@@ -105,10 +100,8 @@ describe('searchTriReleasesTool', () => {
     expect(text).toContain('WA0001234');
     expect(text).toContain('2022');
     expect(text).toContain('580');
-    expect(text).toContain('Air');
-    expect(text).toContain('Water');
-    expect(text).toContain('On-Site Total');
-    expect(text).toContain('Off-Site Total');
+    expect(text).toContain('Release Quantity');
+    expect(text).toContain('TEST FACILITY');
   });
 
   it('formats empty result with message', () => {

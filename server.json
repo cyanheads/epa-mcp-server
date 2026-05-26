@@ -26,6 +26,12 @@
       ],
       "environmentVariables": [
         {
+          "name": "AIRNOW_API_KEY",
+          "description": "AirNow API key for real-time and forecast air quality data. Free registration at docs.airnowapi.org.",
+          "format": "string",
+          "isRequired": true
+        },
+        {
           "name": "MCP_LOG_LEVEL",
           "description": "Sets the minimum log level for output (e.g., 'debug', 'info', 'warn').",
           "format": "string",
@@ -54,6 +60,12 @@
         }
       ],
       "environmentVariables": [
+        {
+          "name": "AIRNOW_API_KEY",
+          "description": "AirNow API key for real-time and forecast air quality data. Free registration at docs.airnowapi.org.",
+          "format": "string",
+          "isRequired": true
+        },
         {
           "name": "MCP_HTTP_HOST",
           "description": "The hostname for the HTTP server.",

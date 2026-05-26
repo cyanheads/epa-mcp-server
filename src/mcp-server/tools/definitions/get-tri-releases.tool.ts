@@ -10,7 +10,7 @@ import { getDmapService } from '@/services/dmap/dmap-service.js';
 export const getTriReleasesTool = tool('epa_get_tri_releases', {
   title: 'Get TRI Chemical Releases for Facility',
   description:
-    'Query Toxic Release Inventory annual chemical release data for a specific facility. Returns per-chemical release quantities by medium (air, water, land, underground injection) and reporting year. TRI data lags ~18 months — the most recent available year is typically 2 years prior to the current calendar year. Obtain facility_id (TRI facility ID) from epa_search_facilities. Use epa_search_tri_releases to identify top emitters across a region.',
+    'Query Toxic Release Inventory annual chemical release data for a specific facility. Returns per-chemical release records with chemical name, total release quantity, and reporting year. TRI data lags ~18 months — the most recent available year is typically 2 years prior to the current calendar year. Obtain facility_id (TRI facility ID) from epa_search_facilities. Use epa_search_tri_releases to identify top emitters across a region.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -46,28 +46,7 @@ export const getTriReleasesTool = tool('epa_get_tri_releases', {
             totalReleasesInLbs: z
               .number()
               .optional()
-              .describe('Total releases across all media in pounds'),
-            airReleasesInLbs: z
-              .number()
-              .optional()
-              .describe('Air (fugitive + stack) releases in pounds'),
-            waterReleasesInLbs: z
-              .number()
-              .optional()
-              .describe('Water discharge releases in pounds'),
-            landReleasesInLbs: z.number().optional().describe('Land disposal releases in pounds'),
-            undergroundInjectionInLbs: z
-              .number()
-              .optional()
-              .describe('Underground injection releases in pounds'),
-            onSiteReleaseTotalInLbs: z
-              .number()
-              .optional()
-              .describe('Total on-site releases in pounds'),
-            offSiteReleaseTotalInLbs: z
-              .number()
-              .optional()
-              .describe('Total off-site releases in pounds'),
+              .describe('One-time release quantity in pounds (from tri_reporting_form)'),
           })
           .describe('Per-chemical TRI release record for this facility and year'),
       )
@@ -129,21 +108,7 @@ export const getTriReleasesTool = tool('epa_get_tri_releases', {
       lines.push(`\n### ${r.chemicalName} (${r.reportingYear})`);
       lines.push(`**Facility ID:** ${r.facilityId}`);
       if (r.totalReleasesInLbs !== undefined)
-        lines.push(`**Total Releases:** ${r.totalReleasesInLbs.toLocaleString()} lbs`);
-      if (r.airReleasesInLbs !== undefined)
-        lines.push(`**Air:** ${r.airReleasesInLbs.toLocaleString()} lbs`);
-      if (r.waterReleasesInLbs !== undefined)
-        lines.push(`**Water:** ${r.waterReleasesInLbs.toLocaleString()} lbs`);
-      if (r.landReleasesInLbs !== undefined)
-        lines.push(`**Land:** ${r.landReleasesInLbs.toLocaleString()} lbs`);
-      if (r.undergroundInjectionInLbs !== undefined)
-        lines.push(
-          `**Underground Injection:** ${r.undergroundInjectionInLbs.toLocaleString()} lbs`,
-        );
-      if (r.onSiteReleaseTotalInLbs !== undefined)
-        lines.push(`**On-Site Total:** ${r.onSiteReleaseTotalInLbs.toLocaleString()} lbs`);
-      if (r.offSiteReleaseTotalInLbs !== undefined)
-        lines.push(`**Off-Site Total:** ${r.offSiteReleaseTotalInLbs.toLocaleString()} lbs`);
+        lines.push(`**Release Quantity:** ${r.totalReleasesInLbs.toLocaleString()} lbs`);
     }
 
     return [{ type: 'text', text: lines.join('\n') }];
