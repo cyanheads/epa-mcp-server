@@ -1,6 +1,6 @@
 # epa-mcp-server - Directory Structure
 
-Generated on: 2026-05-26 00:19:09
+Generated on: 2026-05-26 03:15:40
 
 ```text
 epa-mcp-server/
@@ -104,26 +104,57 @@ epa-mcp-server/
 │   └── tool-defs-analysis/
 │       └── SKILL.md
 ├── src/
+│   ├── config/
+│   │   └── server-config.ts
 │   ├── mcp-server/
 │   │   ├── prompts/
 │   │   │   └── definitions/
-│   │   │       └── echo.prompt.ts
 │   │   ├── resources/
 │   │   │   └── definitions/
-│   │   │       ├── echo-app-ui.app-resource.ts
-│   │   │       └── echo.resource.ts
+│   │   │       ├── facility.resource.ts
+│   │   │       ├── index.ts
+│   │   │       └── superfund-site.resource.ts
 │   │   └── tools/
 │   │       └── definitions/
-│   │           ├── echo-app.app-tool.ts
-│   │           └── echo.tool.ts
+│   │           ├── get-air-quality.tool.ts
+│   │           ├── get-facility.tool.ts
+│   │           ├── get-tri-releases.tool.ts
+│   │           ├── index.ts
+│   │           ├── search-facilities.tool.ts
+│   │           ├── search-superfund.tool.ts
+│   │           ├── search-tri-releases.tool.ts
+│   │           ├── search-violations.tool.ts
+│   │           └── search-water-systems.tool.ts
+│   ├── services/
+│   │   ├── airnow/
+│   │   │   ├── airnow-service.ts
+│   │   │   └── types.ts
+│   │   ├── dmap/
+│   │   │   ├── dmap-service.ts
+│   │   │   └── types.ts
+│   │   └── echo/
+│   │       ├── echo-service.ts
+│   │       └── types.ts
 │   └── index.ts
 ├── tests/
+│   ├── mcp-server/
+│   │   ├── resources/
+│   │   │   └── definitions/
+│   │   │       ├── facility.resource.test.ts
+│   │   │       └── superfund-site.resource.test.ts
+│   │   └── tools/
+│   │       └── definitions/
+│   │           ├── get-air-quality.tool.test.ts
+│   │           ├── get-facility.tool.test.ts
+│   │           ├── get-tri-releases.tool.test.ts
+│   │           ├── search-facilities.tool.test.ts
+│   │           ├── search-superfund.tool.test.ts
+│   │           ├── search-tri-releases.tool.test.ts
+│   │           ├── search-violations.tool.test.ts
+│   │           └── search-water-systems.tool.test.ts
 │   ├── prompts/
-│   │   └── echo.prompt.test.ts
 │   ├── resources/
-│   │   └── echo.resource.test.ts
 │   └── tools/
-│       └── echo.tool.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitignore

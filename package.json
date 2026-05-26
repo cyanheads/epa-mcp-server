@@ -1,6 +1,6 @@
 {
   "name": "@cyanheads/epa-mcp-server",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Access EPA environmental data — facility compliance (ECHO), toxic releases (TRI), Superfund sites, drinking water systems, and real-time air quality (AirNow) via MCP. STDIO or Streamable HTTP.",
   "type": "module",
   "main": "dist/index.js",

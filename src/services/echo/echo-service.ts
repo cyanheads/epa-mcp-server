@@ -92,7 +92,7 @@ export class EchoService {
       async () => {
         const response = await fetch(url, {
           signal: ctx.signal,
-          headers: { 'User-Agent': '@cyanheads/epa-mcp-server/0.1.0' },
+          headers: { 'User-Agent': '@cyanheads/epa-mcp-server/0.1.1' },
         });
         if (!response.ok) {
           throw await httpErrorFromResponse(response, { service: 'ECHO', data: { url } });
