@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.cyanheads/epa-mcp-server",
-  "description": "Access EPA environmental data — facility compliance (ECHO), toxic releases (TRI), Superfund sites, drinking water systems, and real-time air quality (AirNow).",
+  "description": "EPA data: ECHO facility compliance, TRI releases, Superfund, drinking water, and AirNow air quality.",
   "repository": {
     "url": "https://github.com/cyanheads/epa-mcp-server",
     "source": "github"
