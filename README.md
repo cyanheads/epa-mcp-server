@@ -161,7 +161,7 @@ Add the following to your MCP client configuration file. An AirNow API key is re
 ```json
 {
   "mcpServers": {
-    "epa": {
+    "epa-mcp-server": {
       "type": "stdio",
       "command": "bunx",
       "args": ["@cyanheads/epa-mcp-server@latest"],
@@ -180,7 +180,7 @@ Or with npx (no Bun required):
 ```json
 {
   "mcpServers": {
-    "epa": {
+    "epa-mcp-server": {
       "type": "stdio",
       "command": "npx",
       "args": ["-y", "@cyanheads/epa-mcp-server@latest"],

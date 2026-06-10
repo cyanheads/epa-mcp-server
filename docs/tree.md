@@ -1,6 +1,6 @@
 # epa-mcp-server - Directory Structure
 
-Generated on: 2026-05-26 07:34:21
+Generated on: 2026-05-27 06:40:25
 
 ```text
 epa-mcp-server/
@@ -164,6 +164,7 @@ epa-mcp-server/
 ├── bun.lock
 ├── bunfig.toml
 ├── CHANGELOG.md
+├── CITATION.cff
 ├── CLAUDE.md
 ├── devcheck.config.json
 ├── Dockerfile
