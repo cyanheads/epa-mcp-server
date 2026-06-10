@@ -15,9 +15,11 @@ import type {
   EpaCase,
   EpaFacility,
   EpaFacilityProfile,
+  RawEchoCaseInfoResponse,
   RawEchoCaseResponse,
   RawEchoDfrAir,
   RawEchoDfrComplianceSummary,
+  RawEchoDfrFullResponse,
   RawEchoDfrInspectionEnforcement,
   RawEchoDfrWater,
   RawEchoFacilityResponse,
@@ -176,26 +178,53 @@ export class EchoService {
 
   /**
    * Retrieve a full compliance profile for a single facility, aggregating multiple DFR endpoints.
-   * Steps 2-5 run in parallel after the initial facility info fetch.
+   *
+   * Step 1 uses dfr_rest_services.get_dfr (accepts Registry IDs directly) to obtain base facility
+   * data. The previous approach used echo_rest_services.get_facility_info?p_id=registryId, which
+   * only accepts program-specific IDs (e.g. RCRA handler IDs), never numeric Registry IDs — so it
+   * always returned 0 results. Steps 2-5 run in parallel after the initial DFR fetch.
    */
   async getFacility(registryId: string, ctx: Context): Promise<EpaFacilityProfile> {
-    // Step 1: Get base facility info + program flags
-    const facilityUrl = this.buildUrl('echo_rest_services.get_facility_info', {
+    // Step 1: get_dfr accepts Registry IDs via p_id and returns facility name/address in
+    // Results.Permits[] (EPASystem="FRS" record) and confirms identity via Results.RegistryID.
+    const dfrUrl = this.buildUrl('dfr_rest_services.get_dfr', {
       output: 'JSON',
       p_id: registryId,
-      p_limit: 1,
     });
-    ctx.log.debug('ECHO get_facility_info', { registryId });
-    const facilityData = await this.fetchJson<RawEchoFacilityResponse>(facilityUrl, ctx);
-    const rawFacilities = facilityData.Results?.Facilities ?? [];
-    const raw = rawFacilities[0] as Record<string, string | undefined> | undefined;
+    ctx.log.debug('ECHO get_dfr', { registryId });
+    const dfrData = await this.fetchJson<RawEchoDfrFullResponse>(dfrUrl, ctx);
+    const confirmedId = dfrData.Results?.RegistryID;
 
-    if (!raw?.RegistryID) {
+    if (!confirmedId) {
       throw serviceUnavailable(
         `ECHO returned no facility for Registry ID "${registryId}". Check the ID and try again.`,
         { registryId },
       );
     }
+
+    // Extract base facility info from the FRS permit record in Permits[]
+    const permits = dfrData.Results?.Permits ?? [];
+    const frsPerm = permits.find((p) => p.EPASystem === 'FRS');
+    // Derive program flags from the statutes present in the Permits list
+    const statutes = new Set(permits.map((p) => p.Statute?.toUpperCase()).filter(Boolean));
+    const raw: Record<string, string | undefined> = {
+      RegistryID: confirmedId,
+      FacName: frsPerm?.FacilityName ?? undefined,
+      FacStreet: frsPerm?.FacilityStreet ?? undefined,
+      FacCity: frsPerm?.FacilityCity ?? undefined,
+      FacState: frsPerm?.FacilityState ?? undefined,
+      FacZip: frsPerm?.FacilityZip ?? undefined,
+      FacCounty: frsPerm?.FacilityCountyName ?? undefined,
+      FacFIPSCode: frsPerm?.FacilityFipsCode ?? undefined,
+      FacLat: frsPerm?.Latitude ?? dfrData.Results?.SpatialMetadata?.Latitude83 ?? undefined,
+      FacLon: frsPerm?.Longitude ?? dfrData.Results?.SpatialMetadata?.Longitude83 ?? undefined,
+      // Program flags derived from Permits[].Statute (CAA→AIR, CWA, RCRA, TRI, SDWA)
+      AIRFlag: statutes.has('CAA') ? 'Y' : 'N',
+      CWAFlag: statutes.has('CWA') || statutes.has('NPDES') ? 'Y' : 'N',
+      RCRFlag: statutes.has('RCRA') ? 'Y' : 'N',
+      TRIFlag: statutes.has('TRI') ? 'Y' : 'N',
+      SDWAFlag: statutes.has('SDWA') ? 'Y' : 'N',
+    };
 
     const base = normalizeFacility(raw);
 
@@ -303,7 +332,13 @@ export class EchoService {
   }
 
   /**
-   * Search EPA enforcement cases using ECHO case_rest_services.
+   * Search EPA enforcement cases using a two-step ECHO case_rest_services flow.
+   *
+   * Step 1: case_rest_services.get_case_info — returns QueryID and row count (no Cases array).
+   * Step 2: case_rest_services.get_qid?qid=<QueryID> — returns the actual Cases[] records.
+   *
+   * The single-step approach (reading Cases from get_case_info) always returns empty because
+   * get_case_info is a discovery/cluster endpoint that does not include paginated case records.
    */
   async searchViolations(
     params: {
@@ -333,28 +368,48 @@ export class EchoService {
       qparams.p_case_category = params.caseType === 'criminal' ? 'C' : 'V';
     }
 
-    const url = this.buildUrl('case_rest_services.get_case_info', qparams);
-    ctx.log.debug('ECHO case search', { url });
+    // Step 1: Get QueryID from get_case_info (returns cluster data only, no Cases[])
+    const infoUrl = this.buildUrl('case_rest_services.get_case_info', qparams);
+    ctx.log.debug('ECHO case search step 1', { url: infoUrl });
 
-    const data = await this.fetchJson<RawEchoCaseResponse>(url, ctx);
+    const infoData = await this.fetchJson<RawEchoCaseInfoResponse>(infoUrl, ctx);
+    const queryId = infoData.Results?.QueryID;
+    const totalCount = parseInt(infoData.Results?.QueryRows ?? '0', 10) || 0;
+
+    if (!queryId || totalCount === 0) {
+      return { cases: [], totalCount: 0 };
+    }
+
+    // Step 2: Fetch actual case records via get_qid
+    const qidUrl = this.buildUrl('case_rest_services.get_qid', {
+      output: 'JSON',
+      qid: queryId,
+      p_limit: params.limit ?? 50,
+    });
+    ctx.log.debug('ECHO case search step 2', { url: qidUrl, queryId });
+
+    const data = await this.fetchJson<RawEchoCaseResponse>(qidUrl, ctx);
     const raw = data.Results?.Cases ?? [];
-    const totalCount = parseInt(data.Results?.TotalCount ?? '0', 10) || raw.length;
 
-    const cases: EpaCase[] = raw.map((c) => ({
-      ...(c.CaseID && { caseId: c.CaseID }),
-      ...(c.CaseName && { caseName: c.CaseName }),
-      ...(c.FacName && { facilityName: c.FacName }),
-      ...(c.RegistryID && { registryId: c.RegistryID }),
-      ...(c.ProgramsViolated && { programsViolated: String(c.ProgramsViolated) }),
-      ...(c.CaseType && { caseType: String(c.CaseType) }),
-      ...(c.PenaltyAssessed !== undefined &&
-        !Number.isNaN(Number(c.PenaltyAssessed)) && {
-          penaltyAssessedInDollars: Number(c.PenaltyAssessed),
-        }),
-      ...(c.SettlementDate && { settlementDate: String(c.SettlementDate) }),
-      ...(c.FiledDate && { filedDate: String(c.FiledDate) }),
-      ...(c.State && { state: String(c.State) }),
-    }));
+    const cases: EpaCase[] = raw.map((c) => {
+      const fedPenalty = c.FedPenalty ? parseFloat(String(c.FedPenalty).replace(/[$,]/g, '')) : NaN;
+      return {
+        // CaseNumber is the primary identifier in get_qid (e.g. "03-2014-7010")
+        ...(c.CaseNumber && { caseId: c.CaseNumber }),
+        ...(c.CaseName && { caseName: c.CaseName }),
+        // CaseCategoryDesc maps to caseType (e.g. "Judicial", "Administrative")
+        ...(c.CaseCategoryDesc && { caseType: String(c.CaseCategoryDesc) }),
+        // PrimaryLaw maps to programsViolated (e.g. "CERCLA", "CAA")
+        ...(c.PrimaryLaw && { programsViolated: String(c.PrimaryLaw) }),
+        // FedPenalty is a dollar-formatted string — parse to float
+        ...(!Number.isNaN(fedPenalty) && { penaltyAssessedInDollars: fedPenalty }),
+        ...(c.SettlementDate && { settlementDate: String(c.SettlementDate) }),
+        // DateFiled is the filing date field in get_qid (not FiledDate)
+        ...(c.DateFiled && { filedDate: String(c.DateFiled) }),
+        // Note: FacName, RegistryID, and State are not present in get_qid responses;
+        // those fields remain optional in the output schema per the tool definition.
+      };
+    });
 
     return { cases, totalCount };
   }

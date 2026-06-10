@@ -97,26 +97,96 @@ export interface RawEchoDfrWater {
   };
 }
 
-/** Raw ECHO enforcement case from case_rest_services. */
+/** A single permit/program record from dfr_rest_services.get_dfr Results.Permits[]. */
+export interface RawEchoDfrPermit {
+  EPARegion?: string;
+  EPASystem?: string;
+  FacilityCity?: string;
+  FacilityCountyName?: string;
+  FacilityFipsCode?: string;
+  FacilityName?: string;
+  FacilityState?: string;
+  FacilityStatus?: string | null;
+  FacilityStreet?: string;
+  FacilityZip?: string;
+  Latitude?: string;
+  Longitude?: string;
+  SourceID?: string;
+  Statute?: string;
+  [key: string]: string | null | undefined;
+}
+
+/** Top-level response from dfr_rest_services.get_dfr. */
+export interface RawEchoDfrFullResponse {
+  Results?: {
+    /** FRS Registry ID for the facility. */
+    RegistryID?: string;
+    /** Program permit/source records — FRS record (EPASystem="FRS") contains facility name and address. */
+    Permits?: RawEchoDfrPermit[];
+    SpatialMetadata?: {
+      RegistryID?: string;
+      Latitude83?: string;
+      Longitude83?: string;
+    };
+    /** Compliance summary (same as dfr_rest_services.get_compliance_summary.Results.ComplianceSummary). */
+    ComplianceSummary?: {
+      Source?: Array<{
+        Statute?: string;
+        SourceID?: string;
+        CurrentSNC?: string;
+        QtrsInNC?: string;
+      }>;
+    };
+    Message?: string;
+  };
+}
+
+/**
+ * Raw ECHO enforcement case from case_rest_services.get_qid.
+ * Field names differ from the old get_case_info assumption — these are the real get_qid fields.
+ */
 export interface RawEchoCase {
-  CaseID?: string;
+  ActivityID?: string;
+  CaseCategoryCode?: string;
+  /** Category description, e.g. "Judicial", "Administrative". Maps to caseType. */
+  CaseCategoryDesc?: string;
   CaseName?: string;
-  CaseType?: string;
-  FacName?: string;
-  FiledDate?: string;
-  PenaltyAssessed?: string | number;
-  ProgramsViolated?: string;
-  RegistryID?: string;
+  /** Primary human-readable identifier, e.g. "03-2014-7010". Maps to caseId in the domain type. */
+  CaseNumber?: string;
+  CaseStatusCode?: string;
+  CaseStatusDesc?: string;
+  CivilCriminalIndicator?: string;
+  CostRecovery?: string;
+  /** Filing date field in get_qid response. Maps to filedDate. */
+  DateFiled?: string;
+  /** Dollar-formatted penalty string, e.g. "$75,000.00" or "$0.00". Maps to penaltyAssessedInDollars. */
+  FedPenalty?: string;
+  /** Primary regulatory law, e.g. "CERCLA", "CAA". Maps to programsViolated. */
+  PrimaryLaw?: string;
   SettlementDate?: string;
-  State?: string;
+  StateLocPenaltyAmt?: string;
+  TotalCompActionAmt?: string;
   [key: string]: string | number | undefined;
 }
 
-/** Raw ECHO case search response envelope. */
+/** Raw ECHO case_rest_services.get_case_info response (step 1 — discovery only). */
+export interface RawEchoCaseInfoResponse {
+  Results?: {
+    /** Opaque query ID to pass to get_qid for the actual case records. */
+    QueryID?: string;
+    /** Total rows matched across all pages. */
+    QueryRows?: string;
+    Message?: string;
+  };
+}
+
+/** Raw ECHO case_rest_services.get_qid response (step 2 — actual case records). */
 export interface RawEchoCaseResponse {
   Results?: {
     Cases?: RawEchoCase[];
     QueryID?: string;
+    QueryRows?: string;
+    PageNo?: string;
     TotalCount?: string;
   };
 }

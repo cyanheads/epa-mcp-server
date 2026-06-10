@@ -118,6 +118,19 @@ describe('getFacilityTool', () => {
     expect(text).toContain('WA0001234');
   });
 
+  it('regression #10: handler passes registry_id directly to service (not a program-specific ID)', async () => {
+    // The fix: getFacility() now uses get_dfr?p_id=registryId which accepts numeric Registry IDs.
+    // Before the fix, get_facility_info?p_id=registryId silently returned 0 results for Registry IDs.
+    mockGetFacility.mockResolvedValue(fullProfile);
+    const ctx = createMockContext();
+    const input = getFacilityTool.input.parse({ registry_id: '110005351555' });
+    await getFacilityTool.handler(input, ctx);
+    expect(mockGetFacility).toHaveBeenCalledWith('110005351555', expect.anything());
+    // Confirm the service was called with the numeric registry ID (not a program-specific format)
+    const [calledId] = mockGetFacility.mock.calls[0]!;
+    expect(calledId).toMatch(/^\d+$/);
+  });
+
   it('formats sparse profile (minimal required fields only)', () => {
     const sparse = {
       registryId: 'ABC123',

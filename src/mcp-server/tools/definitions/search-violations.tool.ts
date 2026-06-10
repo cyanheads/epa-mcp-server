@@ -53,27 +53,47 @@ export const searchViolationsTool = tool('epa_search_violations', {
       .array(
         z
           .object({
-            caseId: z.string().optional().describe('ECHO enforcement case identifier'),
+            caseId: z
+              .string()
+              .optional()
+              .describe(
+                'Case number / docket identifier (e.g. "03-2014-7010") — primary case reference',
+              ),
             caseName: z.string().optional().describe('Case name or docket number'),
-            facilityName: z.string().optional().describe('Regulated facility name'),
+            facilityName: z
+              .string()
+              .optional()
+              .describe(
+                'Regulated facility name — not available in ECHO enforcement case records; use epa_get_facility with a Registry ID for facility details',
+              ),
             registryId: z
               .string()
               .optional()
-              .describe('EPA Registry ID — use with epa_get_facility for full compliance profile'),
+              .describe(
+                'EPA Registry ID — not returned in enforcement case search results; obtain via epa_search_facilities',
+              ),
             programsViolated: z
               .string()
               .optional()
-              .describe('Regulatory programs cited in the case'),
-            caseType: z.string().optional().describe('Case type (civil or criminal)'),
+              .describe('Primary regulatory law cited (e.g. "CERCLA", "CAA", "CWA")'),
+            caseType: z
+              .string()
+              .optional()
+              .describe('Case category (e.g. "Judicial", "Administrative")'),
             penaltyAssessedInDollars: z
               .number()
               .optional()
-              .describe('Total penalty assessed in dollars'),
+              .describe('Federal penalty assessed in dollars (parsed from ECHO dollar string)'),
             settlementDate: z.string().optional().describe('Settlement or resolution date'),
             filedDate: z.string().optional().describe('Date the enforcement case was filed'),
-            state: z.string().optional().describe('State where the facility is located'),
+            state: z
+              .string()
+              .optional()
+              .describe(
+                'State where the facility is located — not returned in enforcement case search results',
+              ),
           })
-          .describe('EPA enforcement case record with facility, penalty, and program details'),
+          .describe('EPA enforcement case record with case number, program, and penalty details'),
       )
       .describe('Matching enforcement cases'),
     totalCount: z.number().describe('Total cases matched before the limit was applied'),
