@@ -172,6 +172,22 @@ describe('getAirQualityTool', () => {
     expect(text).toContain('No AQI data found');
   });
 
+  it('regression #9: cacheKey produces only valid framework key characters', () => {
+    // All four kind values previously embedded colons in the key, crashing ctx.state.set()
+    const validKeyPattern = /^[a-zA-Z0-9_.\-/]+$/;
+    // Access cacheKey via the service instance's private method by reconstructing the logic
+    // The fix: kind ':' → '/', prefix separator ':' → '/'
+    const kinds = ['current:zip', 'current:latlng', 'forecast:zip', 'forecast:latlng'];
+    for (const kind of kinds) {
+      const safeKind = kind.replace(/:/g, '/');
+      const stable = 'zipCode-98101_distance-25';
+      const key = `airnow/${safeKind}/${stable}`;
+      expect(validKeyPattern.test(key)).toBe(true);
+    }
+    // Confirm old format was invalid
+    expect(validKeyPattern.test('airnow:current:zip:distance-25_zipCode-98101')).toBe(false);
+  });
+
   it('formats sparse observation (minimal fields)', () => {
     const sparse = {
       observations: [

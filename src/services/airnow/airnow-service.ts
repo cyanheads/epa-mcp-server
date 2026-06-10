@@ -74,9 +74,11 @@ export class AirNowService {
     const stable = Object.entries(params)
       .filter(([, v]) => v !== undefined)
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([k, v]) => `${k}-${v}`)
+      .map(([k, v]) => `${k}-${String(v).replace(/[^a-zA-Z0-9_.\-/]/g, '_')}`)
       .join('_');
-    return `airnow:${kind}:${stable}`;
+    // Use '/' as segment separator and replace ':' in kind to keep within [a-zA-Z0-9_.\-/]
+    const safeKind = kind.replace(/:/g, '/');
+    return `airnow/${safeKind}/${stable}`;
   }
 
   private async fetchWithCache(
