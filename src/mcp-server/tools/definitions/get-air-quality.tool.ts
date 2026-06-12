@@ -107,13 +107,13 @@ export const getAirQualityTool = tool('epa_get_air_quality', {
   errors: [
     {
       reason: 'no_location',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'Neither zip_code nor latitude+longitude was provided.',
       recovery: 'Provide either zip_code or both latitude and longitude to identify the location.',
     },
     {
       reason: 'forecast_date_required',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'Mode is "forecast" but forecast_date was not provided.',
       recovery: 'Provide forecast_date as YYYY-MM-DD when using mode="forecast".',
     },

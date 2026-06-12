@@ -84,14 +84,14 @@ export const searchSuperfundTool = tool('epa_search_superfund', {
   errors: [
     {
       reason: 'no_location_filter',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'No location filter (state, city, zip_code, or latitude+longitude) was provided.',
       recovery:
         'Provide at least one location filter: state, city, zip_code, or latitude+longitude+radius_miles.',
     },
     {
       reason: 'radius_required',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'Latitude and longitude were provided without radius_miles.',
       recovery: 'Provide radius_miles together with latitude and longitude for a proximity search.',
     },

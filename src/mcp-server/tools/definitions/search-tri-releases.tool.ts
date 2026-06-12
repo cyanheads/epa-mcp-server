@@ -71,6 +71,14 @@ export const searchTriReleasesTool = tool('epa_search_tri_releases', {
       .describe('Recovery hint when no releases are found. Absent when releases are returned.'),
   }),
 
+  enrichment: {
+    truncated: z
+      .boolean()
+      .describe('True when the result list was capped at the limit — more records may exist.'),
+    shown: z.number().describe('Number of release records returned.'),
+    cap: z.number().describe('The limit that was applied.'),
+  },
+
   errors: [
     {
       reason: 'no_releases_found',
@@ -112,6 +120,10 @@ export const searchTriReleasesTool = tool('epa_search_tri_releases', {
         state: input.state,
         message: `No TRI releases found in ${input.state}${countyNote}${yearNote}${chemNote}. TRI data lags ~18 months — try year ${new Date().getFullYear() - 2} or removing filters.`,
       };
+    }
+
+    if (releases.length >= input.limit) {
+      ctx.enrich.truncated({ shown: releases.length, cap: input.limit });
     }
 
     return { releases, state: input.state };

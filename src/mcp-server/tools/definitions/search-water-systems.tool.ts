@@ -86,7 +86,7 @@ export const searchWaterSystemsTool = tool('epa_search_water_systems', {
   errors: [
     {
       reason: 'no_geographic_filter',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'Neither state nor zip_code was provided.',
       recovery: 'Provide at least one of state or zip_code to search drinking water systems.',
     },

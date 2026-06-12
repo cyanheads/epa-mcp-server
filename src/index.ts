@@ -12,6 +12,8 @@ import { initDmapService } from './services/dmap/dmap-service.js';
 import { initEchoService } from './services/echo/echo-service.js';
 
 await createApp({
+  name: 'epa-mcp-server',
+  title: 'epa-mcp-server',
   tools: [...allToolDefinitions],
   resources: [...allResourceDefinitions],
   prompts: [],

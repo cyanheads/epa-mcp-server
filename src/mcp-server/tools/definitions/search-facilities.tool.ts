@@ -103,7 +103,7 @@ export const searchFacilitiesTool = tool('epa_search_facilities', {
   errors: [
     {
       reason: 'no_geographic_filter',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'No geographic filter (zip_code, state, or city) was provided.',
       recovery: 'Provide at least one of zip_code, state, or city to scope the search.',
     },

@@ -108,7 +108,7 @@ export const searchViolationsTool = tool('epa_search_violations', {
   errors: [
     {
       reason: 'no_geographic_filter',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'Neither state nor zip_code was provided.',
       recovery: 'Provide at least one of state or zip_code to scope the enforcement case search.',
     },
