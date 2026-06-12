@@ -1,6 +1,6 @@
 {
   "name": "@cyanheads/epa-mcp-server",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Access EPA environmental data — facility compliance (ECHO), toxic releases (TRI), Superfund sites, drinking water systems, and real-time air quality (AirNow) via MCP. STDIO or Streamable HTTP.",
   "mcpName": "io.github.cyanheads/epa-mcp-server",
   "type": "module",
@@ -26,10 +26,11 @@
     "audit:refresh": "rm -f bun.lock && bun install && bun audit",
     "tree": "bun run scripts/tree.ts",
     "list-skills": "bun run scripts/list-skills.ts",
-    "format": "biome check --write --unsafe .",
+    "format": "biome check --write .",
+    "format:unsafe": "biome check --write --unsafe .",
     "lint:mcp": "bun run scripts/lint-mcp.ts",
     "lint:packaging": "bun run scripts/lint-packaging.ts",
-    "bundle": "bun run build && npx -y @anthropic-ai/mcpb pack . dist/epa-mcp-server.mcpb",
+    "bundle": "bun run build && npx -y @anthropic-ai/mcpb pack . dist/epa-mcp-server.mcpb && bun run scripts/clean-mcpb.ts dist/epa-mcp-server.mcpb",
     "changelog:build": "bun run scripts/build-changelog.ts",
     "changelog:check": "bun run scripts/build-changelog.ts --check",
     "test": "bunx vitest run",
@@ -42,6 +43,8 @@
     "mcp",
     "mcp-server",
     "model-context-protocol",
+    "stdio",
+    "streamable-http",
     "epa",
     "environmental",
     "air-quality",
@@ -81,13 +84,13 @@
     "access": "public"
   },
   "dependencies": {
-    "@cyanheads/mcp-ts-core": "^0.9.9",
+    "@cyanheads/mcp-ts-core": "^0.10.6",
     "pino-pretty": "^13.1.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.16",
-    "@types/node": "^25.9.2",
+    "@types/node": "^25.9.3",
     "depcheck": "^1.4.7",
     "ignore": "^7.0.5",
     "tsc-alias": "^1.8.17",

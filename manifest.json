@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "epa-mcp-server",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Access EPA environmental data — facility compliance (ECHO), toxic releases (TRI), Superfund sites, drinking water systems, and real-time air quality (AirNow) via MCP.",
   "author": {
     "name": "cyanheads"

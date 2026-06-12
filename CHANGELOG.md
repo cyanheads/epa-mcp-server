@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.5](changelog/0.1.x/0.1.5.md) — 2026-06-12
+
+Adopt mcp-ts-core ^0.10.6 — ValidationError codes, explicit server identity, TRI truncation enrichment, Docker healthcheck, plugin manifests
+
 ## [0.1.4](changelog/0.1.x/0.1.4.md) — 2026-06-10
 
 AirNow cache key fix, ECHO facility DFR endpoint fix, ECHO violations two-step case query fix
