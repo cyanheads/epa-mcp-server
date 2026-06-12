@@ -1,0 +1,9 @@
+{
+  "epa-mcp-server": {
+    "command": "npx",
+    "args": ["-y", "@cyanheads/epa-mcp-server"],
+    "env": {
+      "MCP_TRANSPORT_TYPE": "stdio"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "epa-mcp-server",
+  "version": "0.1.5",
+  "description": "Access EPA environmental data — facility compliance (ECHO), toxic releases (TRI), Superfund sites, drinking water systems, and real-time air quality (AirNow) via MCP.",
+  "author": {
+    "name": "cyanheads",
+    "email": "casey@caseyjhand.com",
+    "url": "https://github.com/cyanheads"
+  },
+  "homepage": "https://github.com/cyanheads/epa-mcp-server#readme",
+  "repository": "https://github.com/cyanheads/epa-mcp-server",
+  "license": "Apache-2.0",
+  "keywords": ["mcp", "mcp-server", "model-context-protocol", "epa", "environmental"],
+  "mcpServers": "./.codex-plugin/mcp.json",
+  "interface": {
+    "displayName": "epa-mcp-server",
+    "shortDescription": "EPA environmental data — compliance, toxic releases, Superfund, drinking water, air quality.",
+    "longDescription": "Access EPA environmental data via MCP: facility compliance (ECHO), toxic releases (TRI), Superfund sites, drinking water systems (SDWIS), and real-time air quality (AirNow).",
+    "developerName": "cyanheads",
+    "category": "data",
+    "capabilities": ["Read"],
+    "websiteURL": "https://github.com/cyanheads/epa-mcp-server",
+    "defaultPrompt": []
+  }
+}
