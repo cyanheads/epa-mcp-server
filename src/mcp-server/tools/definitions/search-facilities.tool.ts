@@ -10,13 +10,37 @@ import { getEchoService } from '@/services/echo/echo-service.js';
 export const searchFacilitiesTool = tool('epa_search_facilities', {
   title: 'Search EPA Facilities',
   description:
-    'Search EPA-regulated facilities by location, industry program, or compliance status across all environmental programs (CAA, CWA, RCRA, TRI, SDWA). Returns facility name, EPA Registry ID, coordinates, county FIPS code, per-program registration flags, inspection counts, penalty totals, and TRI release totals. Registry IDs returned here feed epa_get_facility and epa_get_tri_releases. At least one geographic filter (zip_code, state, or city+state) is required — unscoped searches time out.',
+    'Search EPA-regulated facilities by location, industry program, or compliance status across all environmental programs (CAA, CWA, RCRA, TRI, SDWA). Returns facility name, EPA Registry ID, coordinates, county FIPS code, per-program registration flags, inspection counts, penalty totals, and TRI release totals. Registry IDs returned here feed epa_get_facility and epa_get_tri_releases. Supports proximity search via latitude + longitude + radius_miles. At least one geographic filter (zip_code, state, city, or a complete latitude+longitude+radius_miles triple) is required — unscoped searches time out.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
     zip_code: z.string().optional().describe('5-digit ZIP code to search within'),
     state: z.string().optional().describe('2-letter US state abbreviation (e.g. "WA", "CA")'),
     city: z.string().optional().describe('City name. Pair with state for best results.'),
+    latitude: z
+      .number()
+      .min(-90)
+      .max(90)
+      .optional()
+      .describe(
+        'Latitude in decimal degrees. Pair with longitude and radius_miles for proximity search.',
+      ),
+    longitude: z
+      .number()
+      .min(-180)
+      .max(180)
+      .optional()
+      .describe(
+        'Longitude in decimal degrees. Pair with latitude and radius_miles for proximity search.',
+      ),
+    radius_miles: z
+      .number()
+      .positive()
+      .max(100)
+      .optional()
+      .describe(
+        'Search radius in miles around the given latitude/longitude (max 100). Requires latitude and longitude.',
+      ),
     active_only: z.boolean().optional().describe('When true, return only active facilities'),
     programs: z
       .array(z.enum(['CAA', 'CWA', 'RCRA', 'TRI', 'SDWA']))
@@ -104,8 +128,16 @@ export const searchFacilitiesTool = tool('epa_search_facilities', {
     {
       reason: 'no_geographic_filter',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'No geographic filter (zip_code, state, or city) was provided.',
-      recovery: 'Provide at least one of zip_code, state, or city to scope the search.',
+      when: 'No geographic filter (zip_code, state, city, or a latitude+longitude+radius_miles triple) was provided.',
+      recovery:
+        'Provide at least one of zip_code, state, or city, or a complete latitude + longitude + radius_miles triple, to scope the search.',
+    },
+    {
+      reason: 'incomplete_proximity',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'A proximity search was started but latitude, longitude, and radius_miles were not all provided.',
+      recovery:
+        'Proximity search needs all three of latitude, longitude, and radius_miles. Provide the missing value, or use zip_code / state / city instead.',
     },
     {
       reason: 'no_match',
@@ -116,11 +148,30 @@ export const searchFacilitiesTool = tool('epa_search_facilities', {
   ],
 
   async handler(input, ctx) {
+    // Proximity search needs the full latitude/longitude/radius_miles triple.
+    // Coordinates of 0 (equator / prime meridian) are valid, so test presence
+    // with !== undefined, never a truthy check.
+    const { latitude, longitude, radius_miles: radiusMiles } = input;
+    const hasProximity =
+      latitude !== undefined && longitude !== undefined && radiusMiles !== undefined;
+    const anyProximity =
+      latitude !== undefined || longitude !== undefined || radiusMiles !== undefined;
+    if (anyProximity && !hasProximity) {
+      throw ctx.fail(
+        'incomplete_proximity',
+        'Proximity search needs all three of latitude, longitude, and radius_miles.',
+        { ...ctx.recoveryFor('incomplete_proximity') },
+      );
+    }
+
     // Enforce geographic scoping requirement
-    if (!input.zip_code?.trim() && !input.state?.trim() && !input.city?.trim()) {
+    const zipCode = input.zip_code?.trim();
+    const state = input.state?.trim();
+    const city = input.city?.trim();
+    if (!zipCode && !state && !city && !hasProximity) {
       throw ctx.fail(
         'no_geographic_filter',
-        'At least one geographic filter (zip_code, state, or city) is required.',
+        'At least one geographic filter (zip_code, state, city, or a latitude+longitude+radius_miles triple) is required.',
         {
           ...ctx.recoveryFor('no_geographic_filter'),
         },
@@ -131,17 +182,17 @@ export const searchFacilitiesTool = tool('epa_search_facilities', {
       zip: input.zip_code,
       state: input.state,
       city: input.city,
+      ...(hasProximity && { latitude, longitude, radiusMiles }),
       programs: input.programs,
     });
-
-    const zipCode = input.zip_code?.trim();
-    const state = input.state?.trim();
-    const city = input.city?.trim();
     const { facilities, totalCount } = await getEchoService().searchFacilities(
       {
         ...(zipCode && { zipCode }),
         ...(state && { state }),
         ...(city && { city }),
+        ...(latitude !== undefined && { latitude }),
+        ...(longitude !== undefined && { longitude }),
+        ...(radiusMiles !== undefined && { radiusMiles }),
         ...(input.active_only && { activeOnly: input.active_only }),
         ...(input.programs?.length && { programs: input.programs }),
         ...(input.has_violation && { hasViolation: input.has_violation }),
@@ -157,6 +208,7 @@ export const searchFacilitiesTool = tool('epa_search_facilities', {
       if (input.zip_code) parts.push(`zip_code="${input.zip_code}"`);
       if (input.state) parts.push(`state="${input.state}"`);
       if (input.city) parts.push(`city="${input.city}"`);
+      if (hasProximity) parts.push(`within ${radiusMiles} mi of (${latitude}, ${longitude})`);
       if (input.programs?.length) parts.push(`programs=[${input.programs.join(', ')}]`);
       if (input.has_violation) parts.push('has_violation=true');
       return {

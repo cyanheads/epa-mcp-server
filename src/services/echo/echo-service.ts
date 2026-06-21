@@ -132,6 +132,9 @@ export class EchoService {
       zipCode?: string;
       state?: string;
       city?: string;
+      latitude?: number;
+      longitude?: number;
+      radiusMiles?: number;
       activeOnly?: boolean;
       programs?: string[];
       hasViolation?: boolean;
@@ -147,6 +150,10 @@ export class EchoService {
     if (params.zipCode) qparams.p_zip = params.zipCode;
     if (params.state) qparams.p_state = params.state;
     if (params.city) qparams.p_city = params.city;
+    // Proximity search — latitude/longitude of 0 are valid, so guard with !== undefined.
+    if (params.latitude !== undefined) qparams.p_lat = params.latitude;
+    if (params.longitude !== undefined) qparams.p_long = params.longitude;
+    if (params.radiusMiles !== undefined) qparams.p_radius_mi = params.radiusMiles;
     if (params.activeOnly) qparams.p_act = 'Y';
     if (params.hasViolation) qparams.p_sv_flag = 'Y';
 

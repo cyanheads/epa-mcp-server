@@ -93,6 +93,62 @@ describe('searchFacilitiesTool', () => {
     });
   });
 
+  it('returns facilities for a latitude+longitude+radius_miles proximity filter', async () => {
+    mockSearchFacilities.mockResolvedValue({ facilities: [boeingFacility], totalCount: 1 });
+    const ctx = createMockContext();
+    const input = searchFacilitiesTool.input.parse({
+      latitude: 47.917,
+      longitude: -122.248,
+      radius_miles: 10,
+    });
+    const result = await searchFacilitiesTool.handler(input, ctx);
+    expect(result.facilities).toHaveLength(1);
+    expect(mockSearchFacilities).toHaveBeenCalledWith(
+      expect.objectContaining({ latitude: 47.917, longitude: -122.248, radiusMiles: 10 }),
+      expect.anything(),
+    );
+  });
+
+  it('accepts latitude/longitude of 0 (equator / prime meridian) as a complete triple', async () => {
+    mockSearchFacilities.mockResolvedValue({ facilities: [], totalCount: 0 });
+    const ctx = createMockContext();
+    const input = searchFacilitiesTool.input.parse({ latitude: 0, longitude: 0, radius_miles: 25 });
+    await searchFacilitiesTool.handler(input, ctx);
+    // 0 is a valid coordinate — the triple is complete and forwarded, not dropped by a truthy guard.
+    expect(mockSearchFacilities).toHaveBeenCalledWith(
+      expect.objectContaining({ latitude: 0, longitude: 0, radiusMiles: 25 }),
+      expect.anything(),
+    );
+  });
+
+  it('throws incomplete_proximity when only latitude is provided', async () => {
+    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
+    const input = searchFacilitiesTool.input.parse({ latitude: 47.6 });
+    await expect(searchFacilitiesTool.handler(input, ctx)).rejects.toMatchObject({
+      data: { reason: 'incomplete_proximity' },
+    });
+  });
+
+  it('throws incomplete_proximity when latitude+longitude are given without radius_miles', async () => {
+    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
+    const input = searchFacilitiesTool.input.parse({ latitude: 47.6, longitude: -122.3 });
+    await expect(searchFacilitiesTool.handler(input, ctx)).rejects.toMatchObject({
+      data: { reason: 'incomplete_proximity' },
+    });
+  });
+
+  it('surfaces the proximity filter in the no-match message', async () => {
+    mockSearchFacilities.mockResolvedValue({ facilities: [], totalCount: 0 });
+    const ctx = createMockContext();
+    const input = searchFacilitiesTool.input.parse({
+      latitude: 47.6,
+      longitude: -122.3,
+      radius_miles: 5,
+    });
+    const result = await searchFacilitiesTool.handler(input, ctx);
+    expect(result.message).toContain('within 5 mi of (47.6, -122.3)');
+  });
+
   it('returns message when no facilities found', async () => {
     mockSearchFacilities.mockResolvedValue({ facilities: [], totalCount: 0 });
     const ctx = createMockContext();
