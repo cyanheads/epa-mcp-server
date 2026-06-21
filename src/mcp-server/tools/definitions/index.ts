@@ -21,13 +21,23 @@ import { searchTriReleasesTool } from './search-tri-releases.tool.js';
 import { searchViolationsTool } from './search-violations.tool.js';
 import { searchWaterSystemsTool } from './search-water-systems.tool.js';
 
-export const allToolDefinitions = [
+/**
+ * Tools backed only by keyless public APIs (ECHO, DMAP). Always registered —
+ * these require no API key.
+ */
+export const coreToolDefinitions = [
   searchFacilitiesTool,
   getFacilityTool,
   searchViolationsTool,
-  getAirQualityTool,
   getTriReleasesTool,
   searchTriReleasesTool,
   searchSuperfundTool,
   searchWaterSystemsTool,
 ] as const;
+
+/**
+ * Full tool surface, adding epa_get_air_quality (requires AIRNOW_API_KEY).
+ * index.ts registers this set when the key is configured, falling back to
+ * coreToolDefinitions when it is absent.
+ */
+export const allToolDefinitions = [...coreToolDefinitions, getAirQualityTool] as const;

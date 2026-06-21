@@ -7,10 +7,17 @@ import { z } from '@cyanheads/mcp-ts-core';
 import { parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
 
 const ServerConfigSchema = z.object({
+  // Optional: an empty or whitespace-only value (e.g. an unfilled `${AIRNOW_API_KEY}`
+  // placeholder from a bundle/compose config) is treated as absent so the server still
+  // starts. When absent, index.ts skips registering epa_get_air_quality and AirNow init.
   airNowApiKey: z
-    .string()
-    .min(1)
-    .describe('AirNow API key (free registration at docs.airnowapi.org)'),
+    .preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.string().min(1).optional(),
+    )
+    .describe(
+      'AirNow API key (free registration at docs.airnowapi.org). Optional — when unset, epa_get_air_quality is not registered and the other tools run without it.',
+    ),
   echoBaseUrl: z
     .string()
     .url()

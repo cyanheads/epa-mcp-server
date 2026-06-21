@@ -54,6 +54,13 @@ export class AirNowService {
 
   constructor(_config: AppConfig, _storage: StorageService) {
     const serverConfig = getServerConfig();
+    // initAirNowService() is only wired up when the key is configured (see index.ts).
+    // Assert the invariant here so the type narrows and any misuse fails loudly.
+    if (!serverConfig.airNowApiKey) {
+      throw new Error(
+        'AirNowService requires AIRNOW_API_KEY — initAirNowService() must only run when the key is configured.',
+      );
+    }
     this.baseUrl = serverConfig.airNowBaseUrl;
     this.apiKey = serverConfig.airNowApiKey;
   }
