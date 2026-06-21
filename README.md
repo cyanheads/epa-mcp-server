@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.1.5-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/epa-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/epa-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/epa-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/epa-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/epa-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/epa-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -27,7 +27,7 @@
 
 | Tool | Description |
 |:---|:---|
-| `epa_search_facilities` | Search EPA-regulated facilities by location, industry, or compliance status across all environmental programs (CAA, CWA, RCRA, TRI, SDWA). Returns facility name, EPA Registry ID, coordinates, county FIPS, per-program compliance flags, inspection counts, penalty totals, and TRI release totals. |
+| `epa_search_facilities` | Search EPA-regulated facilities by location (ZIP, state, city, or latitude/longitude + radius proximity), industry, or compliance status across all environmental programs (CAA, CWA, RCRA, TRI, SDWA). Returns facility name, EPA Registry ID, coordinates, county FIPS, per-program compliance flags, inspection counts, penalty totals, and TRI release totals. |
 | `epa_get_facility` | Retrieve a full compliance profile for a single EPA-regulated facility: compliance status per program, inspection dates, formal enforcement actions, penalty amounts, and TRI annual release totals. Aggregates multiple ECHO DFR endpoints in parallel. |
 | `epa_search_violations` | Search EPA civil and criminal enforcement cases by state, regulatory program, or date range. Returns case identifier, facility name and Registry ID, programs involved, penalty assessed, settlement date, and case type. |
 | `epa_get_air_quality` | Get AQI observations or forecasts for a location. Returns per-pollutant AQI values (PM2.5, ozone, CO, SO2, NO2), AQI category (Good through Hazardous), reporting area name, and observation timestamp. |
@@ -40,7 +40,7 @@
 
 Search for EPA-regulated facilities with cross-program compliance data.
 
-- Geographic filters: ZIP code, state, city (city requires state)
+- Geographic filters: ZIP code, state, city (city requires state), or latitude + longitude + radius_miles for proximity search
 - Program filter: narrow to CAA, CWA, RCRA, TRI, or SDWA registrants
 - Compliance filter: `has_violation` flag to surface only non-compliant facilities
 - Returns `RegistryID` (key for `epa_get_facility`), `FacFIPSCode` (county FIPS for Census chaining), and coordinates
@@ -156,7 +156,7 @@ Agent-friendly output:
 
 ## Getting started
 
-Add the following to your MCP client configuration file. An AirNow API key is required for `epa_get_air_quality` — register free at [docs.airnowapi.org](https://docs.airnowapi.org/account/request/). ECHO and DMAP tools work without authentication.
+Add the following to your MCP client configuration file. An AirNow API key is optional — set `AIRNOW_API_KEY` to enable `epa_get_air_quality` (register free at [docs.airnowapi.org](https://docs.airnowapi.org/account/request/)); without it the server starts with the other 7 tools. ECHO and DMAP tools work without authentication.
 
 ```json
 {
@@ -204,7 +204,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 AIRNOW_API_KEY=... bun run start:http
 ### Prerequisites
 
 - [Bun v1.3.0](https://bun.sh/) or higher (or Node.js v24+).
-- An AirNow API key for `epa_get_air_quality` — register free at [docs.airnowapi.org/account/request](https://docs.airnowapi.org/account/request/). ECHO and DMAP tools require no API key.
+- (Optional) An AirNow API key to enable `epa_get_air_quality` — register free at [docs.airnowapi.org/account/request](https://docs.airnowapi.org/account/request/). Without it the server runs the other 7 tools. ECHO and DMAP tools require no API key.
 
 ### Installation
 
@@ -230,7 +230,7 @@ bun install
 
 ```sh
 cp .env.example .env
-# edit .env and set AIRNOW_API_KEY
+# optionally set AIRNOW_API_KEY to enable the air quality tool
 ```
 
 ## Configuration
@@ -239,7 +239,7 @@ All configuration is validated at startup via Zod schemas in `src/config/`. Key 
 
 | Variable | Description | Default |
 |:---|:---|:---|
-| `AIRNOW_API_KEY` | **Required for `epa_get_air_quality`.** Free registration at [docs.airnowapi.org](https://docs.airnowapi.org/account/request/). ECHO and DMAP tools work without it. | — |
+| `AIRNOW_API_KEY` | **Optional.** Enables `epa_get_air_quality` when set; the server runs the other 7 tools without it. Free registration at [docs.airnowapi.org](https://docs.airnowapi.org/account/request/). | — |
 | `EPA_ECHO_BASE_URL` | ECHO API base URL | `https://echodata.epa.gov/echo` |
 | `EPA_DMAP_BASE_URL` | Envirofacts DMAP API base URL | `https://data.epa.gov/dmapservice` |
 | `EPA_AIRNOW_BASE_URL` | AirNow API base URL | `https://www.airnowapi.org/aq` |

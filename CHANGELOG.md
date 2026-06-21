@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.0](changelog/0.2.x/0.2.0.md) — 2026-06-21
+
+Optional AIRNOW_API_KEY (server runs the 7 keyless tools without it) and latitude/longitude/radius proximity search on epa_search_facilities
+
 ## [0.1.5](changelog/0.1.x/0.1.5.md) — 2026-06-12
 
 Adopt mcp-ts-core ^0.10.6 — ValidationError codes, explicit server identity, TRI truncation enrichment, Docker healthcheck, plugin manifests

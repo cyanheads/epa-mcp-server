@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "epa-mcp-server",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "Access EPA environmental data — facility compliance (ECHO), toxic releases (TRI), Superfund sites, drinking water systems, and real-time air quality (AirNow) via MCP.",
   "author": {
     "name": "cyanheads"
@@ -37,8 +37,8 @@
     "AIRNOW_API_KEY": {
       "type": "string",
       "title": "AirNow API Key",
-      "description": "Required for air quality tools. Free registration at docs.airnowapi.org.",
-      "required": true
+      "description": "Optional. Enables the epa_get_air_quality tool when set; the other tools work without it. Free registration at docs.airnowapi.org.",
+      "required": false
     }
   }
 }
