@@ -21,11 +21,34 @@ export interface RawTriFacility {
 export interface RawTriReportingForm {
   /** Chemical name — actual field name in tri.tri_reporting_form */
   cas_chem_name?: string;
-  /** One-time release quantity (the only release qty field in this table) */
+  /** Submission control number — join key to tri.tri_release_qty for the per-medium breakdown */
+  doc_ctrl_num?: string;
+  /**
+   * One-time / non-routine release quantity (spills, accidents) — a distinct TRI category,
+   * not a rollup of the per-medium routine releases carried in tri.tri_release_qty.
+   */
   one_time_release_qty?: string | number;
   reporting_year?: string | number;
   tri_facility_id?: string;
   [key: string]: string | number | undefined;
+}
+
+/**
+ * Raw row from tri.tri_release_qty table — one row per (doc_ctrl_num, environmental_medium).
+ * Carries the routine per-medium release quantities that tri_reporting_form lacks.
+ */
+export interface RawTriReleaseQty {
+  /** Join key back to tri_reporting_form.doc_ctrl_num */
+  doc_ctrl_num?: string;
+  /** Release-type code (e.g. "AIR FUG", "AIR STACK", "WATER", "RCRA C", "UNINJ I") */
+  environmental_medium?: string;
+  /** "1" means this medium does not apply to the submission (total_release legitimately absent) */
+  release_na?: string;
+  /** Coarse range band reported instead of total_release for small releases; null otherwise */
+  release_range_code?: string | null;
+  /** Exact release quantity in lbs when reported as a hard number; null when range-coded or N/A */
+  total_release?: string | number | null;
+  [key: string]: string | number | null | undefined;
 }
 
 /** Raw row from sems.envirofacts_site table. */
@@ -73,14 +96,24 @@ export interface RawSdwisViolation {
 
 /**
  * Normalized TRI chemical release record.
- * Note: tri_reporting_form only provides one_time_release_qty (mapped to totalReleasesInLbs).
- * Air/water/land breakdown fields are not available in DMAP's tri_reporting_form table.
+ * `totalReleasesInLbs` is TRI's one-time / non-routine release quantity (from
+ * tri_reporting_form.one_time_release_qty) — a distinct category, NOT the sum of the
+ * per-medium routine releases. The `releasesTo*InLbs` fields are the routine on-site
+ * releases rolled up from tri.tri_release_qty, populated only by getTriReleases.
  */
 export interface TriRelease {
   chemicalName: string;
   facilityId: string;
+  /** On-site routine air releases (AIR FUG + AIR STACK) in lbs, summed per submission */
+  releasesToAirInLbs?: number;
+  /** On-site routine land releases (landfills, land treatment, surface impoundment, other disposal) in lbs */
+  releasesToLandInLbs?: number;
+  /** On-site routine releases via underground injection wells in lbs, summed per submission */
+  releasesToUndergroundInjectionInLbs?: number;
+  /** On-site routine releases to surface water in lbs, summed across outfalls per submission */
+  releasesToWaterInLbs?: number;
   reportingYear: number;
-  /** Mapped from one_time_release_qty — the only release quantity in tri_reporting_form */
+  /** One-time / non-routine release quantity (from one_time_release_qty) — a distinct TRI category */
   totalReleasesInLbs?: number;
 }
 

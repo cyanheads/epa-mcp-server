@@ -15,6 +15,7 @@ import type {
   RawSdwisWaterSystem,
   RawSemsSite,
   RawTriFacility,
+  RawTriReleaseQty,
   RawTriReportingForm,
   SuperfundSite,
   TriRelease,
@@ -36,11 +37,43 @@ function normalizeTriRelease(raw: RawTriReportingForm): TriRelease {
     chemicalName: raw.cas_chem_name ?? '',
     reportingYear: Number(raw.reporting_year ?? 0),
   };
-  // tri_reporting_form only has one_time_release_qty; air/water/land breakdowns are not in this table
+  // one_time_release_qty is the only release qty in tri_reporting_form; the per-medium routine
+  // breakdown lives in tri.tri_release_qty and is merged in by getTriReleases (not here, since
+  // normalizeTriRelease is shared with searchTriReleases, which does not surface the breakdown).
   const oneTime = parseNum(raw.one_time_release_qty);
   if (oneTime !== undefined) result.totalReleasesInLbs = oneTime;
   return result;
 }
+
+/** Per-medium routine-release sums (lbs) for one TRI submission. */
+type MediumBreakdown = Pick<
+  TriRelease,
+  | 'releasesToAirInLbs'
+  | 'releasesToWaterInLbs'
+  | 'releasesToLandInLbs'
+  | 'releasesToUndergroundInjectionInLbs'
+>;
+
+/**
+ * Map each tri.tri_release_qty environmental_medium code to the TriRelease field its quantity
+ * rolls up into, following EPA's on-site release taxonomy: air (fugitive + stack), water, land
+ * (landfills / treatment / impoundment / other disposal), and underground injection. Codes absent
+ * from this map (non-release sub-metrics, unknown codes) contribute nothing.
+ */
+const RELEASE_FIELD_BY_MEDIUM: Record<string, keyof MediumBreakdown> = {
+  'AIR FUG': 'releasesToAirInLbs',
+  'AIR STACK': 'releasesToAirInLbs',
+  WATER: 'releasesToWaterInLbs',
+  'RCRA C': 'releasesToLandInLbs',
+  'OTH LANDF': 'releasesToLandInLbs',
+  'LAND TREA': 'releasesToLandInLbs',
+  'SURF IMP': 'releasesToLandInLbs',
+  'OTH DISP': 'releasesToLandInLbs',
+  LANDF8795: 'releasesToLandInLbs',
+  'UNINJ I': 'releasesToUndergroundInjectionInLbs',
+  'UNINJ IIV': 'releasesToUndergroundInjectionInLbs',
+  UNINJ8795: 'releasesToUndergroundInjectionInLbs',
+};
 
 /** Normalize a raw SEMS envirofacts_site record. */
 function normalizeSemsSite(raw: RawSemsSite): SuperfundSite {
@@ -144,8 +177,9 @@ export class DmapService {
         }
         const parsed = JSON.parse(text) as unknown;
         if (Array.isArray(parsed)) return parsed as T[];
-        const keys = Object.keys(parsed as object);
-        return ((parsed as Record<string, unknown[]>)[keys[0]!] ?? []) as T[];
+        const [firstKey] = Object.keys(parsed as object);
+        if (firstKey === undefined) return [] as T[];
+        return ((parsed as Record<string, unknown[]>)[firstKey] ?? []) as T[];
       },
       {
         operation: 'DmapService.fetchTable',
@@ -183,7 +217,70 @@ export class DmapService {
     ctx.log.debug('DMAP TRI releases query', { facilityId: params.facilityId, year: params.year });
 
     const rows = await this.fetchTable<RawTriReportingForm>(url, ctx);
-    return rows.map(normalizeTriRelease);
+
+    // Enrich each release with its per-medium routine breakdown from tri.tri_release_qty,
+    // joined on doc_ctrl_num. Scoped to this method only — searchTriReleases shares
+    // normalizeTriRelease but deliberately skips this second fetch.
+    const docCtrlNums = [
+      ...new Set(
+        rows
+          .map((r) => r.doc_ctrl_num)
+          .filter((d): d is string => typeof d === 'string' && d.length > 0),
+      ),
+    ];
+    const breakdownByDoc =
+      docCtrlNums.length > 0
+        ? await this.fetchReleaseBreakdown(docCtrlNums, ctx)
+        : new Map<string, MediumBreakdown>();
+
+    return rows.map((row) => {
+      const release = normalizeTriRelease(row);
+      const breakdown =
+        typeof row.doc_ctrl_num === 'string' ? breakdownByDoc.get(row.doc_ctrl_num) : undefined;
+      return breakdown ? { ...release, ...breakdown } : release;
+    });
+  }
+
+  /**
+   * Batch-fetch the per-medium routine releases (tri.tri_release_qty) for a set of TRI
+   * submissions and roll them up into air/water/land/underground-injection sums keyed by
+   * doc_ctrl_num. Only getTriReleases pays this cost; searchTriReleases skips it.
+   *
+   * Sparsity is preserved: a row flagged release_na="1" (medium not applicable) or carrying only
+   * a release_range_code (no hard total_release) contributes nothing — a null quantity is never
+   * coerced to 0.
+   */
+  private async fetchReleaseBreakdown(
+    docCtrlNums: string[],
+    ctx: Context,
+  ): Promise<Map<string, MediumBreakdown>> {
+    const url = this.buildTableUrl(
+      'tri',
+      'tri_release_qty',
+      [{ column: 'doc_ctrl_num', operator: 'in', value: docCtrlNums.join(',') }],
+      { first: 0, last: docCtrlNums.length * 30 - 1 },
+    );
+    ctx.log.debug('DMAP TRI release-qty breakdown query', { submissions: docCtrlNums.length });
+
+    const rows = await this.fetchTable<RawTriReleaseQty>(url, ctx);
+
+    const byDoc = new Map<string, MediumBreakdown>();
+    for (const row of rows) {
+      const doc = row.doc_ctrl_num;
+      if (typeof doc !== 'string' || doc.length === 0) continue;
+      // release_na "1" means the medium doesn't apply to this submission — not a zero release.
+      if (row.release_na === '1') continue;
+      const field = RELEASE_FIELD_BY_MEDIUM[row.environmental_medium ?? ''];
+      if (!field) continue;
+      // Only hard quantities roll up. A range-coded / null total_release stays out of the
+      // sum rather than being fabricated as 0.
+      const amount = parseNum(row.total_release ?? undefined);
+      if (amount === undefined) continue;
+      const entry = byDoc.get(doc) ?? {};
+      entry[field] = (entry[field] ?? 0) + amount;
+      byDoc.set(doc, entry);
+    }
+    return byDoc;
   }
 
   /** Search TRI releases by state, optionally filtered by county, year, or chemical. */
@@ -307,14 +404,11 @@ export class DmapService {
     let sites = rows.map(normalizeSemsSite);
 
     if (params.latitude !== undefined && params.longitude !== undefined && params.radiusMiles) {
+      const originLat = params.latitude;
+      const originLng = params.longitude;
       sites = sites.filter((site) => {
         if (site.latitude === undefined || site.longitude === undefined) return false;
-        const dist = haversineDistanceMiles(
-          params.latitude!,
-          params.longitude!,
-          site.latitude,
-          site.longitude,
-        );
+        const dist = haversineDistanceMiles(originLat, originLng, site.latitude, site.longitude);
         return dist <= (params.radiusMiles ?? 0);
       });
     }

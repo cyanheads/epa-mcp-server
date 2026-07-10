@@ -25,6 +25,17 @@ const benzeneRelease = {
   totalReleasesInLbs: 1240,
 };
 
+const fullBreakdownRelease = {
+  facilityId: 'WA0005678',
+  chemicalName: 'TOLUENE',
+  reportingYear: 2021,
+  totalReleasesInLbs: 0,
+  releasesToAirInLbs: 15000,
+  releasesToWaterInLbs: 200,
+  releasesToLandInLbs: 3400,
+  releasesToUndergroundInjectionInLbs: 90000,
+};
+
 describe('getTriReleasesTool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -109,7 +120,7 @@ describe('getTriReleasesTool', () => {
     expect(text).toContain('BENZENE');
     expect(text).toContain('2022');
     expect(text).toContain('1,240');
-    expect(text).toContain('Release Quantity');
+    expect(text).toContain('One-Time / Non-Routine Release');
   });
 
   it('formats empty result with message', () => {
@@ -134,5 +145,64 @@ describe('getTriReleasesTool', () => {
     expect(text).toContain('MERCURY');
     expect(text).toContain('WA9999');
     expect(text).toContain('2020');
+  });
+
+  it('passes per-medium breakdown fields through from the service', async () => {
+    mockGetTriReleases.mockResolvedValue([fullBreakdownRelease]);
+    const ctx = createMockContext();
+    const input = getTriReleasesTool.input.parse({ facility_id: 'WA0005678' });
+    const result = await getTriReleasesTool.handler(input, ctx);
+    expect(result.releases[0]).toMatchObject({
+      releasesToAirInLbs: 15000,
+      releasesToWaterInLbs: 200,
+      releasesToLandInLbs: 3400,
+      releasesToUndergroundInjectionInLbs: 90000,
+    });
+  });
+
+  it('accepts the per-medium fields in the output schema', () => {
+    const parsed = getTriReleasesTool.output.parse({
+      releases: [fullBreakdownRelease],
+      facilityId: 'WA0005678',
+    });
+    expect(parsed.releases[0]).toMatchObject({
+      releasesToAirInLbs: 15000,
+      releasesToUndergroundInjectionInLbs: 90000,
+    });
+  });
+
+  it('formats all four media plus the distinct one-time release line', () => {
+    const output = { releases: [fullBreakdownRelease], facilityId: 'WA0005678' };
+    const text = (getTriReleasesTool.format!(output)[0] as { type: string; text: string }).text;
+    expect(text).toContain('Air Releases');
+    expect(text).toContain('15,000');
+    expect(text).toContain('Water Releases');
+    expect(text).toContain('Land Releases');
+    expect(text).toContain('3,400');
+    expect(text).toContain('Underground Injection');
+    expect(text).toContain('90,000');
+    // one_time_release_qty is a separate TRI category, rendered distinctly from the routine media.
+    expect(text).toContain('One-Time / Non-Routine Release');
+  });
+
+  it('omits absent media in format without fabricating zero', () => {
+    const airOnly = {
+      releases: [
+        {
+          facilityId: 'WA0009999',
+          chemicalName: 'XYLENE',
+          reportingYear: 2020,
+          releasesToAirInLbs: 500,
+        },
+      ],
+      facilityId: 'WA0009999',
+    };
+    const text = (getTriReleasesTool.format!(airOnly)[0] as { type: string; text: string }).text;
+    expect(text).toContain('Air Releases');
+    expect(text).toContain('500');
+    expect(text).not.toContain('Water Releases');
+    expect(text).not.toContain('Land Releases');
+    expect(text).not.toContain('Underground Injection');
+    expect(text).not.toContain('One-Time / Non-Routine Release');
   });
 });

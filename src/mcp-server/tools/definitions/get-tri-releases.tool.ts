@@ -46,7 +46,33 @@ export const getTriReleasesTool = tool('epa_get_tri_releases', {
             totalReleasesInLbs: z
               .number()
               .optional()
-              .describe('One-time release quantity in pounds (from tri_reporting_form)'),
+              .describe(
+                'TRI one-time / non-routine release quantity in pounds (spills, accidents) — a distinct TRI category, NOT the sum of the per-medium routine releases below.',
+              ),
+            releasesToAirInLbs: z
+              .number()
+              .optional()
+              .describe(
+                'On-site routine air releases (fugitive + stack emissions) in pounds, summed across air release types for this submission.',
+              ),
+            releasesToWaterInLbs: z
+              .number()
+              .optional()
+              .describe(
+                'On-site routine releases to surface water in pounds, summed across all reported outfalls for this submission.',
+              ),
+            releasesToLandInLbs: z
+              .number()
+              .optional()
+              .describe(
+                'On-site routine land releases in pounds — landfills, land treatment, surface impoundment, and other on-site disposal, summed for this submission.',
+              ),
+            releasesToUndergroundInjectionInLbs: z
+              .number()
+              .optional()
+              .describe(
+                'On-site routine releases via underground injection wells in pounds, summed across injection well classes for this submission.',
+              ),
           })
           .describe('Per-chemical TRI release record for this facility and year'),
       )
@@ -107,8 +133,20 @@ export const getTriReleasesTool = tool('epa_get_tri_releases', {
     for (const r of result.releases) {
       lines.push(`\n### ${r.chemicalName} (${r.reportingYear})`);
       lines.push(`**Facility ID:** ${r.facilityId}`);
+      if (r.releasesToAirInLbs !== undefined)
+        lines.push(`**Air Releases:** ${r.releasesToAirInLbs.toLocaleString()} lbs`);
+      if (r.releasesToWaterInLbs !== undefined)
+        lines.push(`**Water Releases:** ${r.releasesToWaterInLbs.toLocaleString()} lbs`);
+      if (r.releasesToLandInLbs !== undefined)
+        lines.push(`**Land Releases:** ${r.releasesToLandInLbs.toLocaleString()} lbs`);
+      if (r.releasesToUndergroundInjectionInLbs !== undefined)
+        lines.push(
+          `**Underground Injection:** ${r.releasesToUndergroundInjectionInLbs.toLocaleString()} lbs`,
+        );
       if (r.totalReleasesInLbs !== undefined)
-        lines.push(`**Release Quantity:** ${r.totalReleasesInLbs.toLocaleString()} lbs`);
+        lines.push(
+          `**One-Time / Non-Routine Release:** ${r.totalReleasesInLbs.toLocaleString()} lbs`,
+        );
     }
 
     return [{ type: 'text', text: lines.join('\n') }];
