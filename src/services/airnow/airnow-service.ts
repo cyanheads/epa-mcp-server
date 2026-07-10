@@ -22,8 +22,9 @@ function normalizeRecords(records: RawAirNowRecord[]): AirQualityResult[] {
 
   for (const r of records) {
     const key = `${r.ReportingArea ?? ''}|${r.DateObserved ?? ''}|${r.HourObserved ?? ''}`;
-    if (!grouped.has(key)) {
-      grouped.set(key, {
+    let entry = grouped.get(key);
+    if (!entry) {
+      entry = {
         ...(r.ReportingArea && { reportingArea: r.ReportingArea.trim() }),
         ...(r.StateCode && { stateCode: r.StateCode }),
         ...(r.Latitude !== undefined && { latitude: r.Latitude }),
@@ -32,9 +33,9 @@ function normalizeRecords(records: RawAirNowRecord[]): AirQualityResult[] {
         ...(r.HourObserved !== undefined && { hourObserved: r.HourObserved }),
         ...(r.LocalTimeZone && { localTimeZone: r.LocalTimeZone }),
         readings: [],
-      });
+      };
+      grouped.set(key, entry);
     }
-    const entry = grouped.get(key)!;
     if (r.ParameterName && r.AQI !== undefined) {
       entry.readings.push({
         parameterName: r.ParameterName,

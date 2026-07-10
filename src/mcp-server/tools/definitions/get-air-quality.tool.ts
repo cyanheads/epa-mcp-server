@@ -120,24 +120,35 @@ export const getAirQualityTool = tool('epa_get_air_quality', {
   ],
 
   async handler(input, ctx) {
-    // Validate location
-    const hasZip = !!input.zip_code?.trim();
-    const hasLatLng = input.latitude !== undefined && input.longitude !== undefined;
-    if (!hasZip && !hasLatLng) {
+    // Resolve the location once into a discriminated shape so the service branches below
+    // narrow without non-null assertions. Zip takes precedence over lat/lng, and the raw
+    // (untrimmed) zip_code is forwarded to match prior behavior.
+    const zip = input.zip_code;
+    const loc =
+      zip !== undefined && zip.trim() !== ''
+        ? ({ kind: 'zip', zipCode: zip } as const)
+        : input.latitude !== undefined && input.longitude !== undefined
+          ? ({ kind: 'latlng', latitude: input.latitude, longitude: input.longitude } as const)
+          : undefined;
+    if (!loc) {
       throw ctx.fail('no_location', 'Provide either zip_code or both latitude and longitude.', {
         ...ctx.recoveryFor('no_location'),
       });
     }
 
-    // Validate forecast date
-    if (input.mode === 'forecast' && !input.forecast_date?.trim()) {
-      throw ctx.fail(
-        'forecast_date_required',
-        'forecast_date (YYYY-MM-DD) is required when mode is "forecast".',
-        {
-          ...ctx.recoveryFor('forecast_date_required'),
-        },
-      );
+    // forecast mode requires a date — validate up front so the error path is unchanged.
+    let forecastDate = '';
+    if (input.mode === 'forecast') {
+      if (input.forecast_date === undefined || input.forecast_date.trim() === '') {
+        throw ctx.fail(
+          'forecast_date_required',
+          'forecast_date (YYYY-MM-DD) is required when mode is "forecast".',
+          {
+            ...ctx.recoveryFor('forecast_date_required'),
+          },
+        );
+      }
+      forecastDate = input.forecast_date;
     }
 
     ctx.log.info('epa_get_air_quality', {
@@ -150,50 +161,45 @@ export const getAirQualityTool = tool('epa_get_air_quality', {
     let observations: AirQualityResult[];
 
     if (input.mode === 'current') {
-      if (hasZip) {
-        observations = await service.getCurrentByZip(
-          { zipCode: input.zip_code!, distanceMiles: input.distance_miles },
-          ctx,
-        );
-      } else {
-        observations = await service.getCurrentByLatLng(
-          {
-            latitude: input.latitude!,
-            longitude: input.longitude!,
-            distanceMiles: input.distance_miles,
-          },
-          ctx,
-        );
-      }
+      observations =
+        loc.kind === 'zip'
+          ? await service.getCurrentByZip(
+              { zipCode: loc.zipCode, distanceMiles: input.distance_miles },
+              ctx,
+            )
+          : await service.getCurrentByLatLng(
+              {
+                latitude: loc.latitude,
+                longitude: loc.longitude,
+                distanceMiles: input.distance_miles,
+              },
+              ctx,
+            );
     } else {
-      if (hasZip) {
-        observations = await service.getForecastByZip(
-          {
-            zipCode: input.zip_code!,
-            date: input.forecast_date!,
-            distanceMiles: input.distance_miles,
-          },
-          ctx,
-        );
-      } else {
-        observations = await service.getForecastByLatLng(
-          {
-            latitude: input.latitude!,
-            longitude: input.longitude!,
-            date: input.forecast_date!,
-            distanceMiles: input.distance_miles,
-          },
-          ctx,
-        );
-      }
+      observations =
+        loc.kind === 'zip'
+          ? await service.getForecastByZip(
+              { zipCode: loc.zipCode, date: forecastDate, distanceMiles: input.distance_miles },
+              ctx,
+            )
+          : await service.getForecastByLatLng(
+              {
+                latitude: loc.latitude,
+                longitude: loc.longitude,
+                date: forecastDate,
+                distanceMiles: input.distance_miles,
+              },
+              ctx,
+            );
     }
 
     ctx.log.info('epa_get_air_quality completed', { areas: observations.length });
 
     if (observations.length === 0) {
-      const location = hasZip
-        ? `zip_code="${input.zip_code}"`
-        : `lat=${input.latitude}, lng=${input.longitude}`;
+      const location =
+        loc.kind === 'zip'
+          ? `zip_code="${input.zip_code}"`
+          : `lat=${input.latitude}, lng=${input.longitude}`;
       return {
         observations: [],
         mode: input.mode,
