@@ -153,7 +153,7 @@ export class EchoService {
     // Proximity search — latitude/longitude of 0 are valid, so guard with !== undefined.
     if (params.latitude !== undefined) qparams.p_lat = params.latitude;
     if (params.longitude !== undefined) qparams.p_long = params.longitude;
-    if (params.radiusMiles !== undefined) qparams.p_radius_mi = params.radiusMiles;
+    if (params.radiusMiles !== undefined) qparams.p_radius = params.radiusMiles;
     if (params.activeOnly) qparams.p_act = 'Y';
     if (params.hasViolation) qparams.p_sv_flag = 'Y';
 
