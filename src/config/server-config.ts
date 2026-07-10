@@ -33,6 +33,15 @@ const ServerConfigSchema = z.object({
     .url()
     .default('https://www.airnowapi.org/aq')
     .describe('AirNow API base URL'),
+  // Optional override. Bundle/compose configs may inject an unfilled
+  // `${EJSCREEN_API_BASE_URL}` placeholder as an empty string — treat empty or
+  // whitespace-only as absent so the default applies instead of failing `.url()`.
+  ejscreenBaseUrl: z
+    .preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.string().url().default('https://api.ejanalysis.com'),
+    )
+    .describe('EJScreen (EJAM) API base URL — the community-maintained EJScreen rehost'),
 });
 
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
@@ -45,6 +54,7 @@ export function getServerConfig(): ServerConfig {
     echoBaseUrl: 'EPA_ECHO_BASE_URL',
     dmapBaseUrl: 'EPA_DMAP_BASE_URL',
     airNowBaseUrl: 'EPA_AIRNOW_BASE_URL',
+    ejscreenBaseUrl: 'EJSCREEN_API_BASE_URL',
   });
   return _config;
 }

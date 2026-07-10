@@ -12,13 +12,13 @@ import {
 } from '@/mcp-server/tools/definitions/index.js';
 
 describe('tool definition sets', () => {
-  it('core set has the 7 keyless tools and excludes the AirNow-gated air quality tool', () => {
-    expect(coreToolDefinitions).toHaveLength(7);
+  it('core set has the 8 keyless tools and excludes the AirNow-gated air quality tool', () => {
+    expect(coreToolDefinitions).toHaveLength(8);
     expect(coreToolDefinitions).not.toContain(getAirQualityTool);
   });
 
   it('full set is the core set plus epa_get_air_quality', () => {
-    expect(allToolDefinitions).toHaveLength(8);
+    expect(allToolDefinitions).toHaveLength(9);
     expect(allToolDefinitions).toContain(getAirQualityTool);
     for (const t of coreToolDefinitions) {
       expect(allToolDefinitions).toContain(t);

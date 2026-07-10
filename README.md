@@ -1,13 +1,13 @@
 <div align="center">
   <h1>@cyanheads/epa-mcp-server</h1>
-  <p><b>Access EPA environmental data — facility compliance (ECHO), toxic releases (TRI), Superfund sites, drinking water systems, and real-time air quality (AirNow) via MCP. STDIO or Streamable HTTP.</b>
-  <div>8 Tools • 2 Resources</div>
+  <p><b>Access EPA environmental data — facility compliance (ECHO), toxic releases (TRI), Superfund sites, drinking water systems, environmental justice screening (EJScreen), and real-time air quality (AirNow) via MCP. STDIO or Streamable HTTP.</b>
+  <div>9 Tools • 2 Resources</div>
   </p>
 </div>
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.2.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/epa-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/epa-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/epa-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.3.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/epa-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/epa-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/epa-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -23,7 +23,7 @@
 
 ## Tools
 
-8 tools spanning EPA facility compliance, toxic chemical releases, Superfund cleanup sites, drinking water safety, and real-time air quality:
+9 tools spanning EPA facility compliance, toxic chemical releases, Superfund cleanup sites, drinking water safety, environmental justice screening, and real-time air quality:
 
 | Tool | Description |
 |:---|:---|
@@ -35,6 +35,7 @@
 | `epa_search_tri_releases` | Search Toxic Release Inventory data across facilities in a state or county for a given year. Returns facility name, TRI ID, chemical name, total releases by medium, and facility coordinates. |
 | `epa_search_superfund` | Search Superfund (CERCLA/SEMS) sites by location or NPL listing status. Accepts state/city/ZIP or lat/lng + radius for proximity searches. Returns site name, EPA ID, NPL status, cleanup status, and coordinates. |
 | `epa_search_water_systems` | Search drinking water systems (SDWIS) by state or ZIP code. Returns system name, PWSID, population served, primary water source, and active violation status. |
+| `epa_get_ejscreen` | Get EJScreen environmental-justice indicators for a point + buffer: 13 environmental and 6 demographic indicators with national/state percentiles, EJ Index values, and the demographic indices. Serves EJScreen v2.2 (2022) via the community-maintained EJAM API (Public Environmental Data Partners), which rehosts EJScreen after EPA discontinued public access in 2025. |
 
 ### `epa_search_facilities`
 
@@ -121,6 +122,18 @@ Identify drinking water systems with active or recent violations.
 - `has_violation` flag surfaces only systems with current violations
 - PWS type filter: community (`CWS`), non-transient non-community (`NTNCWS`), or transient non-community (`TNCWS`)
 
+---
+
+### `epa_get_ejscreen`
+
+Screen a point and its surrounding buffer for environmental-justice indicators.
+
+- Input: `latitude`, `longitude`, `distance` (default 1), and `unit` (`miles` or `kilometers`); kilometers are converted to miles before the request, and the buffer is capped at 15 miles
+- Returns the 13 EJScreen environmental indicators (PM2.5, ozone, diesel particulate, NO2, lead paint, traffic proximity, Superfund/RMP/hazardous-waste/wastewater proximity, underground storage tanks, drinking-water non-compliance, RSEI toxic air releases) and 6 demographic indicators (people of color, low income, limited English, less than high school, under 5, over 64)
+- Each indicator carries national and state percentiles plus EJ Index values; the Demographic Index and Supplemental Demographic Index are included
+- Points outside US coverage return a coverage note instead of fabricated indicators
+- **Data source:** EJScreen v2.2 (2022) served via the community-maintained [EJAM API](https://api.ejanalysis.com) (Public Environmental Data Partners), which rehosts EJScreen after EPA discontinued public access in 2025 — not a live EPA endpoint
+
 ## Resources and prompts
 
 | Type | Name | Description |
@@ -143,7 +156,7 @@ Built on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@cyanheads/mcp
 
 EPA-specific:
 
-- Three complementary EPA APIs unified behind a single `epa_` tool surface: ECHO (facility compliance), Envirofacts DMAP (TRI, Superfund, SDWIS), and AirNow (real-time air quality)
+- Multiple environmental data sources unified behind a single `epa_` tool surface: ECHO (facility compliance), Envirofacts DMAP (TRI, Superfund, SDWIS), AirNow (real-time air quality), and the community-maintained EJAM API rehosting EJScreen environmental-justice data (v2.2, 2022)
 - Parallel ECHO DFR aggregation in `epa_get_facility` — 3–5 upstream calls resolved concurrently with `Promise.allSettled`
 - AirNow response caching (~1 hour TTL) to stay within per-key rate limits
 - DMAP coordinate normalization — `tri.tri_facility` DDMMSS integers converted to decimal degrees
@@ -156,7 +169,7 @@ Agent-friendly output:
 
 ## Getting started
 
-Add the following to your MCP client configuration file. An AirNow API key is optional — set `AIRNOW_API_KEY` to enable `epa_get_air_quality` (register free at [docs.airnowapi.org](https://docs.airnowapi.org/account/request/)); without it the server starts with the other 7 tools. ECHO and DMAP tools work without authentication.
+Add the following to your MCP client configuration file. An AirNow API key is optional — set `AIRNOW_API_KEY` to enable `epa_get_air_quality` (register free at [docs.airnowapi.org](https://docs.airnowapi.org/account/request/)); without it the server starts with the other 8 tools. ECHO, DMAP, and EJScreen tools work without authentication.
 
 ```json
 {
@@ -204,7 +217,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 AIRNOW_API_KEY=... bun run start:http
 ### Prerequisites
 
 - [Bun v1.3.0](https://bun.sh/) or higher (or Node.js v24+).
-- (Optional) An AirNow API key to enable `epa_get_air_quality` — register free at [docs.airnowapi.org/account/request](https://docs.airnowapi.org/account/request/). Without it the server runs the other 7 tools. ECHO and DMAP tools require no API key.
+- (Optional) An AirNow API key to enable `epa_get_air_quality` — register free at [docs.airnowapi.org/account/request](https://docs.airnowapi.org/account/request/). Without it the server runs the other 8 tools. ECHO, DMAP, and EJScreen tools require no API key.
 
 ### Installation
 
@@ -239,10 +252,11 @@ All configuration is validated at startup via Zod schemas in `src/config/`. Key 
 
 | Variable | Description | Default |
 |:---|:---|:---|
-| `AIRNOW_API_KEY` | **Optional.** Enables `epa_get_air_quality` when set; the server runs the other 7 tools without it. Free registration at [docs.airnowapi.org](https://docs.airnowapi.org/account/request/). | — |
+| `AIRNOW_API_KEY` | **Optional.** Enables `epa_get_air_quality` when set; the server runs the other 8 tools without it. Free registration at [docs.airnowapi.org](https://docs.airnowapi.org/account/request/). | — |
 | `EPA_ECHO_BASE_URL` | ECHO API base URL | `https://echodata.epa.gov/echo` |
 | `EPA_DMAP_BASE_URL` | Envirofacts DMAP API base URL | `https://data.epa.gov/dmapservice` |
 | `EPA_AIRNOW_BASE_URL` | AirNow API base URL | `https://www.airnowapi.org/aq` |
+| `EJSCREEN_API_BASE_URL` | **Optional.** EJScreen (EJAM) API base URL used by `epa_get_ejscreen`. | `https://api.ejanalysis.com` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http` | `stdio` |
 | `MCP_HTTP_PORT` | HTTP server port | `3010` |
 | `MCP_HTTP_ENDPOINT_PATH` | HTTP endpoint path | `/mcp` |
@@ -293,11 +307,12 @@ The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `
 |:---|:---|
 | `src/index.ts` | `createApp()` entry point — registers tools/resources and inits services. |
 | `src/config` | Server-specific environment variable parsing and validation with Zod. |
-| `src/mcp-server/tools` | Tool definitions (`*.tool.ts`). Eight tools across ECHO, DMAP, and AirNow. |
+| `src/mcp-server/tools` | Tool definitions (`*.tool.ts`). Nine tools across ECHO, DMAP, EJAM, and AirNow. |
 | `src/mcp-server/resources` | Resource definitions (`*.resource.ts`). Facility and Superfund URI handlers. |
 | `src/services/echo` | ECHO REST API service layer — facility search, facility detail, enforcement cases. |
 | `src/services/dmap` | Envirofacts DMAP service layer — TRI releases, Superfund sites, drinking water systems. |
 | `src/services/airnow` | AirNow service layer — current and forecast AQI observations. |
+| `src/services/ejscreen` | EJScreen (EJAM) service layer — environmental-justice indicators for a point + buffer. |
 | `tests/` | Unit and integration tests mirroring `src/`. |
 
 ## Development guide

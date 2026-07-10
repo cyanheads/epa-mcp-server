@@ -1,6 +1,6 @@
 # epa-mcp-server - Directory Structure
 
-Generated on: 2026-07-10 18:30:23
+Generated on: 2026-07-10 21:53:48
 
 ```text
 epa-mcp-server/
@@ -24,6 +24,7 @@ epa-mcp-server/
 ├── changelog/
 │   ├── 0.1.x/
 │   ├── 0.2.x/
+│   ├── 0.3.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -143,6 +144,7 @@ epa-mcp-server/
 │   │   └── tools/
 │   │       └── definitions/
 │   │           ├── get-air-quality.tool.ts
+│   │           ├── get-ejscreen.tool.ts
 │   │           ├── get-facility.tool.ts
 │   │           ├── get-tri-releases.tool.ts
 │   │           ├── index.ts
@@ -158,8 +160,11 @@ epa-mcp-server/
 │   │   ├── dmap/
 │   │   │   ├── dmap-service.ts
 │   │   │   └── types.ts
-│   │   └── echo/
-│   │       ├── echo-service.ts
+│   │   ├── echo/
+│   │   │   ├── echo-service.ts
+│   │   │   └── types.ts
+│   │   └── ejscreen/
+│   │       ├── ejscreen-service.ts
 │   │       └── types.ts
 │   └── index.ts
 ├── tests/
@@ -171,6 +176,7 @@ epa-mcp-server/
 │   │   └── tools/
 │   │       └── definitions/
 │   │           ├── get-air-quality.tool.test.ts
+│   │           ├── get-ejscreen.tool.test.ts
 │   │           ├── get-facility.tool.test.ts
 │   │           ├── get-tri-releases.tool.test.ts
 │   │           ├── search-facilities.tool.test.ts
@@ -184,8 +190,10 @@ epa-mcp-server/
 │   ├── services/
 │   │   ├── dmap/
 │   │   │   └── dmap-service.test.ts
-│   │   └── echo/
-│   │       └── echo-service.test.ts
+│   │   ├── echo/
+│   │   │   └── echo-service.test.ts
+│   │   └── ejscreen/
+│   │       └── ejscreen-service.test.ts
 │   └── tools/
 ├── .dockerignore
 ├── .env.example

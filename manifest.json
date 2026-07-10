@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "epa-mcp-server",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Access EPA environmental data — facility compliance (ECHO), toxic releases (TRI), Superfund sites, drinking water systems, and real-time air quality (AirNow) via MCP.",
   "author": {
     "name": "cyanheads"
@@ -22,7 +22,8 @@
         "MCP_TRANSPORT_TYPE": "stdio",
         "MCP_AUTH_MODE": "none",
         "NODE_ENV": "production",
-        "AIRNOW_API_KEY": "${AIRNOW_API_KEY}"
+        "AIRNOW_API_KEY": "${AIRNOW_API_KEY}",
+        "EJSCREEN_API_BASE_URL": "${EJSCREEN_API_BASE_URL}"
       }
     }
   },
@@ -39,6 +40,13 @@
       "title": "AirNow API Key",
       "description": "Optional. Enables the epa_get_air_quality tool when set; the other tools work without it. Free registration at docs.airnowapi.org.",
       "required": false
+    },
+    "EJSCREEN_API_BASE_URL": {
+      "type": "string",
+      "title": "EJScreen (EJAM) API Base URL",
+      "description": "Optional. Override the EJScreen data endpoint used by epa_get_ejscreen. Defaults to https://api.ejanalysis.com — the community-maintained EJScreen rehost by Public Environmental Data Partners.",
+      "required": false,
+      "default": "https://api.ejanalysis.com"
     }
   }
 }
