@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.1](changelog/0.2.x/0.2.1.md) — 2026-07-10
+
+Per-medium TRI release breakdown on epa_get_tri_releases, ECHO proximity search radius fix, and mcp-ts-core 0.10.14 adoption clearing 9 dependency advisories
+
 ## [0.2.0](changelog/0.2.x/0.2.0.md) — 2026-06-21
 
 Optional AIRNOW_API_KEY (server runs the 7 keyless tools without it) and latitude/longitude/radius proximity search on epa_search_facilities

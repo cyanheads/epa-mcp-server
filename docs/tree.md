@@ -1,6 +1,6 @@
 # epa-mcp-server - Directory Structure
 
-Generated on: 2026-06-12 07:42:11
+Generated on: 2026-07-10 18:30:23
 
 ```text
 epa-mcp-server/
@@ -16,12 +16,14 @@ epa-mcp-server/
 │   │   ├── bug_report.yml
 │   │   ├── config.yml
 │   │   └── feature_request.yml
-│   └── FUNDING.yml
+│   ├── FUNDING.yml
+│   └── SECURITY.md
 ├── .vscode/
 │   ├── extensions.json
 │   └── settings.json
 ├── changelog/
 │   ├── 0.1.x/
+│   ├── 0.2.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -29,6 +31,7 @@ epa-mcp-server/
 ├── scripts/
 │   ├── build-changelog.ts
 │   ├── build.ts
+│   ├── check-dependency-specifiers.ts
 │   ├── check-docs-sync.ts
 │   ├── check-framework-antipatterns.ts
 │   ├── check-skill-versions.ts
@@ -174,12 +177,19 @@ epa-mcp-server/
 │   │           ├── search-superfund.tool.test.ts
 │   │           ├── search-tri-releases.tool.test.ts
 │   │           ├── search-violations.tool.test.ts
-│   │           └── search-water-systems.tool.test.ts
+│   │           ├── search-water-systems.tool.test.ts
+│   │           └── tool-definitions.test.ts
 │   ├── prompts/
 │   ├── resources/
+│   ├── services/
+│   │   ├── dmap/
+│   │   │   └── dmap-service.test.ts
+│   │   └── echo/
+│   │       └── echo-service.test.ts
 │   └── tools/
 ├── .dockerignore
 ├── .env.example
+├── .gitattributes
 ├── .gitignore
 ├── .mcpbignore
 ├── biome.json
@@ -190,6 +200,7 @@ epa-mcp-server/
 ├── CLAUDE.md
 ├── devcheck.config.json
 ├── Dockerfile
+├── LICENSE
 ├── manifest.json
 ├── package.json
 ├── README.md
