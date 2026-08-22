@@ -84,4 +84,79 @@ describe('EchoService.searchFacilities', () => {
     expect(url).not.toContain('p_lat');
     expect(url).not.toContain('p_long');
   });
+
+  it('pages through a bounded response set and preserves the full match count', async () => {
+    const urls: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input);
+      urls.push(url);
+      const payload = url.includes('get_facility_info')
+        ? { Results: { QueryID: '841', QueryRows: '330' } }
+        : {
+            Results: {
+              Facilities: [
+                { RegistryID: '110005351555', FacName: 'First facility' },
+                { RegistryID: '110005351556', FacName: 'Second facility' },
+              ],
+              QueryRows: '330',
+              PageNo: '1',
+            },
+          };
+      return Promise.resolve(new Response(JSON.stringify(payload), { status: 200 }));
+    });
+
+    const result = await service.searchFacilities(
+      { zipCode: '98101', limit: 1 },
+      createMockContext(),
+    );
+
+    expect(result.facilities).toEqual([
+      expect.objectContaining({ registryId: '110005351555', name: 'First facility' }),
+    ]);
+    expect(result.totalCount).toBe(330);
+    expect(urls).toHaveLength(2);
+    expect(urls[0]).toContain('responseset=1');
+    expect(urls[0]).not.toContain('p_limit');
+    expect(urls[1]).toContain('echo_rest_services.get_qid');
+    expect(urls[1]).toContain('qid=841');
+    expect(urls[1]).toContain('pageno=1');
+  });
+});
+
+describe('EchoService.searchViolations', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('uses ECHO response-set pagination and preserves the full match count', async () => {
+    const urls: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input);
+      urls.push(url);
+      const payload = url.includes('get_case_info')
+        ? { Results: { QueryID: '328', QueryRows: '6166' } }
+        : {
+            Results: {
+              Cases: [
+                { CaseNumber: 'CASE-1', CaseName: 'First case' },
+                { CaseNumber: 'CASE-2', CaseName: 'Second case' },
+              ],
+              PageNo: '1',
+            },
+          };
+      return Promise.resolve(new Response(JSON.stringify(payload), { status: 200 }));
+    });
+
+    const result = await new EchoService({} as AppConfig, {} as StorageService).searchViolations(
+      { state: 'WA', limit: 1 },
+      createMockContext(),
+    );
+
+    expect(result.cases).toEqual([expect.objectContaining({ caseId: 'CASE-1' })]);
+    expect(result.totalCount).toBe(6166);
+    expect(urls[0]).toContain('responseset=1');
+    expect(urls[0]).not.toContain('p_limit');
+    expect(urls[1]).toContain('pageno=1');
+    expect(urls[1]).not.toContain('p_limit');
+  });
 });

@@ -34,6 +34,7 @@ export interface RawEchoFacilityResponse {
   Results?: {
     Facilities?: RawEchoFacility[];
     QueryID?: string;
+    QueryRows?: string;
     PageNo?: string;
     TotalPagesAvailable?: string;
     TotalCount?: string;

@@ -75,6 +75,9 @@ const RELEASE_FIELD_BY_MEDIUM: Record<string, keyof MediumBreakdown> = {
   UNINJ8795: 'releasesToUndergroundInjectionInLbs',
 };
 
+/** Keeps TRI facility-ID filters below practical URL-length limits. */
+const TRI_FACILITY_BATCH_SIZE = 50;
+
 /** Normalize a raw SEMS envirofacts_site record. */
 function normalizeSemsSite(raw: RawSemsSite): SuperfundSite {
   const lat = parseNum(raw.primary_latitude_decimal_val);
@@ -303,51 +306,70 @@ export class DmapService {
       facilityFilters.push({ column: 'county', operator: 'contains', value: params.county });
     }
 
-    const facilityUrl = this.buildTableUrl('tri', 'tri_facility', facilityFilters, {
-      first: 0,
-      last: limit - 1,
-    });
-    ctx.log.debug('DMAP TRI facility query', { state: params.state });
+    const releases: Array<TriRelease & { facilityName?: string }> = [];
+    let firstFacilityRow = 1;
 
-    const facilities = await this.fetchTable<RawTriFacility>(facilityUrl, ctx);
-    if (facilities.length === 0) return [];
-
-    const facilityIds = facilities
-      .map((f) => f.tri_facility_id)
-      .filter((id): id is string => typeof id === 'string' && id.length > 0);
-
-    const releaseFilters: Array<{ column: string; operator: string; value: string }> = [
-      { column: 'tri_facility_id', operator: 'in', value: facilityIds.join(',') },
-    ];
-    if (params.year !== undefined) {
-      releaseFilters.push({
-        column: 'reporting_year',
-        operator: 'equals',
-        value: String(params.year),
+    while (releases.length < limit) {
+      const facilityUrl = this.buildTableUrl('tri', 'tri_facility', facilityFilters, {
+        first: firstFacilityRow,
+        last: firstFacilityRow + TRI_FACILITY_BATCH_SIZE - 1,
       });
-    }
-    if (params.chemicalName) {
-      // actual field is cas_chem_name, not chemical_name_text
-      releaseFilters.push({
-        column: 'cas_chem_name',
-        operator: 'contains',
-        value: params.chemicalName,
+      ctx.log.debug('DMAP TRI facility query', {
+        state: params.state,
+        firstFacilityRow,
       });
+
+      const facilities = await this.fetchTable<RawTriFacility>(facilityUrl, ctx);
+      if (facilities.length === 0) break;
+
+      const facilityIds = facilities
+        .map((facility) => facility.tri_facility_id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0);
+
+      if (facilityIds.length > 0) {
+        const releaseFilters: Array<{ column: string; operator: string; value: string }> = [
+          { column: 'tri_facility_id', operator: 'in', value: facilityIds.join(',') },
+        ];
+        if (params.year !== undefined) {
+          releaseFilters.push({
+            column: 'reporting_year',
+            operator: 'equals',
+            value: String(params.year),
+          });
+        }
+        if (params.chemicalName) {
+          // actual field is cas_chem_name, not chemical_name_text
+          releaseFilters.push({
+            column: 'cas_chem_name',
+            operator: 'contains',
+            value: params.chemicalName,
+          });
+        }
+
+        const remaining = limit - releases.length;
+        const releaseUrl = this.buildTableUrl('tri', 'tri_reporting_form', releaseFilters, {
+          first: 1,
+          last: remaining,
+        });
+        const releaseRows = await this.fetchTable<RawTriReportingForm>(releaseUrl, ctx);
+        const facilityMap = new Map(
+          facilities.map((facility) => [facility.tri_facility_id, facility]),
+        );
+
+        for (const row of releaseRows.slice(0, remaining)) {
+          const release = normalizeTriRelease(row);
+          const facility = facilityMap.get(row.tri_facility_id as string);
+          releases.push(
+            facility ? { ...release, facilityName: facility.facility_name ?? '' } : release,
+          );
+        }
+      }
+
+      if (facilities.length < TRI_FACILITY_BATCH_SIZE) break;
+      firstFacilityRow += TRI_FACILITY_BATCH_SIZE;
     }
 
-    const releaseUrl = this.buildTableUrl('tri', 'tri_reporting_form', releaseFilters, {
-      first: 0,
-      last: 499,
-    });
-    const releaseRows = await this.fetchTable<RawTriReportingForm>(releaseUrl, ctx);
-
-    const facilityMap = new Map(facilities.map((f) => [f.tri_facility_id, f]));
-
-    return releaseRows.map((row) => {
-      const release = normalizeTriRelease(row);
-      const fac = facilityMap.get(row.tri_facility_id as string);
-      return fac ? { ...release, facilityName: fac.facility_name ?? '' } : release;
-    });
+    return releases;
   }
 
   /** Search Superfund sites by state or coordinates + radius. */
@@ -500,11 +522,11 @@ export class DmapService {
       }
     }
 
-    const url = this.buildTableUrl('sdwis', 'water_system', filters, { first: 0, last: limit - 1 });
+    const url = this.buildTableUrl('sdwis', 'water_system', filters, { first: 1, last: limit });
     ctx.log.debug('DMAP water systems query', { state: params.state });
 
     const rows = await this.fetchTable<RawSdwisWaterSystem>(url, ctx);
-    return rows.map((r) => normalizeSdwisWaterSystem(r, violatingPwsids));
+    return rows.slice(0, limit).map((r) => normalizeSdwisWaterSystem(r, violatingPwsids));
   }
 }
 

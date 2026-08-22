@@ -142,9 +142,10 @@ export class EchoService {
     },
     ctx: Context,
   ): Promise<{ facilities: EpaFacility[]; totalCount: number }> {
+    const limit = params.limit ?? 50;
     const qparams: Record<string, string | number | boolean | undefined> = {
       output: 'JSON',
-      p_limit: params.limit ?? 50,
+      responseset: limit,
     };
 
     if (params.zipCode) qparams.p_zip = params.zipCode;
@@ -174,11 +175,37 @@ export class EchoService {
     ctx.log.debug('ECHO facility search', { url });
 
     const data = await this.fetchJson<RawEchoFacilityResponse>(url, ctx);
-    const raw = data.Results?.Facilities ?? [];
-    const totalCount = parseInt(data.Results?.TotalCount ?? '0', 10) || raw.length;
+    const directFacilities = data.Results?.Facilities ?? [];
+    const parsedTotalCount = Number.parseInt(
+      data.Results?.QueryRows ?? data.Results?.TotalCount ?? '',
+      10,
+    );
+    const totalCount = Number.isNaN(parsedTotalCount) ? directFacilities.length : parsedTotalCount;
+
+    let raw = directFacilities;
+    if (raw.length === 0 && totalCount > 0) {
+      const queryId = data.Results?.QueryID;
+      if (!queryId) {
+        throw serviceUnavailable('ECHO facility search returned matches without a query ID.', {
+          url,
+          totalCount,
+        });
+      }
+
+      const qidUrl = this.buildUrl('echo_rest_services.get_qid', {
+        output: 'JSON',
+        qid: queryId,
+        pageno: 1,
+      });
+      ctx.log.debug('ECHO facility search page', { url: qidUrl, queryId });
+      const page = await this.fetchJson<RawEchoFacilityResponse>(qidUrl, ctx);
+      raw = page.Results?.Facilities ?? [];
+    }
 
     return {
-      facilities: raw.map((f) => normalizeFacility(f as Record<string, string | undefined>)),
+      facilities: raw
+        .slice(0, limit)
+        .map((f) => normalizeFacility(f as Record<string, string | undefined>)),
       totalCount,
     };
   }
@@ -359,9 +386,10 @@ export class EchoService {
     },
     ctx: Context,
   ): Promise<{ cases: EpaCase[]; totalCount: number }> {
+    const limit = params.limit ?? 50;
     const qparams: Record<string, string | number | undefined> = {
       output: 'JSON',
-      p_limit: params.limit ?? 50,
+      responseset: limit,
     };
 
     if (params.state) qparams.p_state = params.state;
@@ -391,12 +419,12 @@ export class EchoService {
     const qidUrl = this.buildUrl('case_rest_services.get_qid', {
       output: 'JSON',
       qid: queryId,
-      p_limit: params.limit ?? 50,
+      pageno: 1,
     });
     ctx.log.debug('ECHO case search step 2', { url: qidUrl, queryId });
 
     const data = await this.fetchJson<RawEchoCaseResponse>(qidUrl, ctx);
-    const raw = data.Results?.Cases ?? [];
+    const raw = (data.Results?.Cases ?? []).slice(0, limit);
 
     const cases: EpaCase[] = raw.map((c) => {
       const fedPenalty = c.FedPenalty ? parseFloat(String(c.FedPenalty).replace(/[$,]/g, '')) : NaN;

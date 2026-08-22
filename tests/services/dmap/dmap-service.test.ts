@@ -1,8 +1,7 @@
 /**
- * @fileoverview Tests for DmapService.getTriReleases per-medium breakdown — the batched
- * tri.tri_release_qty fetch, the medium-code rollup, sparsity preservation, and the guarantee
- * that searchTriReleases (which shares normalizeTriRelease) does NOT issue the extra query.
- * `fetch` is stubbed and routed by table path so the built URLs are observable.
+ * @fileoverview Tests for DmapService TRI and drinking-water retrieval, including per-medium
+ * breakdowns and bounded regional-search pagination. `fetch` is stubbed and routed by table path
+ * so the built URLs are observable.
  * @module tests/services/dmap/dmap-service.test
  */
 
@@ -232,5 +231,114 @@ describe('DmapService.getTriReleases per-medium breakdown', () => {
     expect(results).toHaveLength(1);
     expect(results[0]!.releasesToAirInLbs).toBeUndefined();
     expect(urls.some((u) => u.includes('/tri.tri_release_qty/'))).toBe(false);
+  });
+});
+
+describe('DmapService.searchTriReleases pagination', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('bounds facility-ID batches and release rows when limit is one', async () => {
+    const urls = stubDmapFetch([
+      {
+        match: '/tri.tri_facility/',
+        rows: [
+          { tri_facility_id: 'FAC1', facility_name: 'ACME' },
+          { tri_facility_id: 'FAC2', facility_name: 'BETA' },
+        ],
+      },
+      {
+        match: '/tri.tri_reporting_form/',
+        rows: [
+          { tri_facility_id: 'FAC1', cas_chem_name: 'BENZENE', reporting_year: '2023' },
+          { tri_facility_id: 'FAC2', cas_chem_name: 'TOLUENE', reporting_year: '2023' },
+        ],
+      },
+    ]);
+
+    const releases = await makeService().searchTriReleases(
+      { state: 'WA', limit: 1 },
+      createMockContext(),
+    );
+
+    expect(releases).toHaveLength(1);
+    expect(urls.find((url) => url.includes('/tri.tri_facility/'))).toContain('/1:50/');
+    expect(urls.find((url) => url.includes('/tri.tri_reporting_form/'))).toContain('/1:1/');
+    expect(urls.every((url) => !url.includes('/0:0/'))).toBe(true);
+  });
+
+  it('continues to later facility batches when filters match no early releases', async () => {
+    const urls: string[] = [];
+    const firstBatch = Array.from({ length: 50 }, (_, index) => ({
+      tri_facility_id: `FAC${String(index).padStart(3, '0')}`,
+      facility_name: `Facility ${index}`,
+    }));
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input);
+      urls.push(url);
+
+      if (url.includes('/tri.tri_facility/') && url.includes('/1:50/')) {
+        return Promise.resolve(new Response(JSON.stringify(firstBatch), { status: 200 }));
+      }
+      if (url.includes('/tri.tri_facility/') && url.includes('/51:100/')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify([{ tri_facility_id: 'LATE1', facility_name: 'Late Match' }]),
+            { status: 200 },
+          ),
+        );
+      }
+      if (url.includes('LATE1')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify([
+              { tri_facility_id: 'LATE1', cas_chem_name: 'BENZENE', reporting_year: '2023' },
+            ]),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(new Response('[]', { status: 200 }));
+    });
+
+    const releases = await makeService().searchTriReleases(
+      { state: 'WA', chemicalName: 'BENZENE', limit: 1 },
+      createMockContext(),
+    );
+
+    expect(releases).toEqual([
+      expect.objectContaining({ facilityId: 'LATE1', facilityName: 'Late Match' }),
+    ]);
+    expect(urls.filter((url) => url.includes('/tri.tri_facility/'))).toHaveLength(2);
+  });
+});
+
+describe('DmapService.searchWaterSystems pagination', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('uses DMAP one-based ranges and bounds returned systems when limit is one', async () => {
+    const urls = stubDmapFetch([
+      {
+        match: '/sdwis.water_system/',
+        rows: [
+          { pwsid: 'WA0000001', pws_name: 'First Water System' },
+          { pwsid: 'WA0000002', pws_name: 'Second Water System' },
+        ],
+      },
+    ]);
+
+    const systems = await makeService().searchWaterSystems(
+      { state: 'WA', limit: 1 },
+      createMockContext(),
+    );
+
+    expect(systems).toEqual([expect.objectContaining({ pwsid: 'WA0000001' })]);
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain('/1:1/json');
+    expect(urls[0]).not.toContain('/0:0/');
   });
 });
