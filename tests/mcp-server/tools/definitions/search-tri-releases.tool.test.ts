@@ -33,7 +33,7 @@ describe('searchTriReleasesTool', () => {
 
   it('returns releases for valid state', async () => {
     mockSearchTriReleases.mockResolvedValue([waRelease]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchTriReleasesTool.errors });
     const input = searchTriReleasesTool.input.parse({ state: 'WA' });
     const result = await searchTriReleasesTool.handler(input, ctx);
     expect(result.state).toBe('WA');
@@ -43,7 +43,7 @@ describe('searchTriReleasesTool', () => {
 
   it('uppercases state before calling service', async () => {
     mockSearchTriReleases.mockResolvedValue([waRelease]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchTriReleasesTool.errors });
     const input = searchTriReleasesTool.input.parse({ state: 'WA' });
     await searchTriReleasesTool.handler(input, ctx);
     expect(mockSearchTriReleases).toHaveBeenCalledWith(
@@ -54,7 +54,7 @@ describe('searchTriReleasesTool', () => {
 
   it('passes county and year filters to service', async () => {
     mockSearchTriReleases.mockResolvedValue([waRelease]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchTriReleasesTool.errors });
     const input = searchTriReleasesTool.input.parse({
       state: 'WA',
       county: 'KING',
@@ -69,7 +69,7 @@ describe('searchTriReleasesTool', () => {
 
   it('passes chemical_name filter trimmed', async () => {
     mockSearchTriReleases.mockResolvedValue([waRelease]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchTriReleasesTool.errors });
     const input = searchTriReleasesTool.input.parse({ state: 'WA', chemical_name: '  BENZENE  ' });
     await searchTriReleasesTool.handler(input, ctx);
     expect(mockSearchTriReleases).toHaveBeenCalledWith(
@@ -80,7 +80,7 @@ describe('searchTriReleasesTool', () => {
 
   it('returns message when no releases found', async () => {
     mockSearchTriReleases.mockResolvedValue([]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchTriReleasesTool.errors });
     const input = searchTriReleasesTool.input.parse({ state: 'WY', year: 2010 });
     const result = await searchTriReleasesTool.handler(input, ctx);
     expect(result.releases).toHaveLength(0);

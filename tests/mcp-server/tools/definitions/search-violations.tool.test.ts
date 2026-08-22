@@ -41,7 +41,7 @@ describe('searchViolationsTool', () => {
 
   it('returns cases for valid state filter', async () => {
     mockSearchViolations.mockResolvedValue({ cases: [waCase], totalCount: 1 });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchViolationsTool.errors });
     const input = searchViolationsTool.input.parse({ state: 'WA' });
     const result = await searchViolationsTool.handler(input, ctx);
     expect(result.totalCount).toBe(1);
@@ -51,7 +51,7 @@ describe('searchViolationsTool', () => {
 
   it('returns cases for valid zip_code filter', async () => {
     mockSearchViolations.mockResolvedValue({ cases: [waCase], totalCount: 1 });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchViolationsTool.errors });
     const input = searchViolationsTool.input.parse({ zip_code: '98101' });
     const result = await searchViolationsTool.handler(input, ctx);
     expect(result.cases).toHaveLength(1);
@@ -59,7 +59,7 @@ describe('searchViolationsTool', () => {
 
   it('passes program and case_type filters to service', async () => {
     mockSearchViolations.mockResolvedValue({ cases: [waCase], totalCount: 1 });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchViolationsTool.errors });
     const input = searchViolationsTool.input.parse({
       state: 'WA',
       program: 'CAA',
@@ -74,7 +74,7 @@ describe('searchViolationsTool', () => {
 
   it('passes date range filters to service', async () => {
     mockSearchViolations.mockResolvedValue({ cases: [waCase], totalCount: 1 });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchViolationsTool.errors });
     const input = searchViolationsTool.input.parse({
       state: 'WA',
       date_filed_start: '2023-01-01',
@@ -108,7 +108,7 @@ describe('searchViolationsTool', () => {
 
   it('returns message when no cases found', async () => {
     mockSearchViolations.mockResolvedValue({ cases: [], totalCount: 0 });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchViolationsTool.errors });
     const input = searchViolationsTool.input.parse({ state: 'WA', program: 'TSCA' });
     const result = await searchViolationsTool.handler(input, ctx);
     expect(result.cases).toHaveLength(0);
@@ -172,7 +172,7 @@ describe('searchViolationsTool', () => {
     // it read Cases directly from get_case_info which always returned [].
     const step1Result = { cases: [waCase], totalCount: 1 };
     mockSearchViolations.mockResolvedValue(step1Result);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchViolationsTool.errors });
     const input = searchViolationsTool.input.parse({ state: 'WA' });
     const result = await searchViolationsTool.handler(input, ctx);
     // Service was called — verify it received the state filter
@@ -197,7 +197,7 @@ describe('searchViolationsTool', () => {
       filedDate: '2014-03-01', // from DateFiled
     };
     mockSearchViolations.mockResolvedValue({ cases: [normalizedCase], totalCount: 1 });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchViolationsTool.errors });
     const input = searchViolationsTool.input.parse({ state: 'WA' });
     const result = await searchViolationsTool.handler(input, ctx);
     expect(result.cases[0]!.caseId).toBe('03-2014-7010');

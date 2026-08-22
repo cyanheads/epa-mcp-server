@@ -70,7 +70,7 @@ describe('getEjscreenTool', () => {
 
   it('returns indicators for a valid point and passes miles through unchanged', async () => {
     mockGetIndicators.mockResolvedValue(validResult);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getEjscreenTool.errors });
     const input = getEjscreenTool.input.parse({ latitude: 39.2904, longitude: -76.6122 });
     const result = await getEjscreenTool.handler(input, ctx);
 
@@ -85,7 +85,7 @@ describe('getEjscreenTool', () => {
 
   it('converts kilometers to miles before calling the service', async () => {
     mockGetIndicators.mockResolvedValue(validResult);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getEjscreenTool.errors });
     const input = getEjscreenTool.input.parse({
       latitude: 39.2904,
       longitude: -76.6122,
@@ -132,7 +132,7 @@ describe('getEjscreenTool', () => {
 
   it('surfaces a coverage notice when the point is out of coverage', async () => {
     mockGetIndicators.mockResolvedValue(oceanResult);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getEjscreenTool.errors });
     const input = getEjscreenTool.input.parse({ latitude: 0, longitude: 0 });
     const result = await getEjscreenTool.handler(input, ctx);
 

@@ -38,7 +38,7 @@ describe('searchWaterSystemsTool', () => {
 
   it('returns water systems for valid state', async () => {
     mockSearchWaterSystems.mockResolvedValue([seattleWaterSystem]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchWaterSystemsTool.errors });
     const input = searchWaterSystemsTool.input.parse({ state: 'WA' });
     const result = await searchWaterSystemsTool.handler(input, ctx);
     expect(result.totalCount).toBe(1);
@@ -49,7 +49,7 @@ describe('searchWaterSystemsTool', () => {
 
   it('returns water systems for valid zip_code', async () => {
     mockSearchWaterSystems.mockResolvedValue([seattleWaterSystem]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchWaterSystemsTool.errors });
     const input = searchWaterSystemsTool.input.parse({ zip_code: '98104' });
     const result = await searchWaterSystemsTool.handler(input, ctx);
     expect(result.systems).toHaveLength(1);
@@ -57,7 +57,7 @@ describe('searchWaterSystemsTool', () => {
 
   it('passes has_violation and pws_type filters to service', async () => {
     mockSearchWaterSystems.mockResolvedValue([seattleWaterSystem]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchWaterSystemsTool.errors });
     const input = searchWaterSystemsTool.input.parse({
       state: 'WA',
       has_violation: true,
@@ -88,7 +88,7 @@ describe('searchWaterSystemsTool', () => {
 
   it('returns message when no systems found', async () => {
     mockSearchWaterSystems.mockResolvedValue([]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchWaterSystemsTool.errors });
     const input = searchWaterSystemsTool.input.parse({ state: 'WY', has_violation: true });
     const result = await searchWaterSystemsTool.handler(input, ctx);
     expect(result.systems).toHaveLength(0);

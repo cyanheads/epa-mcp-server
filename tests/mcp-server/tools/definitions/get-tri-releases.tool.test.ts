@@ -43,7 +43,7 @@ describe('getTriReleasesTool', () => {
 
   it('returns TRI releases for valid facility ID', async () => {
     mockGetTriReleases.mockResolvedValue([benzeneRelease]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getTriReleasesTool.errors });
     const input = getTriReleasesTool.input.parse({ facility_id: 'WA0001234' });
     const result = await getTriReleasesTool.handler(input, ctx);
     expect(result.facilityId).toBe('WA0001234');
@@ -55,7 +55,7 @@ describe('getTriReleasesTool', () => {
 
   it('passes year and chemical_name filters to service', async () => {
     mockGetTriReleases.mockResolvedValue([benzeneRelease]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getTriReleasesTool.errors });
     const input = getTriReleasesTool.input.parse({
       facility_id: 'WA0001234',
       year: 2022,
@@ -70,7 +70,7 @@ describe('getTriReleasesTool', () => {
 
   it('returns message when no releases found', async () => {
     mockGetTriReleases.mockResolvedValue([]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getTriReleasesTool.errors });
     const input = getTriReleasesTool.input.parse({ facility_id: 'NOFACILITY' });
     const result = await getTriReleasesTool.handler(input, ctx);
     expect(result.releases).toHaveLength(0);
@@ -80,7 +80,7 @@ describe('getTriReleasesTool', () => {
 
   it('includes year in no-results message when year filter provided', async () => {
     mockGetTriReleases.mockResolvedValue([]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getTriReleasesTool.errors });
     const input = getTriReleasesTool.input.parse({ facility_id: 'WA0001234', year: 2019 });
     const result = await getTriReleasesTool.handler(input, ctx);
     expect(result.message).toContain('2019');
@@ -88,7 +88,7 @@ describe('getTriReleasesTool', () => {
 
   it('includes chemical name in no-results message when filter provided', async () => {
     mockGetTriReleases.mockResolvedValue([]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getTriReleasesTool.errors });
     const input = getTriReleasesTool.input.parse({
       facility_id: 'WA0001234',
       chemical_name: 'LEAD',
@@ -99,7 +99,7 @@ describe('getTriReleasesTool', () => {
 
   it('trims whitespace from facility_id and chemical_name', async () => {
     mockGetTriReleases.mockResolvedValue([benzeneRelease]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getTriReleasesTool.errors });
     const input = getTriReleasesTool.input.parse({
       facility_id: '  WA0001234  ',
       chemical_name: '  benzene  ',
@@ -149,7 +149,7 @@ describe('getTriReleasesTool', () => {
 
   it('passes per-medium breakdown fields through from the service', async () => {
     mockGetTriReleases.mockResolvedValue([fullBreakdownRelease]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getTriReleasesTool.errors });
     const input = getTriReleasesTool.input.parse({ facility_id: 'WA0005678' });
     const result = await getTriReleasesTool.handler(input, ctx);
     expect(result.releases[0]).toMatchObject({

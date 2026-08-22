@@ -40,7 +40,7 @@ describe('searchSuperfundTool', () => {
 
   it('returns sites for valid state filter', async () => {
     mockSearchSuperfund.mockResolvedValue([hanfordSite]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchSuperfundTool.errors });
     const input = searchSuperfundTool.input.parse({ state: 'WA' });
     const result = await searchSuperfundTool.handler(input, ctx);
     expect(result.sites).toHaveLength(1);
@@ -51,7 +51,7 @@ describe('searchSuperfundTool', () => {
 
   it('returns sites for city filter', async () => {
     mockSearchSuperfund.mockResolvedValue([hanfordSite]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchSuperfundTool.errors });
     const input = searchSuperfundTool.input.parse({ city: 'RICHLAND', state: 'WA' });
     const result = await searchSuperfundTool.handler(input, ctx);
     expect(result.sites).toHaveLength(1);
@@ -59,7 +59,7 @@ describe('searchSuperfundTool', () => {
 
   it('returns sites for lat/lng + radius proximity search', async () => {
     mockSearchSuperfund.mockResolvedValue([hanfordSite]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchSuperfundTool.errors });
     const input = searchSuperfundTool.input.parse({
       latitude: 46.652,
       longitude: -119.49,
@@ -98,7 +98,7 @@ describe('searchSuperfundTool', () => {
 
   it('returns message when no sites found', async () => {
     mockSearchSuperfund.mockResolvedValue([]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchSuperfundTool.errors });
     const input = searchSuperfundTool.input.parse({ state: 'HI', npl_status: 'listed' });
     const result = await searchSuperfundTool.handler(input, ctx);
     expect(result.sites).toHaveLength(0);

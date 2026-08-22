@@ -62,7 +62,7 @@ describe('getFacilityTool', () => {
 
   it('returns facility profile for valid registry ID', async () => {
     mockGetFacility.mockResolvedValue(fullProfile);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getFacilityTool.errors });
     const input = getFacilityTool.input.parse({ registry_id: '110000350509' });
     const result = await getFacilityTool.handler(input, ctx);
     expect(result.registryId).toBe('110000350509');
@@ -74,7 +74,7 @@ describe('getFacilityTool', () => {
 
   it('trims whitespace from registry_id before calling service', async () => {
     mockGetFacility.mockResolvedValue(fullProfile);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getFacilityTool.errors });
     const input = getFacilityTool.input.parse({ registry_id: '  110000350509  ' });
     await getFacilityTool.handler(input, ctx);
     expect(mockGetFacility).toHaveBeenCalledWith('110000350509', expect.anything());
@@ -122,7 +122,7 @@ describe('getFacilityTool', () => {
     // The fix: getFacility() now uses get_dfr?p_id=registryId which accepts numeric Registry IDs.
     // Before the fix, get_facility_info?p_id=registryId silently returned 0 results for Registry IDs.
     mockGetFacility.mockResolvedValue(fullProfile);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getFacilityTool.errors });
     const input = getFacilityTool.input.parse({ registry_id: '110005351555' });
     await getFacilityTool.handler(input, ctx);
     expect(mockGetFacility).toHaveBeenCalledWith('110005351555', expect.anything());

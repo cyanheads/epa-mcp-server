@@ -42,7 +42,7 @@ describe('searchFacilitiesTool', () => {
 
   it('returns facilities for valid state filter', async () => {
     mockSearchFacilities.mockResolvedValue({ facilities: [boeingFacility], totalCount: 1 });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
     const input = searchFacilitiesTool.input.parse({ state: 'WA' });
     const result = await searchFacilitiesTool.handler(input, ctx);
     expect(result.facilities).toHaveLength(1);
@@ -52,7 +52,7 @@ describe('searchFacilitiesTool', () => {
 
   it('returns facilities for valid zip_code filter', async () => {
     mockSearchFacilities.mockResolvedValue({ facilities: [boeingFacility], totalCount: 1 });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
     const input = searchFacilitiesTool.input.parse({ zip_code: '98204' });
     const result = await searchFacilitiesTool.handler(input, ctx);
     expect(result.facilities).toHaveLength(1);
@@ -60,7 +60,7 @@ describe('searchFacilitiesTool', () => {
 
   it('returns facilities for city+state filter', async () => {
     mockSearchFacilities.mockResolvedValue({ facilities: [boeingFacility], totalCount: 1 });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
     const input = searchFacilitiesTool.input.parse({ city: 'EVERETT', state: 'WA' });
     const result = await searchFacilitiesTool.handler(input, ctx);
     expect(result.facilities).toHaveLength(1);
@@ -68,7 +68,7 @@ describe('searchFacilitiesTool', () => {
 
   it('passes program filter to service', async () => {
     mockSearchFacilities.mockResolvedValue({ facilities: [boeingFacility], totalCount: 1 });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
     const input = searchFacilitiesTool.input.parse({ state: 'WA', programs: ['TRI', 'CAA'] });
     await searchFacilitiesTool.handler(input, ctx);
     expect(mockSearchFacilities).toHaveBeenCalledWith(
@@ -95,7 +95,7 @@ describe('searchFacilitiesTool', () => {
 
   it('returns facilities for a latitude+longitude+radius_miles proximity filter', async () => {
     mockSearchFacilities.mockResolvedValue({ facilities: [boeingFacility], totalCount: 1 });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
     const input = searchFacilitiesTool.input.parse({
       latitude: 47.917,
       longitude: -122.248,
@@ -111,7 +111,7 @@ describe('searchFacilitiesTool', () => {
 
   it('accepts latitude/longitude of 0 (equator / prime meridian) as a complete triple', async () => {
     mockSearchFacilities.mockResolvedValue({ facilities: [], totalCount: 0 });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
     const input = searchFacilitiesTool.input.parse({ latitude: 0, longitude: 0, radius_miles: 25 });
     await searchFacilitiesTool.handler(input, ctx);
     // 0 is a valid coordinate — the triple is complete and forwarded, not dropped by a truthy guard.
@@ -139,7 +139,7 @@ describe('searchFacilitiesTool', () => {
 
   it('surfaces the proximity filter in the no-match message', async () => {
     mockSearchFacilities.mockResolvedValue({ facilities: [], totalCount: 0 });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
     const input = searchFacilitiesTool.input.parse({
       latitude: 47.6,
       longitude: -122.3,
@@ -151,7 +151,7 @@ describe('searchFacilitiesTool', () => {
 
   it('returns message when no facilities found', async () => {
     mockSearchFacilities.mockResolvedValue({ facilities: [], totalCount: 0 });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
     const input = searchFacilitiesTool.input.parse({ state: 'WA', has_violation: true });
     const result = await searchFacilitiesTool.handler(input, ctx);
     expect(result.facilities).toHaveLength(0);

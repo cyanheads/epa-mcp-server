@@ -42,7 +42,7 @@ describe('getAirQualityTool', () => {
 
   it('returns current observations by zip code', async () => {
     mockGetCurrentByZip.mockResolvedValue([seattleObservation]);
-    const ctx = createMockContext({ tenantId: 'test-tenant' });
+    const ctx = createMockContext({ errors: getAirQualityTool.errors, tenantId: 'test-tenant' });
     const input = getAirQualityTool.input.parse({ zip_code: '98101' });
     const result = await getAirQualityTool.handler(input, ctx);
     expect(result.mode).toBe('current');
@@ -53,7 +53,7 @@ describe('getAirQualityTool', () => {
 
   it('returns current observations by lat/lng', async () => {
     mockGetCurrentByLatLng.mockResolvedValue([seattleObservation]);
-    const ctx = createMockContext({ tenantId: 'test-tenant' });
+    const ctx = createMockContext({ errors: getAirQualityTool.errors, tenantId: 'test-tenant' });
     const input = getAirQualityTool.input.parse({ latitude: 47.6062, longitude: -122.3321 });
     const result = await getAirQualityTool.handler(input, ctx);
     expect(result.mode).toBe('current');
@@ -62,7 +62,7 @@ describe('getAirQualityTool', () => {
 
   it('returns forecast by zip code with forecast_date', async () => {
     mockGetForecastByZip.mockResolvedValue([seattleObservation]);
-    const ctx = createMockContext({ tenantId: 'test-tenant' });
+    const ctx = createMockContext({ errors: getAirQualityTool.errors, tenantId: 'test-tenant' });
     const input = getAirQualityTool.input.parse({
       zip_code: '98101',
       mode: 'forecast',
@@ -75,7 +75,7 @@ describe('getAirQualityTool', () => {
 
   it('returns forecast by lat/lng with forecast_date', async () => {
     mockGetForecastByLatLng.mockResolvedValue([seattleObservation]);
-    const ctx = createMockContext({ tenantId: 'test-tenant' });
+    const ctx = createMockContext({ errors: getAirQualityTool.errors, tenantId: 'test-tenant' });
     const input = getAirQualityTool.input.parse({
       latitude: 47.6062,
       longitude: -122.3321,
@@ -89,7 +89,7 @@ describe('getAirQualityTool', () => {
 
   it('returns message when no observations found', async () => {
     mockGetCurrentByZip.mockResolvedValue([]);
-    const ctx = createMockContext({ tenantId: 'test-tenant' });
+    const ctx = createMockContext({ errors: getAirQualityTool.errors, tenantId: 'test-tenant' });
     const input = getAirQualityTool.input.parse({ zip_code: '00001' });
     const result = await getAirQualityTool.handler(input, ctx);
     expect(result.observations).toHaveLength(0);
