@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: epa-mcp-server
-abstract: "Model Context Protocol (MCP) server for EPA environmental data, covering facility compliance (ECHO), toxic releases (TRI), Superfund sites, drinking water systems, and real-time air quality (AirNow)."
+abstract: "Search and retrieve EPA environmental data: facility compliance (ECHO), toxic releases (TRI), Superfund sites, drinking water systems, environmental-justice screening (EJScreen), and real-time air quality (AirNow). STDIO or Streamable HTTP."
 type: software
 authors:
   - family-names: Hand

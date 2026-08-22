@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.1](changelog/0.3.x/0.3.1.md) — 2026-08-22
+
+Modern MCP protocol support and bounded EPA search pagination.
+
 ## [0.3.0](changelog/0.3.x/0.3.0.md) — 2026-07-10
 
 New epa_get_ejscreen tool: EJScreen environmental-justice indicators (13 environmental + 6 demographic, each with national/state percentiles and EJ Index) for a point + buffer, served via the community-maintained EJAM API rehosting EJScreen v2.2 (2022).

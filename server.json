@@ -1,19 +1,19 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.cyanheads/epa-mcp-server",
-  "description": "EPA data: ECHO facility compliance, TRI releases, Superfund, drinking water, and AirNow air quality.",
+  "description": "Search EPA compliance, TRI, Superfund, drinking-water, EJScreen, and AirNow data.",
   "repository": {
     "url": "https://github.com/cyanheads/epa-mcp-server",
     "source": "github"
   },
-  "version": "0.3.0",
+  "version": "0.3.1",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/epa-mcp-server",
       "runtimeHint": "node",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "packageArguments": [
         {
           "type": "positional",
@@ -55,7 +55,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/epa-mcp-server",
       "runtimeHint": "node",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "packageArguments": [
         {
           "type": "positional",

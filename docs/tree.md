@@ -1,11 +1,9 @@
 # epa-mcp-server - Directory Structure
 
-Generated on: 2026-07-10 21:53:48
+Generated on: 2026-08-22 19:08:29
 
 ```text
 epa-mcp-server/
-├── .agents/
-├── .claude/
 ├── .claude-plugin/
 │   └── plugin.json
 ├── .codex-plugin/
@@ -16,6 +14,8 @@ epa-mcp-server/
 │   │   ├── bug_report.yml
 │   │   ├── config.yml
 │   │   └── feature_request.yml
+│   ├── CODE_OF_CONDUCT.md
+│   ├── CONTRIBUTING.md
 │   ├── FUNDING.yml
 │   └── SECURITY.md
 ├── .vscode/
