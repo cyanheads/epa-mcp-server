@@ -10,7 +10,7 @@ import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import { serviceUnavailable, validationError } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
-import { withRetry } from '@cyanheads/mcp-ts-core/utils';
+import { httpErrorFromResponse, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
 import type {
   EjDemographicIndicator,
@@ -243,33 +243,29 @@ export class EjscreenService {
           }),
           signal: ctx.signal,
         });
-        const text = await response.text();
-
         if (!response.ok) {
           // Bad input (e.g. invalid coordinates) returns HTTP 400 with {"error":[...]}. This is
           // deterministic — surface it as a validation failure rather than retrying.
           if (response.status === 400) {
+            const text = await response.text();
             throw validationError(
               `EJAM API rejected the request: ${parseApiError(text) ?? 'HTTP 400'}`,
               { reason: 'upstream_rejected', status: 400, ...ctx.recoveryFor('upstream_rejected') },
             );
           }
-          throw serviceUnavailable(`EJAM API returned HTTP ${response.status}.`, {
-            status: response.status,
-            url,
-          });
+          throw await httpErrorFromResponse(response, { service: 'EJAM' });
         }
+        const text = await response.text();
         if (/^\s*<(!DOCTYPE\s+html|html[\s>])/i.test(text)) {
           throw serviceUnavailable(
             'EJAM API returned HTML instead of JSON — likely unavailable or rate-limited.',
-            { url },
           );
         }
 
         const parsed = JSON.parse(text) as unknown;
         const first = Array.isArray(parsed) ? parsed[0] : parsed;
         if (first === undefined || first === null || typeof first !== 'object') {
-          throw serviceUnavailable('EJAM API returned an empty response.', { url });
+          throw serviceUnavailable('EJAM API returned an empty response.');
         }
         return first as RawEjamRow;
       },

@@ -169,13 +169,12 @@ export class DmapService {
         const jsonUrl = url.endsWith('/json') ? url : `${url}/json`;
         const response = await fetch(jsonUrl, { signal: ctx.signal });
         if (!response.ok) {
-          throw await httpErrorFromResponse(response, { service: 'DMAP', data: { url: jsonUrl } });
+          throw await httpErrorFromResponse(response, { service: 'DMAP' });
         }
         const text = await response.text();
         if (/^\s*<(!DOCTYPE\s+html|html[\s>])/i.test(text)) {
           throw serviceUnavailable(
             'DMAP API returned HTML instead of JSON — likely rate-limited or unavailable.',
-            { url: jsonUrl },
           );
         }
         const parsed = JSON.parse(text) as unknown;

@@ -97,13 +97,12 @@ export class EchoService {
           headers: { 'User-Agent': '@cyanheads/epa-mcp-server/0.1.1' },
         });
         if (!response.ok) {
-          throw await httpErrorFromResponse(response, { service: 'ECHO', data: { url } });
+          throw await httpErrorFromResponse(response, { service: 'ECHO' });
         }
         const text = await response.text();
         if (/^\s*<(!DOCTYPE\s+html|html[\s>])/i.test(text)) {
           throw serviceUnavailable(
             'ECHO API returned HTML instead of JSON — likely rate-limited or unavailable.',
-            { url },
           );
         }
         const parsed = JSON.parse(text) as Record<string, unknown>;
@@ -111,7 +110,7 @@ export class EchoService {
         const errorMsg = (parsed as { Results?: { Error?: { ErrorMessage?: string } } }).Results
           ?.Error?.ErrorMessage;
         if (errorMsg) {
-          throw serviceUnavailable(`ECHO API error: ${errorMsg}`, { url });
+          throw serviceUnavailable(`ECHO API error: ${errorMsg}`);
         }
         return parsed as T;
       },
@@ -187,7 +186,6 @@ export class EchoService {
       const queryId = data.Results?.QueryID;
       if (!queryId) {
         throw serviceUnavailable('ECHO facility search returned matches without a query ID.', {
-          url,
           totalCount,
         });
       }

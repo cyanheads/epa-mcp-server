@@ -105,13 +105,12 @@ export class AirNowService {
       async () => {
         const response = await fetch(url, { signal: ctx.signal });
         if (!response.ok) {
-          throw await httpErrorFromResponse(response, { service: 'AirNow', data: { url } });
+          throw await httpErrorFromResponse(response, { service: 'AirNow' });
         }
         const text = await response.text();
         if (/^\s*<(!DOCTYPE\s+html|html[\s>])/i.test(text)) {
           throw serviceUnavailable(
             'AirNow API returned HTML instead of JSON — likely rate-limited.',
-            { url },
           );
         }
         const parsed = JSON.parse(text) as unknown;
