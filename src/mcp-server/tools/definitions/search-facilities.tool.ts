@@ -139,12 +139,6 @@ export const searchFacilitiesTool = tool('epa_search_facilities', {
       recovery:
         'Proximity search needs all three of latitude, longitude, and radius_miles. Provide the missing value, or use zip_code / state / city instead.',
     },
-    {
-      reason: 'no_match',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'No facilities matched the search criteria.',
-      recovery: 'Broaden the search by removing filters or expanding the geographic area.',
-    },
   ],
 
   async handler(input, ctx) {

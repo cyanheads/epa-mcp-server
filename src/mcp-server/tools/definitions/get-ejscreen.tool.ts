@@ -206,6 +206,7 @@ export const getEjscreenTool = tool('epa_get_ejscreen', {
     },
     {
       reason: 'upstream_rejected',
+      thrownBy: 'service',
       code: JsonRpcErrorCode.ValidationError,
       when: 'The EJAM API rejected the request, typically for invalid coordinates.',
       recovery:
