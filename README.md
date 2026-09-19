@@ -1,8 +1,8 @@
 <div align="center">
   <h1>@cyanheads/epa-mcp-server</h1>
   <p><b>Search and retrieve EPA environmental data: facility compliance (ECHO), toxic releases (TRI), Superfund sites, drinking water systems, environmental-justice screening (EJScreen), and real-time air quality (AirNow). STDIO or Streamable HTTP.</b>
-  <div>9 Tools • 2 Resources</div>
   </p>
+  <div>9 Tools • 2 Resources</div>
 </div>
 
 <div align="center">
@@ -21,151 +21,143 @@
 
 ---
 
-## Tools
+## Overview
 
-9 tools spanning EPA facility compliance, toxic chemical releases, Superfund cleanup sites, drinking water safety, environmental justice screening, and real-time air quality:
+EPA environmental data across five federal programs — facility compliance (ECHO), toxic chemical releases (TRI), Superfund cleanup sites, drinking water systems (SDWIS), and environmental-justice screening (EJScreen) — plus real-time air quality via AirNow. Search facilities by location or compliance status, pull inspection and enforcement history, track toxic releases across a region, and screen a point for environmental-justice risk from any MCP client. Runs as a stdio process or a local Streamable HTTP server.
+
+### Tools
 
 | Tool | Description |
 |:---|:---|
-| `epa_search_facilities` | Search EPA-regulated facilities by location (ZIP, state, city, or latitude/longitude + radius proximity), industry, or compliance status across all environmental programs (CAA, CWA, RCRA, TRI, SDWA). Returns facility name, EPA Registry ID, coordinates, county FIPS, per-program compliance flags, inspection counts, penalty totals, and TRI release totals. |
-| `epa_get_facility` | Retrieve a full compliance profile for a single EPA-regulated facility: compliance status per program, inspection dates, formal enforcement actions, penalty amounts, and TRI annual release totals. Aggregates multiple ECHO DFR endpoints in parallel. |
-| `epa_search_violations` | Search EPA civil and criminal enforcement cases by state, regulatory program, or date range. Returns case identifier, facility name and Registry ID, programs involved, penalty assessed, settlement date, and case type. |
-| `epa_get_air_quality` | Get AQI observations or forecasts for a location. Returns per-pollutant AQI values (PM2.5, ozone, CO, SO2, NO2), AQI category (Good through Hazardous), reporting area name, and observation timestamp. |
-| `epa_get_tri_releases` | Query Toxic Release Inventory annual chemical release data for a specific facility by medium (air, water, land, underground injection) and reporting year. |
-| `epa_search_tri_releases` | Search Toxic Release Inventory data across facilities in a state or county for a given year. Returns facility name, TRI ID, chemical name, total releases by medium, and facility coordinates. |
-| `epa_search_superfund` | Search Superfund (CERCLA/SEMS) sites by location or NPL listing status. Accepts state/city/ZIP or lat/lng + radius for proximity searches. Returns site name, EPA ID, NPL status, cleanup status, and coordinates. |
-| `epa_search_water_systems` | Search drinking water systems (SDWIS) by state or ZIP code. Returns system name, PWSID, population served, primary water source, and active violation status. |
-| `epa_get_ejscreen` | Get EJScreen environmental-justice indicators for a point + buffer: 13 environmental and 6 demographic indicators with national/state percentiles, EJ Index values, and the demographic indices. Serves EJScreen v2.2 (2022) via the community-maintained EJAM API (Public Environmental Data Partners), which rehosts EJScreen after EPA discontinued public access in 2025. |
+| `epa_search_facilities` | Search EPA-regulated facilities by location, industry program, or compliance status across CAA, CWA, RCRA, TRI, and SDWA |
+| `epa_get_facility` | Full compliance profile for one facility by EPA Registry ID — inspections, enforcement actions, and penalties |
+| `epa_search_violations` | Search EPA civil and criminal enforcement cases by state, program, or date range |
+| `epa_get_air_quality` | Current AQI observations or next-day forecasts from AirNow |
+| `epa_get_tri_releases` | Per-chemical Toxic Release Inventory data for a single facility |
+| `epa_search_tri_releases` | Toxic Release Inventory records across facilities in a state or county |
+| `epa_search_superfund` | Search Superfund (CERCLA/SEMS) sites by location or NPL listing status |
+| `epa_search_water_systems` | Search drinking water systems (SDWIS) by state or ZIP code |
+| `epa_get_ejscreen` | EJScreen environmental-justice indicators for a point and buffer |
 
-### `epa_search_facilities`
+### Resources
 
-Search for EPA-regulated facilities with cross-program compliance data.
+| Resource | Description |
+|:---|:---|
+| `epa://facility/{registry_id}` | Full compliance profile for a facility by EPA Registry ID (same data as `epa_get_facility`) |
+| `epa://superfund/{site_id}` | Superfund site record by SEMS site ID |
 
-- Geographic filters: ZIP code, state, city (city requires state), or latitude + longitude + radius_miles for proximity search
-- Program filter: narrow to CAA, CWA, RCRA, TRI, or SDWA registrants
-- Compliance filter: `has_violation` flag to surface only non-compliant facilities
-- Returns `RegistryID` (key for `epa_get_facility`), `FacFIPSCode` (county FIPS for Census chaining), and coordinates
-- Results cap enforced — unscoped searches are prohibited at the input validation layer
+All resource data is also reachable via tools — use `epa_get_facility` and `epa_search_superfund` for programmatic access in tool-only MCP clients.
 
----
+## Capability reference
 
-### `epa_get_facility`
+### `epa_search_facilities` <sub>tool</sub>
 
-Retrieve a comprehensive compliance profile by EPA Registry ID.
-
-- Aggregates 3–5 ECHO DFR endpoints in parallel: program flags and TRI totals, compliance summary, inspection/enforcement history, CAA details (if registered), CWA/NPDES permit details (if registered)
-- Uses `Promise.allSettled` — partial data returned even if one upstream endpoint fails
-- Includes formal enforcement actions, penalty amounts, and inspection dates across all programs
+- Geographic filters: ZIP code, state, city (pair with state), or latitude + longitude + radius_miles (max 100 miles) for proximity search — at least one is required
+- Optional `programs` filter narrows to CAA, CWA, RCRA, TRI, or SDWA registrants; `has_violation` surfaces only non-compliant facilities
+- Returns `registryId` for `epa_get_facility`, plus `fipsCode` when available for Census chaining
+- Up to 100 results per call (default 50)
 
 ---
 
-### `epa_search_violations`
+### `epa_get_facility` <sub>tool</sub>
 
-Search area-level EPA enforcement cases — distinct from per-facility history in `epa_get_facility`.
-
-- Program filter: CAA, CWA, RCRA, SDWA, CERCLA, FIFRA, or TSCA
-- Case type: civil, criminal, or all
-- Date range filtering by filing date (ISO 8601)
-- Returns case identifier, affected facility name and Registry ID for downstream `epa_get_facility` lookup
-
----
-
-### `epa_get_air_quality`
-
-Get current AQI observations or daily forecasts from AirNow.
-
-- Accepts ZIP code or latitude/longitude coordinates
-- `mode: current` returns the latest observed AQI per pollutant; `mode: forecast` returns daily AQI forecasts (requires `forecast_date`)
-- AQI categories: Good (1) through Hazardous (6) with numeric and text category
-- Data is preliminary — suitable for awareness, not regulatory or enforcement decisions
-- AirNow responses cached at ~1 hour TTL to respect rate limits
+- Input: `registry_id`, obtained from `epa_search_facilities`
+- Aggregates 3–5 ECHO DFR endpoints in parallel — program flags and TRI totals, compliance summary, inspection/enforcement history, CAA details, CWA/NPDES permit details
+- Uses `Promise.allSettled` — partial data is returned even when one upstream endpoint fails
+- `airCompliance` / `waterCompliance` are present only when the facility is registered under that program
+- `facility_not_found` when ECHO has no record for the Registry ID
 
 ---
 
-### `epa_get_tri_releases`
+### `epa_search_violations` <sub>tool</sub>
 
-Query per-chemical release breakdown for a single TRI facility.
-
-- Accepts TRI facility ID from `epa_search_facilities` results
-- Returns release quantities by medium: air, water, land, underground injection
-- Optional year filter (defaults to most recent available); optional chemical name filter
-- TRI data lags ~18 months — most recent available year is typically 2 years prior to current
+- At least one of `state` or `zip_code` is required
+- `program` filter covers CAA, CWA, RCRA, SDWA, CERCLA, FIFRA, or TSCA; `case_type` is civil, criminal, or all (default all)
+- Date range filter by filing date (ISO 8601 `date_filed_start` / `date_filed_end`)
+- `facilityName` and `registryId` are not populated by ECHO's enforcement-case endpoint — chain into `epa_get_facility` for facility detail
+- Up to 100 cases per call (default 50)
 
 ---
 
-### `epa_search_tri_releases`
+### `epa_get_air_quality` <sub>tool</sub>
 
-Identify top polluters in a region via TRI data.
+- Provide `zip_code` or both `latitude` and `longitude`
+- `mode`: `current` (default) or `forecast` (requires `forecast_date`, ISO 8601)
+- Per-pollutant AQI (PM2.5, ozone, CO, SO2, NO2) with numeric `categoryNumber` (1 Good – 6 Hazardous) and `categoryName`
+- `distance_miles` sets the reporting-station search radius (default 25, max 300)
+- Data is preliminary — informational use only, not for regulatory decisions; responses are cached ~1 hour
+- Only registered when `AIRNOW_API_KEY` is set
 
-- State and optional county scope; required year parameter
-- Optional chemical name filter to focus on a specific substance
-- Returns facility coordinates for downstream map or proximity analysis
+---
+
+### `epa_get_tri_releases` <sub>tool</sub>
+
+- `facility_id` is the TRI `facilityId` from `epa_search_tri_releases`; optional `year` (1987–2030, defaults to all available years) and `chemical_name` (partial match)
+- Per-chemical breakdown by medium — air, water, land, underground injection — plus a separate one-time/non-routine release total
+- TRI data lags ~18 months; the most recent available year is typically 2 years prior to the current year
+
+---
+
+### `epa_search_tri_releases` <sub>tool</sub>
+
+- `state` is required (2-letter); optional `county` (partial match), `year`, and `chemical_name`
+- Up to 200 records per call (default 50); an enrichment flag marks the result truncated when it hits the limit
 - Complement to `epa_get_tri_releases` — use this for area discovery, then drill into a specific facility
 
 ---
 
-### `epa_search_superfund`
+### `epa_search_superfund` <sub>tool</sub>
 
-Search Superfund (CERCLA/SEMS) sites by location or proximity.
-
-- Two input shapes: state/city/ZIP for administrative filters, or lat/lng + radius for proximity
-- NPL status filter: listed, not-listed, proposed, or all
-- Returns site cleanup status and coordinates for downstream spatial analysis
+- Two input shapes: `state`/`city`/`zip_code`, or `latitude`+`longitude`+`radius_miles` (0.1–500 miles) — one is required
+- `npl_status` filter: `listed`, `not-listed`, `proposed`, or `all` (default `all`)
+- Up to 200 sites per call (default 50)
 
 ---
 
-### `epa_search_water_systems`
+### `epa_search_water_systems` <sub>tool</sub>
 
-Identify drinking water systems with active or recent violations.
-
-- State and optional ZIP code scope
-- `has_violation` flag surfaces only systems with current violations
-- PWS type filter: community (`CWS`), non-transient non-community (`NTNCWS`), or transient non-community (`TNCWS`)
+- At least one of `state` or `zip_code` is required
+- `has_violation` surfaces only systems with active violations; `pws_type` filters to `community`, `non-transient`, or `transient` (output `type` reports the SDWIS codes CWS / NTNCWS / TNCWS)
+- Up to 200 systems per call (default 50)
 
 ---
 
-### `epa_get_ejscreen`
+### `epa_get_ejscreen` <sub>tool</sub>
 
-Screen a point and its surrounding buffer for environmental-justice indicators.
+- Input: `latitude`, `longitude`, `distance` (default 1), and `unit` (`miles` or `kilometers`, default `miles`); kilometers are converted to miles before the request, and the buffer is capped at 15 miles
+- Returns 13 environmental and 6 demographic indicators, each with national/state percentiles, plus the Demographic Index and Supplemental Demographic Index
+- Points outside US coverage return `coverage.valid: false` with a note instead of fabricated indicators
+- Data source: EJScreen v2.2 (2022) via the community-maintained EJAM API (Public Environmental Data Partners) — not a live EPA endpoint
 
-- Input: `latitude`, `longitude`, `distance` (default 1), and `unit` (`miles` or `kilometers`); kilometers are converted to miles before the request, and the buffer is capped at 15 miles
-- Returns the 13 EJScreen environmental indicators (PM2.5, ozone, diesel particulate, NO2, lead paint, traffic proximity, Superfund/RMP/hazardous-waste/wastewater proximity, underground storage tanks, drinking-water non-compliance, RSEI toxic air releases) and 6 demographic indicators (people of color, low income, limited English, less than high school, under 5, over 64)
-- Each indicator carries national and state percentiles plus EJ Index values; the Demographic Index and Supplemental Demographic Index are included
-- Points outside US coverage return a coverage note instead of fabricated indicators
-- **Data source:** EJScreen v2.2 (2022) served via the community-maintained [EJAM API](https://api.ejanalysis.com) (Public Environmental Data Partners), which rehosts EJScreen after EPA discontinued public access in 2025 — not a live EPA endpoint
+---
 
-## Resources and prompts
+### `epa://facility/{registry_id}` <sub>resource</sub>
 
-| Type | Name | Description |
-|:---|:---|:---|
-| Resource | `epa://facility/{registry_id}` | Full compliance profile for a facility by EPA Registry ID (same data as `epa_get_facility`) |
-| Resource | `epa://superfund/{site_id}` | Superfund site record by SEMS site ID |
+- Same data as `epa_get_facility`; `registry_id` comes from `epa_search_facilities`
+- Errors when the Registry ID has no ECHO record
 
-All resource data is also reachable via tools. Use `epa_get_facility` and `epa_search_superfund` for programmatic access in tool-only MCP clients.
+---
+
+### `epa://superfund/{site_id}` <sub>resource</sub>
+
+- Same data as `epa_search_superfund` records; `site_id` comes from `epa_search_superfund`
+- Errors when the site ID has no SEMS record
 
 ## Features
 
-Built on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@cyanheads/mcp-ts-core):
-
-- Declarative tool and resource definitions — single file per primitive, framework handles registration and validation
-- Unified error handling — handlers throw, framework catches, classifies, and formats
-- Pluggable auth: `none`, `jwt`, `oauth`
-- Swappable storage backends: `in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2/D1`
-- Structured logging with optional OpenTelemetry tracing
-- STDIO and Streamable HTTP transports
+Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): stdio and Streamable HTTP transports, pluggable auth (`none` / `jwt` / `oauth`), swappable storage (`in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2/D1`), structured logging with optional OpenTelemetry tracing.
 
 EPA-specific:
 
-- Multiple environmental data sources unified behind a single `epa_` tool surface: ECHO (facility compliance), Envirofacts DMAP (TRI, Superfund, SDWIS), AirNow (real-time air quality), and the community-maintained EJAM API rehosting EJScreen environmental-justice data (v2.2, 2022)
+- Multiple environmental data sources unified behind a single `epa_` tool surface: ECHO (facility compliance), Envirofacts DMAP (TRI, Superfund, SDWIS), AirNow (real-time air quality), and the community-maintained EJAM API rehosting EJScreen data (v2.2, 2022)
 - Parallel ECHO DFR aggregation in `epa_get_facility` — 3–5 upstream calls resolved concurrently with `Promise.allSettled`
 - AirNow response caching (~1 hour TTL) to stay within per-key rate limits
-- DMAP coordinate normalization — `tri.tri_facility` DDMMSS integers converted to decimal degrees
 
 Agent-friendly output:
 
-- Cross-tool join keys surfaced on every response — `RegistryID` and `FacFIPSCode` from facility search feed directly into compliance, TRI, and Census API workflows
-- Typed enforcement and compliance status fields — agents branch on data values, not string parsing
-- Structured partial failure — `epa_get_facility` returns available program data even when one DFR endpoint is unavailable, with per-section status
+- Facility search supplies `registryId` for compliance lookups and `fipsCode` when available for Census queries; TRI search supplies `facilityId` for release details
+- Structured partial failure — `epa_get_facility` returns available program data even when one DFR endpoint is unavailable, with `airCompliance`/`waterCompliance` present only when that program applies
+- Recovery-hint messages on empty results — every search tool returns a `message` field that echoes the applied filters and suggests how to broaden the search
 
 ## Getting started
 
@@ -207,6 +199,25 @@ Or with npx (no Bun required):
 }
 ```
 
+Or with Docker:
+
+```json
+{
+  "mcpServers": {
+    "epa-mcp-server": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-e", "MCP_TRANSPORT_TYPE=stdio",
+        "-e", "AIRNOW_API_KEY=your-airnow-key",
+        "ghcr.io/cyanheads/epa-mcp-server:latest"
+      ]
+    }
+  }
+}
+```
+
 For Streamable HTTP, set the transport and start the server:
 
 ```sh
@@ -216,7 +227,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 AIRNOW_API_KEY=... bun run start:http
 
 ### Prerequisites
 
-- [Bun v1.3.0](https://bun.sh/) or higher (or Node.js v24+).
+- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
 - (Optional) An AirNow API key to enable `epa_get_air_quality` — register free at [docs.airnowapi.org/account/request](https://docs.airnowapi.org/account/request/). Without it the server runs the other 8 tools. ECHO, DMAP, and EJScreen tools require no API key.
 
 ### Installation
@@ -260,6 +271,7 @@ All configuration is validated at startup via Zod schemas in `src/config/`. Key 
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http` | `stdio` |
 | `MCP_HTTP_PORT` | HTTP server port | `3010` |
 | `MCP_HTTP_ENDPOINT_PATH` | HTTP endpoint path | `/mcp` |
+| `MCP_SESSION_MODE` | HTTP sessions: `auto`, `stateful`, or `stateless`. Explicit environment values override the server default; `auto` resolves to `stateful`. Tenant-scoped caching is independent of sessions. | `stateless` |
 | `MCP_AUTH_MODE` | Auth mode: `none`, `jwt`, or `oauth` | `none` |
 | `MCP_LOG_LEVEL` | Log level (RFC 5424) | `info` |
 | `LOGS_DIR` | Directory for log files (Node.js only) | `<project-root>/logs` |
@@ -327,7 +339,7 @@ See [`CLAUDE.md`](./CLAUDE.md) for development guidelines and architectural rule
 
 ## Contributing
 
-Issues and pull requests are welcome. Run checks and tests before submitting:
+Issues are welcome. Run checks and tests before submitting:
 
 ```sh
 bun run devcheck
