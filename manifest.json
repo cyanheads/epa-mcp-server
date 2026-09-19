@@ -22,8 +22,8 @@
         "MCP_TRANSPORT_TYPE": "stdio",
         "MCP_AUTH_MODE": "none",
         "NODE_ENV": "production",
-        "AIRNOW_API_KEY": "${AIRNOW_API_KEY}",
-        "EJSCREEN_API_BASE_URL": "${EJSCREEN_API_BASE_URL}"
+        "AIRNOW_API_KEY": "${user_config.AIRNOW_API_KEY}",
+        "EJSCREEN_API_BASE_URL": "${user_config.EJSCREEN_API_BASE_URL}"
       }
     }
   },
@@ -39,7 +39,8 @@
       "type": "string",
       "title": "AirNow API Key",
       "description": "Optional. Enables the epa_get_air_quality tool when set; the other tools work without it. Free registration at docs.airnowapi.org.",
-      "required": false
+      "required": false,
+      "default": ""
     },
     "EJSCREEN_API_BASE_URL": {
       "type": "string",
