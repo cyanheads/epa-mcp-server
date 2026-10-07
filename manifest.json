@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "epa-mcp-server",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Search and retrieve EPA environmental data: facility compliance (ECHO), toxic releases (TRI), Superfund sites, drinking water systems, environmental-justice screening (EJScreen), and real-time air quality (AirNow). STDIO or Streamable HTTP.",
   "author": {
     "name": "cyanheads"
