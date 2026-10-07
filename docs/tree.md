@@ -1,6 +1,6 @@
 # epa-mcp-server - Directory Structure
 
-Generated on: 2026-09-19 18:42:50
+Generated on: 2026-10-07 11:16:41
 
 ```text
 epa-mcp-server/
@@ -129,9 +129,11 @@ epa-mcp-server/
 │   ├── clean-mcpb.ts
 │   ├── clean.ts
 │   ├── devcheck.ts
+│   ├── install-otel.ts
 │   ├── lint-mcp.ts
 │   ├── lint-packaging.ts
 │   ├── list-skills.ts
+│   ├── prune-musl-packages.ts
 │   ├── release-github.ts
 │   └── tree.ts
 ├── src/
@@ -204,7 +206,8 @@ epa-mcp-server/
 │   │   │   └── ejscreen-service.test.ts
 │   │   └── error-responses.test.ts
 │   ├── tools/
-│   └── http-session.test.ts
+│   ├── http-session.test.ts
+│   └── maintenance-contracts.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitattributes

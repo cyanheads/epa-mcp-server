@@ -2,9 +2,9 @@
 
 **Server:** epa-mcp-server
 **Version:** 0.3.2
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.6`
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.13`
 **Engines:** Bun ≥1.4.0, Node ≥24.0.0
-**MCP SDK:** `@modelcontextprotocol/server` ^2.0.0
+**MCP SDK:** `@modelcontextprotocol/server` ^2.2.0
 **Zod:** ^4.6.5
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
@@ -54,7 +54,7 @@ export const searchItems = tool('search_items', {
   annotations: { readOnlyHint: true },
   input: z.object({
     query: z.string().describe('Search terms'),
-    limit: z.number().default(10).describe('Max results'),
+    limit: z.number().int().min(1).max(100).default(10).describe('Max results (1–100)'),
   }),
   output: z.object({
     items: z.array(z.object({
@@ -173,13 +173,14 @@ Handlers receive a unified `ctx` object. Key properties:
 | Property | Description |
 |:---------|:------------|
 | `ctx.log` | Request-scoped logger — `.debug()`, `.info()`, `.notice()`, `.warning()`, `.error()`. Auto-correlates requestId, traceId, tenantId. Dual-sink: Pino **and** `notifications/message` to the client, so treat it as client-visible. |
-| `ctx.state` | Tenant-scoped KV — `.get(key)`, `.set(key, value, { ttl? })`, `.delete(key)`, `.getMany(keys)`, `.list(prefix, { cursor, limit })`. Accepts any serializable value. |
+| `ctx.state` | Tenant-scoped KV — `.get(key)`, `.set(key, value, { ttl? })`, `.delete(key)`, `.getMany(keys)`, `.list(prefix, { cursor, limit })`. Accepts any JSON-serializable value; reads return its JSON form (a `Date` comes back as an ISO string). |
 | `ctx.requestInput` | Suspend and ask the caller for more input — `return ctx.requestInput({ inputRequests: { key: inputRequired.elicit({ message, requestedSchema }) } })`. Never returns; the handler is re-entered with the answers. Always present. |
 | `ctx.inputs` | Reader over a retried request's responses — `.accepted(key, schema)`, `.view(key)`, `.state()`, `.dropped`. Empty on the first round. |
+| `ctx.clientCapabilities` | Capabilities the client declared for this request, or `undefined` when unavailable. Use to choose optional input requests, never to skip consent. |
 | `ctx.enrich` | Success-path agent context (empty-result notices, query echo, pagination totals) — `ctx.enrich(...)` or `.notice()` / `.total()` / `.echo()` / `.truncated()`. Reaches `structuredContent` and `content[]`; lands only when the definition declares an `enrichment` block (no-op otherwise). |
 | `ctx.content` | Non-text content blocks — `.image(data, mimeType)`, `.audio(data, mimeType)`, or `ctx.content(block)` for a raw block. Prepended to `content[]` after `format()`; never enters `structuredContent`. |
 | `ctx.signal` | `AbortSignal` for cancellation. |
-| `ctx.requestId` | Unique request ID. |
+| `ctx.requestId` | Framework-generated request ID, also returned as `data.requestId` on error envelopes; client JSON-RPC ids are logged separately as `jsonRpcId`. |
 | `ctx.tenantId` | Tenant ID from JWT; `'default'` for stdio or HTTP with auth off. |
 
 ---
@@ -188,7 +189,7 @@ Handlers receive a unified `ctx` object. Key properties:
 
 Handlers throw — the framework catches, classifies, and formats.
 
-**Recommended: typed error contract.** Declare `errors: [{ reason, code, when, recovery, retryable?, severity?, thrownBy? }]` on `tool()` / `resource()` to receive `ctx.fail(reason, …)` typed against the reason union. `recovery` is required (≥ 5 words, lint-validated). Forward it with `ctx.recoveryFor('reason')` in the throw's data; both client surfaces receive it, with duplicate hints omitted from the text. Use explicit `{ recovery: { hint } }` for runtime guidance. Mark reasons produced below the handler with `thrownBy: 'service'`; remove unused entries. Baseline codes (`InternalError`, `ServiceUnavailable`, `Timeout`, `ValidationError`, `SerializationError`, `RequestCancelled`) need no declaration.
+**Recommended: typed error contract.** Declare `errors: [{ reason, code, when, recovery, retryable?, severity?, thrownBy? }]` on `tool()` / `resource()` to receive `ctx.fail(reason, …)` typed against the reason union. `recovery` is required (≥ 5 words, lint-validated). The framework fills the declared hint when the failure carries its `reason` and no recovery hint; both client surfaces receive it. Error envelopes carry the generated `data.requestId`. Use explicit `{ recovery: { hint } }` for runtime guidance. Mark reasons produced below the handler with `thrownBy: 'service'`; remove unused entries. Baseline codes (`InternalError`, `ServiceUnavailable`, `Timeout`, `ValidationError`, `SerializationError`, `RequestCancelled`) need no declaration.
 
 ```ts
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
@@ -200,7 +201,7 @@ errors: [
 ],
 async handler(input, ctx) {
   const item = await db.find(input.id);
-  if (!item) throw ctx.fail('no_match', `No item ${input.id}`, ctx.recoveryFor('no_match'));
+  if (!item) throw ctx.fail('no_match', `No item ${input.id}`);
   return item;
 }
 ```
@@ -221,7 +222,7 @@ throw new Error('Invalid query format');     // → ValidationError
 
 // McpError — when no factory exists for the code
 import { McpError, JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-throw new McpError(JsonRpcErrorCode.DatabaseError, 'Connection failed', { pool: 'primary' });
+throw new McpError(JsonRpcErrorCode.InitializationFailed, 'Connection failed', { pool: 'primary' });
 ```
 
 See framework CLAUDE.md and the `api-errors` skill for the full auto-classification table, all available factories, and the contract reference.
@@ -336,6 +337,8 @@ When you complete a skill's checklist, check the boxes and add a completion time
 | `bun run changelog:check` | Verify `CHANGELOG.md` is in sync (used by devcheck) |
 | `bun run bundle` | Build, pack, and clean a `.mcpb` for one-click Claude Desktop install |
 
+**CI is one file.** `.github/workflows/codeql.yml` is the only GitHub Actions workflow; verification gates run locally.
+
 ---
 
 ## Bundling
@@ -377,7 +380,7 @@ security: false                            # optional — true ONLY for a source
 
 ## Publishing
 
-**Every release goes through a release PR, straight-through** — `git-wrapup`'s "Release PR mode", mode `straight-through`. One run: `git-wrapup` lands the commit stack on `release/<version>`, pushes it, and opens the PR (title = the release commit subject, body = the changelog entry plus a gates section); `release-and-publish` then fast-forwards `main` locally with `git merge --ff-only`, creates the tag on `main`'s tip, pushes `main` and the tag, deletes the branch, and publishes. A caller's brief may run a given release as `gated` instead — a `release-pr-review` pass on the open PR before `release-and-publish`. **Never merge through the GitHub UI or `gh pr merge`**: squash and rebase-merge are disabled in the repo settings because both rewrite the stack (rebase-merge also strips the SSH signatures), and a merge commit breaks the linear history.
+**Every release goes through a release PR, straight-through** — `git-wrapup`'s "Release PR mode", mode `straight-through`. One run: `git-wrapup` lands the commit stack on `release/<version>`, pushes it, and opens the PR (title = the release commit subject, body = the release digest: theme line, `## Changes`, `## Gates`, changelog link last); `release-and-publish` then fast-forwards `main` locally with `git merge --ff-only`, creates the tag on `main`'s tip, pushes `main` and the tag, deletes the branch, and publishes. A caller's brief may run a given release as `gated` instead — a `release-pr-review` pass on the open PR before `release-and-publish`. **Never merge through the GitHub UI or `gh pr merge`**: squash and rebase-merge are disabled in the repo settings because both rewrite the stack (rebase-merge also strips the SSH signatures), and a merge commit breaks the linear history.
 
 ---
 

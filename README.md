@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.3.2-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/epa-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/epa-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/epa-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.3.2-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/epa-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.2.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/epa-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/epa-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -52,96 +52,83 @@ All resource data is also reachable via tools — use `epa_get_facility` and `ep
 
 ### `epa_search_facilities` <sub>tool</sub>
 
-- Geographic filters: ZIP code, state, city (pair with state), or latitude + longitude + radius_miles (max 100 miles) for proximity search — at least one is required
-- Optional `programs` filter narrows to CAA, CWA, RCRA, TRI, or SDWA registrants; `has_violation` surfaces only non-compliant facilities
-- Returns `registryId` for `epa_get_facility`, plus `fipsCode` when available for Census chaining
-- Up to 100 results per call (default 50)
+- Provide ZIP code, state, city (preferably with state), or latitude + longitude + radius_miles (max 100 miles); up to 100 results (default 50)
+- Returns `registryId` for `epa_get_facility`, plus `fipsCode` when available for Census queries
+- `programs` filters CAA, CWA, RCRA, TRI, or SDWA; `has_violation` filters significant violations
 
 ---
 
 ### `epa_get_facility` <sub>tool</sub>
 
-- Input: `registry_id`, obtained from `epa_search_facilities`
-- Aggregates 3–5 ECHO DFR endpoints in parallel — program flags and TRI totals, compliance summary, inspection/enforcement history, CAA details, CWA/NPDES permit details
-- Uses `Promise.allSettled` — partial data is returned even when one upstream endpoint fails
-- `airCompliance` / `waterCompliance` are present only when the facility is registered under that program
-- `facility_not_found` when ECHO has no record for the Registry ID
+- `registry_id` comes from `epa_search_facilities`
+- Returns compliance, inspections, enforcement actions, penalties, and TRI totals; available program data survives partial upstream failures
+- `airCompliance` / `waterCompliance` appear only for registered programs; `facility_not_found` identifies a missing record
 
 ---
 
 ### `epa_search_violations` <sub>tool</sub>
 
-- At least one of `state` or `zip_code` is required
-- `program` filter covers CAA, CWA, RCRA, SDWA, CERCLA, FIFRA, or TSCA; `case_type` is civil, criminal, or all (default all)
-- Date range filter by filing date (ISO 8601 `date_filed_start` / `date_filed_end`)
-- `facilityName` and `registryId` are not populated by ECHO's enforcement-case endpoint — chain into `epa_get_facility` for facility detail
-- Up to 100 cases per call (default 50)
+- Requires `state` or `zip_code`; up to 100 cases (default 50)
+- `program` filters CAA, CWA, RCRA, SDWA, CERCLA, FIFRA, or TSCA; `case_type` is civil, criminal, or all (default); `date_filed_start` / `date_filed_end` filter ISO dates
+- `facilityName` and `registryId` are unavailable from this endpoint; discover facilities with `epa_search_facilities`
 
 ---
 
 ### `epa_get_air_quality` <sub>tool</sub>
 
-- Provide `zip_code` or both `latitude` and `longitude`
-- `mode`: `current` (default) or `forecast` (requires `forecast_date`, ISO 8601)
-- Per-pollutant AQI (PM2.5, ozone, CO, SO2, NO2) with numeric `categoryNumber` (1 Good – 6 Hazardous) and `categoryName`
-- `distance_miles` sets the reporting-station search radius (default 25, max 300)
-- Data is preliminary — informational use only, not for regulatory decisions; responses are cached ~1 hour
-- Only registered when `AIRNOW_API_KEY` is set
+- Provide `zip_code` or both `latitude` and `longitude`; `mode` is current (default) or forecast (requires ISO `forecast_date`); `distance_miles` defaults to 25, max 300
+- Returns per-pollutant AQI, `categoryNumber` (1 Good–6 Hazardous), and `categoryName`; preliminary data is unsuitable for regulatory, trend, or enforcement decisions
+- Registered only when `AIRNOW_API_KEY` is set; responses cache for about one hour
 
 ---
 
 ### `epa_get_tri_releases` <sub>tool</sub>
 
-- `facility_id` is the TRI `facilityId` from `epa_search_tri_releases`; optional `year` (1987–2030, defaults to all available years) and `chemical_name` (partial match)
-- Per-chemical breakdown by medium — air, water, land, underground injection — plus a separate one-time/non-routine release total
-- TRI data lags ~18 months; the most recent available year is typically 2 years prior to the current year
+- `facility_id` is the TRI `facilityId` from `epa_search_tri_releases`; optional `year` (1987–2030, all available by default) and partial `chemical_name`
+- Returns per-chemical air, water, land, and underground-injection releases, plus a separate one-time/non-routine total
 
 ---
 
 ### `epa_search_tri_releases` <sub>tool</sub>
 
-- `state` is required (2-letter); optional `county` (partial match), `year`, and `chemical_name`
-- Up to 200 records per call (default 50); an enrichment flag marks the result truncated when it hits the limit
-- Complement to `epa_get_tri_releases` — use this for area discovery, then drill into a specific facility
+- Requires 2-letter `state`; optional partial `county`, `chemical_name`, and `year`; up to 200 records (default 50)
+- Returns `facilityId` for `epa_get_tri_releases`; enrichment marks results truncated when the limit is reached
 
 ---
 
 ### `epa_search_superfund` <sub>tool</sub>
 
-- Two input shapes: `state`/`city`/`zip_code`, or `latitude`+`longitude`+`radius_miles` (0.1–500 miles) — one is required
-- `npl_status` filter: `listed`, `not-listed`, `proposed`, or `all` (default `all`)
-- Up to 200 sites per call (default 50)
+- Provide `state`/`city`/`zip_code`, or `latitude` + `longitude` + `radius_miles` (0.1–500); up to 200 sites (default 50)
+- Returns site identifiers, location, NPL, and cleanup status; `npl_status` filters listed, not-listed, proposed, or all (default)
 
 ---
 
 ### `epa_search_water_systems` <sub>tool</sub>
 
-- At least one of `state` or `zip_code` is required
-- `has_violation` surfaces only systems with active violations; `pws_type` filters to `community`, `non-transient`, or `transient` (output `type` reports the SDWIS codes CWS / NTNCWS / TNCWS)
-- Up to 200 systems per call (default 50)
+- Requires `state` or `zip_code`; up to 200 systems (default 50)
+- `has_violation` filters active violations; `pws_type` is community, non-transient, or transient, returned as CWS / NTNCWS / TNCWS in `type`
 
 ---
 
 ### `epa_get_ejscreen` <sub>tool</sub>
 
-- Input: `latitude`, `longitude`, `distance` (default 1), and `unit` (`miles` or `kilometers`, default `miles`); kilometers are converted to miles before the request, and the buffer is capped at 15 miles
-- Returns 13 environmental and 6 demographic indicators, each with national/state percentiles, plus the Demographic Index and Supplemental Demographic Index
-- Points outside US coverage return `coverage.valid: false` with a note instead of fabricated indicators
-- Data source: EJScreen v2.2 (2022) via the community-maintained EJAM API (Public Environmental Data Partners) — not a live EPA endpoint
+- Requires `latitude` and `longitude`; `distance` defaults to 1, `unit` to miles (kilometers accepted); buffer capped at 15 miles
+- Returns 13 environmental and 6 demographic indicators with national/state percentiles and demographic indices; outside coverage, `coverage.valid: false` carries a note
+- EJScreen v2.2 (2022) comes from the community-maintained EJAM API (Public Environmental Data Partners)
 
 ---
 
 ### `epa://facility/{registry_id}` <sub>resource</sub>
 
-- Same data as `epa_get_facility`; `registry_id` comes from `epa_search_facilities`
-- Errors when the Registry ID has no ECHO record
+- `registry_id` comes from `epa_search_facilities`
+- Returns the `epa_get_facility` compliance profile; errors when no facility resolves
 
 ---
 
 ### `epa://superfund/{site_id}` <sub>resource</sub>
 
-- Same data as `epa_search_superfund` records; `site_id` comes from `epa_search_superfund`
-- Errors when the site ID has no SEMS record
+- `site_id` comes from `epa_search_superfund`
+- Returns the Superfund site record; errors when no SEMS record resolves
 
 ## Features
 
@@ -152,6 +139,7 @@ EPA-specific:
 - Multiple environmental data sources unified behind a single `epa_` tool surface: ECHO (facility compliance), Envirofacts DMAP (TRI, Superfund, SDWIS), AirNow (real-time air quality), and the community-maintained EJAM API rehosting EJScreen data (v2.2, 2022)
 - Parallel ECHO DFR aggregation in `epa_get_facility` — 3–5 upstream calls resolved concurrently with `Promise.allSettled`
 - AirNow response caching (~1 hour TTL) to stay within per-key rate limits
+- TRI reporting lags about 18 months; the latest available reporting year is typically two years behind
 
 Agent-friendly output:
 
@@ -227,7 +215,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 AIRNOW_API_KEY=... bun run start:http
 
 ### Prerequisites
 
-- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
+- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+); development and Docker use Bun v1.4.2.
 - (Optional) An AirNow API key to enable `epa_get_air_quality` — register free at [docs.airnowapi.org/account/request](https://docs.airnowapi.org/account/request/). Without it the server runs the other 8 tools. ECHO, DMAP, and EJScreen tools require no API key.
 
 ### Installation
@@ -274,9 +262,14 @@ All configuration is validated at startup via Zod schemas in `src/config/`. Key 
 | `MCP_SESSION_MODE` | HTTP sessions: `auto`, `stateful`, or `stateless`. Explicit environment values override the server default; `auto` resolves to `stateful`. Tenant-scoped caching is independent of sessions. | `stateless` |
 | `MCP_AUTH_MODE` | Auth mode: `none`, `jwt`, or `oauth` | `none` |
 | `MCP_LOG_LEVEL` | Log level (RFC 5424) | `info` |
+| `LOG_TOOL_FAILURE_PAYLOADS` | Log failed calls' arguments and results with key-name redaction. Secrets inside free-form values remain visible. | `false` |
+| `LOG_TOOL_FAILURE_PAYLOAD_MAX_BYTES` | UTF-8 byte cap per logged payload. | `16384` |
 | `LOGS_DIR` | Directory for log files (Node.js only) | `<project-root>/logs` |
 | `STORAGE_PROVIDER_TYPE` | Storage backend: `in-memory`, `filesystem`, `supabase`, `cloudflare-kv/r2/d1` | `in-memory` |
 | `OTEL_ENABLED` | Enable [OpenTelemetry](https://github.com/cyanheads/mcp-ts-core/tree/main/docs/telemetry) tracing and metrics | `false` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP base URL; traces use `/v1/traces`, metrics `/v1/metrics`. | — |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | Signal-specific endpoint overrides, used as-is. | — |
+| `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Enables OTLP log export; the base endpoint alone does not enable it. | — |
 
 See [`.env.example`](./.env.example) for the full list of optional overrides.
 
