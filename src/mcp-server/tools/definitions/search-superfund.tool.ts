@@ -105,9 +105,6 @@ export const searchSuperfundTool = tool('epa_search_superfund', {
       throw ctx.fail(
         'no_location_filter',
         'At least one location filter is required to search Superfund sites.',
-        {
-          ...ctx.recoveryFor('no_location_filter'),
-        },
       );
     }
 
@@ -115,9 +112,6 @@ export const searchSuperfundTool = tool('epa_search_superfund', {
       throw ctx.fail(
         'radius_required',
         'Provide radius_miles when using latitude+longitude for proximity search.',
-        {
-          ...ctx.recoveryFor('radius_required'),
-        },
       );
     }
 

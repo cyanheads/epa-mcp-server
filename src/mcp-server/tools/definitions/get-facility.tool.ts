@@ -127,9 +127,6 @@ export const getFacilityTool = tool('epa_get_facility', {
       throw ctx.fail(
         'facility_not_found',
         `No facility found for Registry ID "${input.registry_id}".`,
-        {
-          ...ctx.recoveryFor('facility_not_found'),
-        },
       );
     }
 

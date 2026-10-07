@@ -119,9 +119,6 @@ export const searchViolationsTool = tool('epa_search_violations', {
       throw ctx.fail(
         'no_geographic_filter',
         'At least one of state or zip_code is required to search enforcement cases.',
-        {
-          ...ctx.recoveryFor('no_geographic_filter'),
-        },
       );
     }
 

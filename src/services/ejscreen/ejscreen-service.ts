@@ -250,7 +250,7 @@ export class EjscreenService {
             const text = await response.text();
             throw validationError(
               `EJAM API rejected the request: ${parseApiError(text) ?? 'HTTP 400'}`,
-              { reason: 'upstream_rejected', status: 400, ...ctx.recoveryFor('upstream_rejected') },
+              { reason: 'upstream_rejected', status: 400 },
             );
           }
           throw await httpErrorFromResponse(response, { service: 'EJAM' });

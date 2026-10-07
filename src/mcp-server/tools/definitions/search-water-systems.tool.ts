@@ -94,9 +94,7 @@ export const searchWaterSystemsTool = tool('epa_search_water_systems', {
 
   async handler(input, ctx) {
     if (!input.state?.trim() && !input.zip_code?.trim()) {
-      throw ctx.fail('no_geographic_filter', 'At least one of state or zip_code is required.', {
-        ...ctx.recoveryFor('no_geographic_filter'),
-      });
+      throw ctx.fail('no_geographic_filter', 'At least one of state or zip_code is required.');
     }
 
     ctx.log.info('epa_search_water_systems', {

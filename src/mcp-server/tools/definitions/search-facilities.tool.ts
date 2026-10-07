@@ -154,7 +154,6 @@ export const searchFacilitiesTool = tool('epa_search_facilities', {
       throw ctx.fail(
         'incomplete_proximity',
         'Proximity search needs all three of latitude, longitude, and radius_miles.',
-        { ...ctx.recoveryFor('incomplete_proximity') },
       );
     }
 
@@ -166,9 +165,6 @@ export const searchFacilitiesTool = tool('epa_search_facilities', {
       throw ctx.fail(
         'no_geographic_filter',
         'At least one geographic filter (zip_code, state, city, or a latitude+longitude+radius_miles triple) is required.',
-        {
-          ...ctx.recoveryFor('no_geographic_filter'),
-        },
       );
     }
 

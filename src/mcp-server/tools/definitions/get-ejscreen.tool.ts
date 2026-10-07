@@ -221,7 +221,6 @@ export const getEjscreenTool = tool('epa_get_ejscreen', {
       throw ctx.fail(
         'buffer_too_large',
         `Buffer of ${bufferMiles.toFixed(2)} miles exceeds the EJAM API limit of ${MAX_BUFFER_MILES} miles.`,
-        { ...ctx.recoveryFor('buffer_too_large') },
       );
     }
 

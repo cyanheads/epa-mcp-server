@@ -131,9 +131,7 @@ export const getAirQualityTool = tool('epa_get_air_quality', {
           ? ({ kind: 'latlng', latitude: input.latitude, longitude: input.longitude } as const)
           : undefined;
     if (!loc) {
-      throw ctx.fail('no_location', 'Provide either zip_code or both latitude and longitude.', {
-        ...ctx.recoveryFor('no_location'),
-      });
+      throw ctx.fail('no_location', 'Provide either zip_code or both latitude and longitude.');
     }
 
     // forecast mode requires a date — validate up front so the error path is unchanged.
@@ -143,9 +141,6 @@ export const getAirQualityTool = tool('epa_get_air_quality', {
         throw ctx.fail(
           'forecast_date_required',
           'forecast_date (YYYY-MM-DD) is required when mode is "forecast".',
-          {
-            ...ctx.recoveryFor('forecast_date_required'),
-          },
         );
       }
       forecastDate = input.forecast_date;
