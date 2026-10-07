@@ -171,7 +171,7 @@ export class EchoService {
     }
 
     const url = this.buildUrl('echo_rest_services.get_facility_info', qparams);
-    ctx.log.debug('ECHO facility search', { url });
+    ctx.log.debug('ECHO facility search', { endpoint: 'echo_rest_services.get_facility_info' });
 
     const data = await this.fetchJson<RawEchoFacilityResponse>(url, ctx);
     const directFacilities = data.Results?.Facilities ?? [];
@@ -195,7 +195,10 @@ export class EchoService {
         qid: queryId,
         pageno: 1,
       });
-      ctx.log.debug('ECHO facility search page', { url: qidUrl, queryId });
+      ctx.log.debug('ECHO facility search page', {
+        endpoint: 'echo_rest_services.get_qid',
+        queryId,
+      });
       const page = await this.fetchJson<RawEchoFacilityResponse>(qidUrl, ctx);
       raw = page.Results?.Facilities ?? [];
     }
@@ -403,7 +406,7 @@ export class EchoService {
 
     // Step 1: Get QueryID from get_case_info (returns cluster data only, no Cases[])
     const infoUrl = this.buildUrl('case_rest_services.get_case_info', qparams);
-    ctx.log.debug('ECHO case search step 1', { url: infoUrl });
+    ctx.log.debug('ECHO case search step 1', { endpoint: 'case_rest_services.get_case_info' });
 
     const infoData = await this.fetchJson<RawEchoCaseInfoResponse>(infoUrl, ctx);
     const queryId = infoData.Results?.QueryID;
@@ -419,7 +422,7 @@ export class EchoService {
       qid: queryId,
       pageno: 1,
     });
-    ctx.log.debug('ECHO case search step 2', { url: qidUrl, queryId });
+    ctx.log.debug('ECHO case search step 2', { endpoint: 'case_rest_services.get_qid', queryId });
 
     const data = await this.fetchJson<RawEchoCaseResponse>(qidUrl, ctx);
     const raw = (data.Results?.Cases ?? []).slice(0, limit);

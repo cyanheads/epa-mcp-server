@@ -57,6 +57,36 @@ describe('EchoService.searchFacilities', () => {
     expect(url).toContain('p_long=-122.248');
   });
 
+  it('logs endpoint labels for discovery and pages without request URLs', async () => {
+    const urls: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input);
+      urls.push(url);
+      const discovery = url.includes('get_facility_info') || url.includes('get_case_info');
+      return Promise.resolve(
+        Response.json({
+          Results: discovery
+            ? { QueryID: '841', QueryRows: '1' }
+            : { ...facilityResponse.Results, Cases: [{ CaseNumber: 'CASE-1' }] },
+        }),
+      );
+    });
+    const ctx = createMockContext();
+    await service.searchFacilities({ state: 'WA' }, ctx);
+    await service.searchViolations({ state: 'WA' }, ctx);
+    const logs = JSON.stringify(ctx.log);
+    for (const url of urls) expect(logs).not.toContain(url);
+    for (const endpoint of [
+      'echo_rest_services.get_facility_info',
+      'echo_rest_services.get_qid',
+      'case_rest_services.get_case_info',
+      'case_rest_services.get_qid',
+    ]) {
+      expect(logs).toContain(endpoint);
+    }
+    expect(logs).toContain('841');
+  });
+
   it('forwards latitude/longitude of 0 alongside p_radius', async () => {
     const urls = stubFetch(facilityResponse);
     const ctx = createMockContext();
