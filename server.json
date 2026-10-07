@@ -12,18 +12,8 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/epa-mcp-server",
-      "runtimeHint": "node",
+      "runtimeHint": "npx",
       "version": "0.3.2",
-      "packageArguments": [
-        {
-          "type": "positional",
-          "value": "run"
-        },
-        {
-          "type": "positional",
-          "value": "start:stdio"
-        }
-      ],
       "environmentVariables": [
         {
           "name": "AIRNOW_API_KEY",
@@ -54,19 +44,15 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/epa-mcp-server",
-      "runtimeHint": "node",
+      "runtimeHint": "npx",
       "version": "0.3.2",
-      "packageArguments": [
-        {
-          "type": "positional",
-          "value": "run"
-        },
-        {
-          "type": "positional",
-          "value": "start:http"
-        }
-      ],
       "environmentVariables": [
+        {
+          "name": "MCP_TRANSPORT_TYPE",
+          "description": "Selects the HTTP transport.",
+          "format": "string",
+          "value": "http"
+        },
         {
           "name": "AIRNOW_API_KEY",
           "description": "Optional AirNow API key for real-time and forecast air quality data. When unset, the epa_get_air_quality tool is not registered and the other tools run without it. Free registration at docs.airnowapi.org.",
