@@ -52,7 +52,7 @@ EPA environmental data — Envirofacts, ECHO (facility compliance), and AirNow (
 - **Status: Clear to host**
 - US federal government data — public domain under 17 USC §105
 - Envirofacts/ECHO: no auth required
-- AirNow: free API key, no redistribution restriction
+- AirNow: free API key; redistribution follows the [AirNow Data Exchange Guidelines](https://docs.airnowapi.org/docs/DataUseGuidelines.pdf) (agency + EPA AirNow credit, preliminary-data notice, unaltered values, signed form to dmc@airnowtech.org)
 - Cannot imply EPA endorsement
 
 ## Notes

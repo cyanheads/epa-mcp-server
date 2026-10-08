@@ -19,11 +19,17 @@
 
 </div>
 
+<div align="center">
+
+**Public Hosted Server:** [https://epa.caseyjhand.com/mcp](https://epa.caseyjhand.com/mcp)
+
+</div>
+
 ---
 
 ## Overview
 
-EPA environmental data across five federal programs — facility compliance (ECHO), toxic chemical releases (TRI), Superfund cleanup sites, drinking water systems (SDWIS), and environmental-justice screening (EJScreen) — plus real-time air quality via AirNow. Search facilities by location or compliance status, pull inspection and enforcement history, track toxic releases across a region, and screen a point for environmental-justice risk from any MCP client. Runs as a stdio process or a local Streamable HTTP server.
+EPA environmental data across five federal programs — facility compliance (ECHO), toxic chemical releases (TRI), Superfund cleanup sites, drinking water systems (SDWIS), and environmental-justice screening (EJScreen) — plus real-time air quality via AirNow. Search facilities by location or compliance status, pull inspection and enforcement history, track toxic releases across a region, and screen a point for environmental-justice risk from any MCP client. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
 
 ### Tools
 
@@ -32,7 +38,7 @@ EPA environmental data across five federal programs — facility compliance (ECH
 | `epa_search_facilities` | Search EPA-regulated facilities by location, industry program, or compliance status across CAA, CWA, RCRA, TRI, and SDWA |
 | `epa_get_facility` | Full compliance profile for one facility by EPA Registry ID — inspections, enforcement actions, and penalties |
 | `epa_search_violations` | Search EPA civil and criminal enforcement cases by state, program, or date range |
-| `epa_get_air_quality` | Current AQI observations or next-day forecasts from AirNow |
+| `epa_get_air_quality` | Current AQI observations or the issued AQI forecast from AirNow |
 | `epa_get_tri_releases` | Per-chemical Toxic Release Inventory data for a single facility |
 | `epa_search_tri_releases` | Toxic Release Inventory records across facilities in a state or county |
 | `epa_search_superfund` | Search Superfund (CERCLA/SEMS) sites by location or NPL listing status |
@@ -76,8 +82,10 @@ All resource data is also reachable via tools — use `epa_get_facility` and `ep
 
 ### `epa_get_air_quality` <sub>tool</sub>
 
-- Provide `zip_code` or both `latitude` and `longitude`; `mode` is current (default) or forecast (requires ISO `forecast_date`); `distance_miles` defaults to 25, max 300
-- Returns per-pollutant AQI, `categoryNumber` (1 Good–6 Hazardous), and `categoryName`; preliminary data is unsuitable for regulatory, trend, or enforcement decisions
+- Provide `zip_code` or both `latitude` and `longitude`; `mode` is current (default) or forecast
+- Current mode returns each pollutant's latest hourly NowCast AQI from the closest monitor within 50 miles, with `siteName`, `siteID`, and `reportingAgency`
+- Forecast mode returns every day the reporting area's agency issued, with `dateValid`, `actionDay`, and the agency's `discussion`; optional `forecast_date` (YYYY-MM-DD) keeps one day and is rejected in current mode. Category-only forecasts carry no `aqi`
+- Readings carry `categoryName` and `categoryNumber` (1 Good–6 Hazardous); `attribution` credits the agencies and the U.S. EPA AirNow program and marks the data preliminary, unsuitable for regulatory, trend, or enforcement decisions
 - Registered only when `AIRNOW_API_KEY` is set; responses cache for about one hour
 
 ---
@@ -86,13 +94,17 @@ All resource data is also reachable via tools — use `epa_get_facility` and `ep
 
 - `facility_id` is the TRI `facilityId` from `epa_search_tri_releases`; optional `year` (1987–2030, all available by default) and partial `chemical_name`
 - Returns per-chemical air, water, land, and underground-injection releases, plus a separate one-time/non-routine total
+- Quantities are in pounds. TRI has facilities report dioxin and dioxin-like compounds in grams; those records are converted to pounds and carry `reportedUnit: "grams"`
 
 ---
 
 ### `epa_search_tri_releases` <sub>tool</sub>
 
-- Requires 2-letter `state`; optional partial `county`, `chemical_name`, and `year`; up to 200 records (default 50)
+- Requires 2-letter `state`; optional `county` (bare name, case-insensitive partial match, so `Lake` also matches LAKE OF THE WOODS — each record's `countyName` says which; a trailing County, Parish, or Borough is dropped), partial `chemical_name`, and `year`; up to 200 records (default 50)
+- One upstream request however sparse the filters or large the state — EPA joins facilities to their reporting forms server-side
+- Returns each record's one-time/non-routine total; `include_release_breakdown: true` adds air, water, land, and underground-injection releases at the cost of one more upstream request (up to ~20 seconds when EPA has not cached it)
 - Returns `facilityId` for `epa_get_tri_releases`; enrichment marks results truncated when the limit is reached
+- Dioxin and dioxin-like compounds, reported to TRI in grams, are converted to pounds and carry `reportedUnit: "grams"`
 
 ---
 
@@ -105,8 +117,9 @@ All resource data is also reachable via tools — use `epa_get_facility` and `ep
 
 ### `epa_search_water_systems` <sub>tool</sub>
 
-- Requires `state` or `zip_code`; up to 200 systems (default 50)
-- `has_violation` filters active violations; `pws_type` is community, non-transient, or transient, returned as CWS / NTNCWS / TNCWS in `type`
+- Requires `state` or `zip_code`; up to 200 systems (default 50). `zip_code` matches each system's address of record (often the owner's or operator's office), not its service area
+- `has_violation` keeps systems with an open SDWIS violation; violations returned to compliance or closed out when the system was deactivated don't count. `pws_type` is community, non-transient, or transient, returned as CWS / NTNCWS / TNCWS in `type`
+- With `state` alone, `has_violation` reads the state's first 1,000 open violation records; with `zip_code`, it reads up to 1,000 systems in the ZIP and checks them by PWSID. When either read fills, an enrichment `notice` says the list may miss violating systems
 
 ---
 
@@ -148,6 +161,23 @@ Agent-friendly output:
 - Recovery-hint messages on empty results — every search tool returns a `message` field that echoes the applied filters and suggests how to broaden the search
 
 ## Getting started
+
+### Public Hosted Instance
+
+A public instance is available at `https://epa.caseyjhand.com/mcp` — no installation required. It runs without an AirNow key, so `epa_get_air_quality` is not available there; the other 8 tools are. Point any MCP client at it via Streamable HTTP:
+
+```json
+{
+  "mcpServers": {
+    "epa-mcp-server": {
+      "type": "streamable-http",
+      "url": "https://epa.caseyjhand.com/mcp"
+    }
+  }
+}
+```
+
+### Self-Hosted / Local
 
 Add the following to your MCP client configuration file. An AirNow API key is optional — set `AIRNOW_API_KEY` to enable `epa_get_air_quality` (register free at [docs.airnowapi.org](https://docs.airnowapi.org/account/request/)); without it the server starts with the other 8 tools. ECHO, DMAP, and EJScreen tools work without authentication.
 
