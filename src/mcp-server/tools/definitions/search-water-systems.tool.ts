@@ -10,16 +10,23 @@ import { getDmapService } from '@/services/dmap/dmap-service.js';
 export const searchWaterSystemsTool = tool('epa_search_water_systems', {
   title: 'Search Drinking Water Systems',
   description:
-    'Search drinking water systems (SDWIS) by state or ZIP code. Returns system name, PWSID, population served, primary water source, and active violation status. Use to identify community water systems with current or recent compliance violations. At least one of state or zip_code is required.',
+    'Search drinking water systems (SDWIS) by state or ZIP code. Returns system name, PWSID, population served, primary water source, and activity status. With has_violation, returns only systems with an open violation — one SDWIS has not marked returned to compliance or closed out when the system was deactivated. At least one of state or zip_code is required.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
     state: z.string().optional().describe('2-letter US state abbreviation (e.g. "WA", "CA")'),
-    zip_code: z.string().optional().describe('5-digit ZIP code to search within'),
+    zip_code: z
+      .string()
+      .optional()
+      .describe(
+        "5-digit ZIP code of the water system's address of record — often its owner's or operator's office, which can be far from the area the system serves",
+      ),
     has_violation: z
       .boolean()
       .optional()
-      .describe('When true, return only systems with active violations'),
+      .describe(
+        'When true, return only systems with an open SDWIS violation (not yet returned to compliance). Works with state, zip_code, or both.',
+      ),
     pws_type: z
       .enum(['community', 'non-transient', 'transient'])
       .optional()
@@ -46,8 +53,18 @@ export const searchWaterSystemsTool = tool('epa_search_water_systems', {
               .string()
               .optional()
               .describe('2-letter state abbreviation (primacy agency code)'),
-            city: z.string().optional().describe('City served by this water system'),
-            zip: z.string().optional().describe('ZIP code'),
+            city: z
+              .string()
+              .optional()
+              .describe(
+                "City of the water system's address of record — often its owner's or operator's office, not necessarily the area it serves",
+              ),
+            zip: z
+              .string()
+              .optional()
+              .describe(
+                "ZIP code of the water system's address of record (the value zip_code matches)",
+              ),
             type: z
               .string()
               .optional()
@@ -65,7 +82,9 @@ export const searchWaterSystemsTool = tool('epa_search_water_systems', {
             hasViolation: z
               .boolean()
               .optional()
-              .describe('Whether this system has an active compliance violation on record'),
+              .describe(
+                'True when SDWIS lists an open violation for this system. Present only on has_violation searches, which return only such systems.',
+              ),
             isActive: z
               .boolean()
               .optional()
@@ -82,6 +101,15 @@ export const searchWaterSystemsTool = tool('epa_search_water_systems', {
       .optional()
       .describe('Recovery hint when no systems are found. Absent when systems are returned.'),
   }),
+
+  enrichment: {
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'Present when the has_violation check read only part of what it needed — the first 1,000 open violation records for the state, the first 1,000 systems in the ZIP, or the first 1,000 open violation records for a group of the ZIP’s systems — so violating systems outside that part may be missing from the results.',
+      ),
+  },
 
   errors: [
     {
@@ -152,7 +180,7 @@ export const searchWaterSystemsTool = tool('epa_search_water_systems', {
         lines.push(`**Population Served:** ${s.populationServed.toLocaleString()}`);
       if (s.primarySourceCode) lines.push(`**Primary Source:** ${s.primarySourceCode}`);
       if (s.hasViolation !== undefined)
-        lines.push(`**Active Violation:** ${s.hasViolation ? 'Yes' : 'No'}`);
+        lines.push(`**Open Violation:** ${s.hasViolation ? 'Yes' : 'No'}`);
       if (s.isActive !== undefined) lines.push(`**Active:** ${s.isActive ? 'Yes' : 'No'}`);
     }
 

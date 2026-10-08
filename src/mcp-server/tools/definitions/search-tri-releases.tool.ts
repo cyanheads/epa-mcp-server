@@ -5,12 +5,13 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { formatTriReleaseLines } from '@/mcp-server/tools/format-tri-release.js';
 import { getDmapService } from '@/services/dmap/dmap-service.js';
 
 export const searchTriReleasesTool = tool('epa_search_tri_releases', {
   title: 'Search TRI Releases by Region',
   description:
-    'Search Toxic Release Inventory data across facilities in a state or county for a given reporting year. Returns facility name, TRI ID, chemical name, and release quantity. Use to identify top polluters in an area or build an environmental exposure profile. Use epa_get_tri_releases for detailed release records for a single facility. TRI data lags ~18 months from the current calendar year.',
+    'Search Toxic Release Inventory data across facilities in a state or county for a given reporting year. Returns facility name and county, TRI facility ID, chemical name, and the one-time / non-routine release quantity; set include_release_breakdown to add routine on-site releases by medium (air, water, land, and underground-injection), at the cost of a slower call. Quantities are in pounds; dioxin and dioxin-like compounds, which TRI has facilities report in grams, are converted and marked with reportedUnit. Use to identify top polluters in an area or build an environmental exposure profile. Use epa_get_tri_releases for detailed release records for a single facility. TRI data lags ~18 months from the current calendar year.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -22,7 +23,9 @@ export const searchTriReleasesTool = tool('epa_search_tri_releases', {
     county: z
       .string()
       .optional()
-      .describe('County name to narrow results within the state (partial match)'),
+      .describe(
+        'County name to narrow results within the state, e.g. "King". Case-insensitive partial match on the bare name, so a short name can also match a longer one (LAKE matches LAKE OF THE WOODS; check countyName on each record); a trailing "County", "Parish", or "Borough" is dropped before matching.',
+      ),
     year: z
       .number()
       .int()
@@ -45,6 +48,12 @@ export const searchTriReleasesTool = tool('epa_search_tri_releases', {
       .max(200)
       .default(50)
       .describe('Maximum number of release records to return (1–200)'),
+    include_release_breakdown: z
+      .boolean()
+      .default(false)
+      .describe(
+        'Add routine on-site releases by medium (air, water, land, underground injection) to each record. Costs one extra upstream request, which can add about 20 seconds when EPA has not cached it.',
+      ),
   }),
 
   output: z.object({
@@ -54,12 +63,50 @@ export const searchTriReleasesTool = tool('epa_search_tri_releases', {
           .object({
             facilityId: z.string().describe('TRI facility identifier'),
             facilityName: z.string().optional().describe('Facility name'),
+            countyName: z
+              .string()
+              .optional()
+              .describe(
+                'County as TRI records the facility\'s location (e.g. "KING", "CALCASIEU PARISH"). The county filter is a partial match, so a short name can also match a longer one (LAKE matches LAKE OF THE WOODS); check this field to keep only the county you meant.',
+              ),
             chemicalName: z.string().describe('Chemical name as reported to TRI'),
             reportingYear: z.number().describe('Year of the TRI submission'),
+            reportedUnit: z
+              .literal('grams')
+              .optional()
+              .describe(
+                'Present as "grams" when TRI had the facility report this chemical in grams (dioxin and dioxin-like compounds); its quantities here are converted to pounds (1 lb = 453.59237 g). Absent for chemicals reported in pounds.',
+              ),
             totalReleasesInLbs: z
               .number()
               .optional()
-              .describe('One-time release quantity in pounds (from tri_reporting_form)'),
+              .describe(
+                'TRI one-time / non-routine release quantity in pounds (spills, accidents) — a distinct TRI category, NOT the sum of the per-medium routine releases below.',
+              ),
+            releasesToAirInLbs: z
+              .number()
+              .optional()
+              .describe(
+                'On-site routine air releases (fugitive + stack emissions) in pounds, summed across air release types for this submission. Only with include_release_breakdown.',
+              ),
+            releasesToWaterInLbs: z
+              .number()
+              .optional()
+              .describe(
+                'On-site routine releases to surface water in pounds, summed across all reported outfalls for this submission. Only with include_release_breakdown.',
+              ),
+            releasesToLandInLbs: z
+              .number()
+              .optional()
+              .describe(
+                'On-site routine land releases in pounds — landfills, land treatment, surface impoundment, and other on-site disposal, summed for this submission. Only with include_release_breakdown.',
+              ),
+            releasesToUndergroundInjectionInLbs: z
+              .number()
+              .optional()
+              .describe(
+                'On-site routine releases via underground injection wells in pounds, summed across injection well classes for this submission. Only with include_release_breakdown.',
+              ),
           })
           .describe('TRI release record for a facility-chemical-year combination'),
       )
@@ -74,9 +121,15 @@ export const searchTriReleasesTool = tool('epa_search_tri_releases', {
   enrichment: {
     truncated: z
       .boolean()
-      .describe('True when the result list was capped at the limit — more records may exist.'),
-    shown: z.number().describe('Number of release records returned.'),
-    cap: z.number().describe('The limit that was applied.'),
+      .optional()
+      .describe(
+        'True when the result list was capped at the limit — more records may exist. Absent below the limit.',
+      ),
+    shown: z
+      .number()
+      .optional()
+      .describe('Number of release records returned. Present only when truncated.'),
+    cap: z.number().optional().describe('The limit that was applied. Present only when truncated.'),
   },
 
   errors: [
@@ -94,9 +147,14 @@ export const searchTriReleasesTool = tool('epa_search_tri_releases', {
       state: input.state,
       year: input.year,
       county: input.county,
+      includeReleaseBreakdown: input.include_release_breakdown,
     });
 
-    const county = input.county?.trim();
+    // TRI stores bare county names ("KING", never "KING COUNTY"), so a suffixed input would match nothing.
+    const county = input.county
+      ?.trim()
+      .replace(/\s+(county|parish|borough)$/i, '')
+      .toUpperCase();
     const chemicalName = input.chemical_name?.trim();
     const releases = await getDmapService().searchTriReleases(
       {
@@ -105,6 +163,7 @@ export const searchTriReleasesTool = tool('epa_search_tri_releases', {
         ...(input.year !== undefined && { year: input.year }),
         ...(chemicalName && { chemicalName }),
         limit: input.limit,
+        includeReleaseBreakdown: input.include_release_breakdown,
       },
       ctx,
     );
@@ -113,7 +172,7 @@ export const searchTriReleasesTool = tool('epa_search_tri_releases', {
 
     if (releases.length === 0) {
       const yearNote = input.year ? ` for year ${input.year}` : '';
-      const countyNote = input.county ? ` in ${input.county} county` : '';
+      const countyNote = county ? ` in ${county} county` : '';
       const chemNote = input.chemical_name ? ` for chemical "${input.chemical_name}"` : '';
       return {
         releases: [],
@@ -138,8 +197,8 @@ export const searchTriReleasesTool = tool('epa_search_tri_releases', {
     for (const r of result.releases) {
       const facilityLabel = r.facilityName ? `${r.facilityName} (${r.facilityId})` : r.facilityId;
       lines.push(`\n### ${r.chemicalName} — ${facilityLabel} (${r.reportingYear})`);
-      if (r.totalReleasesInLbs !== undefined)
-        lines.push(`**Release Quantity:** ${r.totalReleasesInLbs.toLocaleString()} lbs`);
+      if (r.countyName) lines.push(`**County:** ${r.countyName}`);
+      lines.push(...formatTriReleaseLines(r));
     }
 
     return [{ type: 'text', text: lines.join('\n') }];

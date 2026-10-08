@@ -5,13 +5,14 @@
 
 /** Raw row from tri.tri_facility table. Coordinates encoded as DDMMSS integers. */
 export interface RawTriFacility {
-  city?: string;
-  county?: string;
+  city_name?: string;
+  /** County name as the state reported it — usually bare and uppercase ("KING"), sometimes suffixed ("CALCASIEU PARISH") */
+  county_name?: string;
   fac_latitude?: string | number;
   fac_longitude?: string | number;
   facility_name?: string;
   state_abbr?: string;
-  street?: string;
+  street_address?: string;
   tri_facility_id?: string;
   zip_code?: string;
   [key: string]: string | number | undefined;
@@ -29,6 +30,13 @@ export interface RawTriReportingForm {
    */
   one_time_release_qty?: string | number;
   reporting_year?: string | number;
+  /**
+   * TRI chemical or category ID. N150 (dioxin and dioxin-like compounds) is reported in grams;
+   * every other chemical in pounds. The reporting-form and release-quantity tables carry no unit
+   * column, so this is the marker on their rows (tri.tri_chem_info.unit_of_measure records Grams
+   * for N150).
+   */
+  tri_chem_id?: string;
   tri_facility_id?: string;
   [key: string]: string | number | undefined;
 }
@@ -99,7 +107,10 @@ export interface RawSdwisViolation {
  * `totalReleasesInLbs` is TRI's one-time / non-routine release quantity (from
  * tri_reporting_form.one_time_release_qty) — a distinct category, NOT the sum of the
  * per-medium routine releases. The `releasesTo*InLbs` fields are the routine on-site
- * releases rolled up from tri.tri_release_qty, populated only by getTriReleases.
+ * releases rolled up from tri.tri_release_qty by doc_ctrl_num, each omitted when the submission
+ * reported no hard quantity for that medium; searchTriReleases fills them only when its caller
+ * opts into the breakdown. Every quantity is in pounds: a chemical TRI has facilities report in
+ * grams is converted, and `reportedUnit` says so.
  */
 export interface TriRelease {
   chemicalName: string;
@@ -112,6 +123,8 @@ export interface TriRelease {
   releasesToUndergroundInjectionInLbs?: number;
   /** On-site routine releases to surface water in lbs, summed across outfalls per submission */
   releasesToWaterInLbs?: number;
+  /** 'grams' when TRI had the facility report this chemical in grams (dioxin and dioxin-like compounds); the *InLbs quantities are converted. Absent for pound-reported chemicals. */
+  reportedUnit?: 'grams';
   reportingYear: number;
   /** One-time / non-routine release quantity (from one_time_release_qty) — a distinct TRI category */
   totalReleasesInLbs?: number;
