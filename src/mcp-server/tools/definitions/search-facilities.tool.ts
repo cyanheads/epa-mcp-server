@@ -5,12 +5,14 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { formatLbs } from '@/mcp-server/tools/format-lbs.js';
+import { formatLocationLines } from '@/mcp-server/tools/format-location.js';
 import { getEchoService } from '@/services/echo/echo-service.js';
 
 export const searchFacilitiesTool = tool('epa_search_facilities', {
   title: 'Search EPA Facilities',
   description:
-    'Search EPA-regulated facilities by location, industry program, or compliance status across all environmental programs (CAA, CWA, RCRA, TRI, SDWA). Returns facility name, EPA Registry ID, coordinates, county FIPS code, per-program registration flags, inspection counts, penalty totals, and TRI release totals. Registry IDs returned here feed epa_get_facility and epa_get_tri_releases. Supports proximity search via latitude + longitude + radius_miles. At least one geographic filter (zip_code, state, city, or a complete latitude+longitude+radius_miles triple) is required — unscoped searches time out.',
+    'Search EPA-regulated facilities by location, industry program, or compliance status across all environmental programs (CAA, CWA, RCRA, TRI, SDWA). Returns facility name, EPA Registry ID, coordinates, county FIPS code, per-program registration flags, inspection counts, penalty totals, and TRI release totals. Registry IDs returned here feed epa_get_facility. Supports proximity search via latitude + longitude + radius_miles. At least one geographic filter (zip_code, state, city, or a complete latitude+longitude+radius_miles triple) is required — unscoped searches time out.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -68,9 +70,7 @@ export const searchFacilitiesTool = tool('epa_search_facilities', {
           .object({
             registryId: z
               .string()
-              .describe(
-                'EPA FRS Registry ID — use as input to epa_get_facility and epa_get_tri_releases',
-              ),
+              .describe('EPA FRS Registry ID — use as input to epa_get_facility'),
             name: z.string().describe('Facility name'),
             street: z.string().optional().describe('Street address'),
             city: z.string().optional().describe('City'),
@@ -102,7 +102,7 @@ export const searchFacilitiesTool = tool('epa_search_facilities', {
               .number()
               .optional()
               .describe(
-                'Total TRI on/off-site releases and transfers in pounds (summary). Use epa_get_tri_releases for per-chemical breakdown.',
+                'Total TRI on/off-site releases and transfers in pounds (summary). For the per-chemical breakdown, call epa_get_tri_releases with the TRI facility ID that epa_search_tri_releases returns as facilityId — the Registry ID is not a TRI facility ID.',
               ),
             inspectionCount: z.number().optional().describe('Number of EPA inspections on record'),
             totalPenaltiesInDollars: z
@@ -220,13 +220,7 @@ export const searchFacilitiesTool = tool('epa_search_facilities', {
     for (const f of result.facilities) {
       lines.push(`\n### ${f.name}`);
       lines.push(`**Registry ID:** ${f.registryId}`);
-      const location = [f.street, f.city, f.state, f.zip].filter(Boolean).join(', ');
-      if (location) lines.push(`**Location:** ${location}`);
-      if (f.county)
-        lines.push(`**County:** ${f.county}${f.fipsCode ? ` (FIPS: ${f.fipsCode})` : ''}`);
-      if (f.latitude !== undefined && f.longitude !== undefined) {
-        lines.push(`**Coordinates:** ${f.latitude}, ${f.longitude}`);
-      }
+      lines.push(...formatLocationLines(f));
       if (f.complianceStatus) lines.push(`**Compliance Status:** ${f.complianceStatus}`);
 
       const activePrograms = Object.entries(f.programs)
@@ -236,9 +230,7 @@ export const searchFacilitiesTool = tool('epa_search_facilities', {
       if (activePrograms) lines.push(`**Programs:** ${activePrograms}`);
 
       if (f.triReleasesTransfersInLbs !== undefined) {
-        lines.push(
-          `**TRI Releases+Transfers:** ${f.triReleasesTransfersInLbs.toLocaleString()} lbs`,
-        );
+        lines.push(`**TRI Releases+Transfers:** ${formatLbs(f.triReleasesTransfersInLbs)}`);
       }
       if (f.inspectionCount !== undefined) lines.push(`**Inspections:** ${f.inspectionCount}`);
       if (f.totalPenaltiesInDollars !== undefined) {

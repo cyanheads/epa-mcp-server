@@ -40,11 +40,8 @@ describe('facilityResource', () => {
     const ctx = createMockContext({ tenantId: 'test-tenant' });
     const params = facilityResource.params!.parse({ registry_id: '110000350509' });
     const result = await facilityResource.handler(params, ctx);
-    expect(result).toMatchObject({
-      registryId: '110000350509',
-      name: 'BOEING COMMERCIAL AIRPLANES',
-    });
-    expect(mockGetFacility).toHaveBeenCalledWith('110000350509', expect.anything());
+    expect(result).toEqual(boeingProfile);
+    expect(mockGetFacility).toHaveBeenCalledWith('110000350509', ctx);
   });
 
   it('throws NotFound when service returns profile without registryId', async () => {
@@ -59,6 +56,8 @@ describe('facilityResource', () => {
     const params = facilityResource.params!.parse({ registry_id: 'DOESNOTEXIST' });
     await expect(facilityResource.handler(params, ctx)).rejects.toMatchObject({
       code: JsonRpcErrorCode.NotFound,
+      message: expect.stringContaining('Registry ID "DOESNOTEXIST"'),
+      data: { registryId: 'DOESNOTEXIST' },
     });
   });
 
@@ -67,13 +66,5 @@ describe('facilityResource', () => {
     const ctx = createMockContext({ tenantId: 'test-tenant' });
     const params = facilityResource.params!.parse({ registry_id: '110000350509' });
     await expect(facilityResource.handler(params, ctx)).rejects.toThrow('Network timeout');
-  });
-
-  it('passes the registry_id param through to service unchanged', async () => {
-    mockGetFacility.mockResolvedValue(boeingProfile);
-    const ctx = createMockContext({ tenantId: 'test-tenant' });
-    const params = facilityResource.params!.parse({ registry_id: 'MYREGID' });
-    await facilityResource.handler(params, ctx);
-    expect(mockGetFacility).toHaveBeenCalledWith('MYREGID', expect.anything());
   });
 });

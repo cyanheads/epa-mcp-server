@@ -5,6 +5,8 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { formatLbs } from '@/mcp-server/tools/format-lbs.js';
+import { formatLocationLines } from '@/mcp-server/tools/format-location.js';
 import { getEchoService } from '@/services/echo/echo-service.js';
 
 export const getFacilityTool = tool('epa_get_facility', {
@@ -144,17 +146,7 @@ export const getFacilityTool = tool('epa_get_facility', {
     lines.push(`## ${result.name}`);
     lines.push(`**Registry ID:** ${result.registryId}`);
 
-    const location = [result.street, result.city, result.state, result.zip]
-      .filter(Boolean)
-      .join(', ');
-    if (location) lines.push(`**Location:** ${location}`);
-    if (result.county)
-      lines.push(
-        `**County:** ${result.county}${result.fipsCode ? ` (FIPS: ${result.fipsCode})` : ''}`,
-      );
-    if (result.latitude !== undefined && result.longitude !== undefined) {
-      lines.push(`**Coordinates:** ${result.latitude}, ${result.longitude}`);
-    }
+    lines.push(...formatLocationLines(result));
     if (result.complianceStatus) lines.push(`**Compliance Status:** ${result.complianceStatus}`);
 
     const activePrograms = Object.entries(result.programs)
@@ -164,9 +156,7 @@ export const getFacilityTool = tool('epa_get_facility', {
     if (activePrograms) lines.push(`**Programs:** ${activePrograms}`);
 
     if (result.triReleasesTransfersInLbs !== undefined) {
-      lines.push(
-        `**TRI Releases+Transfers:** ${result.triReleasesTransfersInLbs.toLocaleString()} lbs`,
-      );
+      lines.push(`**TRI Releases+Transfers:** ${formatLbs(result.triReleasesTransfersInLbs)}`);
     }
 
     if (result.compliance) {

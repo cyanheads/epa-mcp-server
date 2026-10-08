@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { formatLocationLines } from '@/mcp-server/tools/format-location.js';
 import { getDmapService } from '@/services/dmap/dmap-service.js';
 
 export const searchSuperfundTool = tool('epa_search_superfund', {
@@ -163,13 +164,7 @@ export const searchSuperfundTool = tool('epa_search_superfund', {
     for (const s of result.sites) {
       lines.push(`\n### ${s.name}`);
       lines.push(`**Site ID:** ${s.siteId}`);
-      const location = [s.street, s.city, s.state, s.zip].filter(Boolean).join(', ');
-      if (location) lines.push(`**Location:** ${location}`);
-      if (s.county)
-        lines.push(`**County:** ${s.county}${s.fipsCode ? ` (FIPS: ${s.fipsCode})` : ''}`);
-      if (s.latitude !== undefined && s.longitude !== undefined) {
-        lines.push(`**Coordinates:** ${s.latitude}, ${s.longitude}`);
-      }
+      lines.push(...formatLocationLines(s));
       if (s.nplStatus) lines.push(`**NPL Status:** ${s.nplStatus}`);
       if (s.cleanupStatus) lines.push(`**Cleanup Status:** ${s.cleanupStatus}`);
     }
