@@ -1,6 +1,6 @@
 # epa-mcp-server - Directory Structure
 
-Generated on: 2026-10-07 11:16:41
+Generated on: 2026-10-08 13:41:26
 
 ```text
 epa-mcp-server/
@@ -27,6 +27,7 @@ epa-mcp-server/
 │   ├── 0.1.x/
 │   ├── 0.2.x/
 │   ├── 0.3.x/
+│   ├── 0.4.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -148,17 +149,20 @@ epa-mcp-server/
 │   │   │       ├── index.ts
 │   │   │       └── superfund-site.resource.ts
 │   │   └── tools/
-│   │       └── definitions/
-│   │           ├── get-air-quality.tool.ts
-│   │           ├── get-ejscreen.tool.ts
-│   │           ├── get-facility.tool.ts
-│   │           ├── get-tri-releases.tool.ts
-│   │           ├── index.ts
-│   │           ├── search-facilities.tool.ts
-│   │           ├── search-superfund.tool.ts
-│   │           ├── search-tri-releases.tool.ts
-│   │           ├── search-violations.tool.ts
-│   │           └── search-water-systems.tool.ts
+│   │       ├── definitions/
+│   │       │   ├── get-air-quality.tool.ts
+│   │       │   ├── get-ejscreen.tool.ts
+│   │       │   ├── get-facility.tool.ts
+│   │       │   ├── get-tri-releases.tool.ts
+│   │       │   ├── index.ts
+│   │       │   ├── search-facilities.tool.ts
+│   │       │   ├── search-superfund.tool.ts
+│   │       │   ├── search-tri-releases.tool.ts
+│   │       │   ├── search-violations.tool.ts
+│   │       │   └── search-water-systems.tool.ts
+│   │       ├── format-lbs.ts
+│   │       ├── format-location.ts
+│   │       └── format-tri-release.ts
 │   ├── services/
 │   │   ├── airnow/
 │   │   │   ├── airnow-service.ts
@@ -197,6 +201,7 @@ epa-mcp-server/
 │   ├── resources/
 │   ├── services/
 │   │   ├── airnow/
+│   │   │   ├── airnow-fixtures.ts
 │   │   │   └── airnow-service.test.ts
 │   │   ├── dmap/
 │   │   │   └── dmap-service.test.ts

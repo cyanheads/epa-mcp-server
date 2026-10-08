@@ -94,7 +94,7 @@ export class EchoService {
       async () => {
         const response = await fetch(url, {
           signal: ctx.signal,
-          headers: { 'User-Agent': '@cyanheads/epa-mcp-server/0.3.3' },
+          headers: { 'User-Agent': '@cyanheads/epa-mcp-server/0.4.0' },
         });
         if (!response.ok) {
           throw await httpErrorFromResponse(response, { service: 'ECHO' });

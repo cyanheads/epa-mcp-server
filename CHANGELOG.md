@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.4.0](changelog/0.4.x/0.4.0.md) — 2026-10-08 · ⚠️ Breaking
+
+epa_get_air_quality moves to AirNow's 2026 web services (breaking: distance_miles removed, observation coordinates removed, aqi optional); TRI search runs as one DMAP join with a working county filter and opt-in release breakdown; water-system has_violation counts open violations; hosted endpoint at epa.caseyjhand.com.
+
 ## [0.3.3](changelog/0.3.x/0.3.3.md) — 2026-10-07 · 🛡️ Security
 
 ECHO debug logs use endpoint labels instead of request URLs, with framework recovery and error privacy updates.
