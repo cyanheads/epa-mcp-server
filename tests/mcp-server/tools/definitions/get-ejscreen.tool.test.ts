@@ -76,27 +76,28 @@ describe('getEjscreenTool', () => {
 
     expect(mockGetIndicators).toHaveBeenCalledWith(
       { latitude: 39.2904, longitude: -76.6122, bufferMiles: 1 },
-      expect.anything(),
+      ctx,
     );
-    expect(result.coverage.valid).toBe(true);
-    expect(result.environmental).toHaveLength(1);
-    expect(result.demographic[0]?.percent).toBe(63.07);
+    expect(result).toEqual(validResult);
+    // A covered point carries no coverage notice.
+    expect(getEnrichment(ctx).notice).toBeUndefined();
   });
 
   it('converts kilometers to miles before calling the service', async () => {
     mockGetIndicators.mockResolvedValue(validResult);
     const ctx = createMockContext({ errors: getEjscreenTool.errors });
+    // 20 km is over 15 as a raw number but ≈ 12.43 miles, inside the cap once converted.
     const input = getEjscreenTool.input.parse({
       latitude: 39.2904,
       longitude: -76.6122,
-      distance: 2,
+      distance: 20,
       unit: 'kilometers',
     });
     await getEjscreenTool.handler(input, ctx);
 
     expect(mockGetIndicators).toHaveBeenCalledWith(
-      expect.objectContaining({ bufferMiles: expect.closeTo(1.242742, 5) }),
-      expect.anything(),
+      { latitude: 39.2904, longitude: -76.6122, bufferMiles: expect.closeTo(12.42742, 5) },
+      ctx,
     );
   });
 
@@ -105,13 +106,27 @@ describe('getEjscreenTool', () => {
     const input = getEjscreenTool.input.parse({
       latitude: 39.2904,
       longitude: -76.6122,
-      distance: 20,
+      distance: 15.01,
     });
 
     await expect(getEjscreenTool.handler(input, ctx)).rejects.toMatchObject({
+      message: 'Buffer of 15.01 miles exceeds the EJAM API limit of 15 miles.',
       data: { reason: 'buffer_too_large' },
     });
     expect(mockGetIndicators).not.toHaveBeenCalled();
+
+    // Exactly 15 miles is the cap itself, not over it.
+    mockGetIndicators.mockResolvedValue(validResult);
+    const atCap = getEjscreenTool.input.parse({
+      latitude: 39.2904,
+      longitude: -76.6122,
+      distance: 15,
+    });
+    await getEjscreenTool.handler(atCap, ctx);
+    expect(mockGetIndicators).toHaveBeenCalledWith(
+      expect.objectContaining({ bufferMiles: 15 }),
+      ctx,
+    );
   });
 
   it('throws buffer_too_large when a kilometers distance converts above 15 miles', async () => {
@@ -125,6 +140,7 @@ describe('getEjscreenTool', () => {
     });
 
     await expect(getEjscreenTool.handler(input, ctx)).rejects.toMatchObject({
+      message: 'Buffer of 18.64 miles exceeds the EJAM API limit of 15 miles.',
       data: { reason: 'buffer_too_large' },
     });
     expect(mockGetIndicators).not.toHaveBeenCalled();
@@ -138,22 +154,30 @@ describe('getEjscreenTool', () => {
 
     expect(result.coverage.valid).toBe(false);
     expect(result.environmental).toEqual([]);
-    const notice = getEnrichment(ctx).notice;
-    expect(notice).toContain('not located within the United States');
+    expect(getEnrichment(ctx).notice).toBe(
+      'EJScreen has no coverage for this point: The site is not located within the United States.',
+    );
   });
 
   it('formats a valid result with location, indicators, indices, and source', () => {
     const blocks = getEjscreenTool.format!(validResult);
-    const text = (blocks[0] as { type: string; text: string }).text;
-    expect(text).toContain('Maryland');
-    expect(text).toContain('PM2.5');
-    expect(text).toContain('6.925');
-    expect(text).toContain('People of color');
-    expect(text).toContain('63.07%');
-    expect(text).toContain('Demographic Index');
-    expect(text).toContain('1.949');
-    expect(text).toContain('EJScreen v2.2');
-    expect(text).toContain('https://api.ejanalysis.com/report');
+    const lines = (blocks[0] as { type: string; text: string }).text.split('\n');
+    for (const line of [
+      '## EJScreen Environmental Justice — 39.2904, -76.6122 (Maryland)',
+      '**Buffer:** 1 miles',
+      '**State:** MD',
+      '**Population in buffer:** 38776.2',
+      '**Block groups intersected:** 51',
+      '**Coverage valid:** yes',
+      '- **PM2.5** (`pm`): 6.925 µg/m³ · US pctile 17 · state pctile 51 · EJ Index 32.9204 · EJ Index US pctile 39 · EJ Index state pctile 76',
+      '- **People of color** (`pctmin`): 63.07% · US pctile 74 · state pctile 62',
+      '**Demographic Index:** 1.949 · US pctile 76 · state pctile 78',
+      '**Supplemental Demographic Index:** 1.9334 · US pctile 71 · state pctile 81',
+      '**EJScreen report:** https://api.ejanalysis.com/report?lat=39.2904&lon=-76.6122&buffer=1',
+      '_Source: EJScreen v2.2 (2022 data) via the community-maintained EJAM API._',
+    ]) {
+      expect(lines).toContain(line);
+    }
   });
 
   it('formats an out-of-coverage result with the coverage note and no fabricated indicators', () => {

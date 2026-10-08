@@ -7,6 +7,7 @@
  */
 
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -88,8 +89,27 @@ describe('normalizeEjscreen', () => {
       blockGroupCount: 51,
     });
 
-    // All 13 environmental indicators are present.
-    expect(result.environmental).toHaveLength(13);
+    // All 13 environmental indicators, in report order, each read from its own column.
+    expect(result.environmental.map((e) => [e.code, e.label, e.value, e.unit])).toEqual([
+      ['pm', 'PM2.5', 6.925, 'µg/m³'],
+      ['o3', 'Ozone', 62.98, 'ppb'],
+      ['dpm', 'Diesel particulate matter', 0.3169, 'µg/m³'],
+      ['no2', 'Nitrogen dioxide (NO2)', 15.3833, 'ppb'],
+      ['pctpre1960', 'Lead paint (pre-1960 housing)', 0.4584, 'fraction of housing built pre-1960'],
+      [
+        'traffic.score',
+        'Traffic proximity & volume',
+        4311066.2843,
+        'daily traffic count / distance',
+      ],
+      ['proximity.npl', 'Superfund (NPL) proximity', 0.344, 'site count / km'],
+      ['proximity.rmp', 'RMP facility proximity', 2.4133, 'facility count / km'],
+      ['proximity.tsdf', 'Hazardous-waste (TSDF) proximity', 18.8156, 'facility count / km'],
+      ['proximity.npdes', 'Wastewater discharge (NPDES) proximity', 76205.3959, 'score'],
+      ['ust', 'Underground storage tanks', 6.3583, 'count / area'],
+      ['drinking', 'Drinking-water non-compliance', 0, 'score'],
+      ['rsei', 'Toxic releases to air (RSEI)', 859.9839, 'score'],
+    ]);
     const pm = result.environmental.find((e) => e.code === 'pm');
     expect(pm).toEqual({
       code: 'pm',
@@ -113,8 +133,15 @@ describe('normalizeEjscreen', () => {
     expect(o3?.usPercentile).toBe(62);
     expect(o3?.ejIndex).toBeUndefined();
 
-    // All 6 demographic indicators, fractions converted to percentages.
-    expect(result.demographic).toHaveLength(6);
+    // All 6 demographic indicators, in report order, fractions converted to percentages.
+    expect(result.demographic.map((d) => [d.code, d.label, d.percent])).toEqual([
+      ['pctmin', 'People of color', 63.07],
+      ['pctlowinc', 'Low income', 40.66],
+      ['pctlingiso', 'Limited English (linguistically isolated)', 2.03],
+      ['pctlths', 'Less than high school education', 12.45],
+      ['pctunder5', 'Under age 5', 3.74],
+      ['pctover64', 'Over age 64', 12.02],
+    ]);
     const pctmin = result.demographic.find((d) => d.code === 'pctmin');
     expect(pctmin).toEqual({
       code: 'pctmin',
@@ -123,7 +150,6 @@ describe('normalizeEjscreen', () => {
       usPercentile: 74,
       statePercentile: 62,
     });
-    expect(result.demographic.find((d) => d.code === 'pctlingiso')?.percent).toBe(2.03);
 
     expect(result.demographicIndex).toEqual({
       value: 1.949,
@@ -201,6 +227,8 @@ describe('EjscreenService.getIndicators', () => {
 
     expect(captured?.url).toBe('https://api.ejanalysis.com/data');
     expect(captured?.init.method).toBe('POST');
+    // Headers normalizes name casing, so the lookup holds however the service spelled it.
+    expect(new Headers(captured?.init.headers).get('content-type')).toBe('application/json');
     expect(JSON.parse(String(captured?.init.body))).toEqual({
       sites: [{ lat: 39.2904, lon: -76.6122 }],
       buffer: 1,
@@ -220,6 +248,12 @@ describe('EjscreenService.getIndicators', () => {
         { latitude: 999, longitude: 999, bufferMiles: 1 },
         createMockContext(),
       ),
-    ).rejects.toMatchObject({ data: { reason: 'upstream_rejected' } });
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      message: 'EJAM API rejected the request: Invalid coordinates provided',
+      data: { reason: 'upstream_rejected' },
+    });
+    // Deterministic rejection: no retry.
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 });

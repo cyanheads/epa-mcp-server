@@ -37,70 +37,97 @@ describe('service errors', () => {
     {
       name: 'ECHO HTTP',
       call: () => runToolContract(searchFacilitiesTool, { state: 'WA' }),
+      base: 'https://example.com/private-echo/',
       status: 403,
       body: 'Forbidden',
       code: JsonRpcErrorCode.Forbidden,
+      message: 'ECHO returned HTTP 403.',
     },
     {
       name: 'ECHO HTML',
       call: () => runToolContract(searchFacilitiesTool, { state: 'WA' }),
+      base: 'https://example.com/private-echo/',
       status: 200,
       body: '<html>Unavailable</html>',
       code: JsonRpcErrorCode.ServiceUnavailable,
+      message: 'ECHO API returned HTML instead of JSON',
     },
     {
       name: 'ECHO error payload',
       call: () => runToolContract(searchFacilitiesTool, { state: 'WA' }),
+      base: 'https://example.com/private-echo/',
       status: 200,
       body: '{"Results":{"Error":{"ErrorMessage":"Unavailable"}}}',
       code: JsonRpcErrorCode.ServiceUnavailable,
+      message: 'ECHO API error: Unavailable',
     },
     {
       name: 'DMAP HTTP',
       call: () => runToolContract(searchWaterSystemsTool, { state: 'WA' }),
+      base: 'https://example.com/private-dmap/',
       status: 403,
       body: 'Forbidden',
       code: JsonRpcErrorCode.Forbidden,
+      message: 'DMAP returned HTTP 403.',
     },
     {
       name: 'DMAP HTML',
       call: () => runToolContract(searchWaterSystemsTool, { state: 'WA' }),
+      base: 'https://example.com/private-dmap/',
       status: 200,
       body: '<html>Unavailable</html>',
       code: JsonRpcErrorCode.ServiceUnavailable,
+      message: 'DMAP API returned HTML instead of JSON',
     },
     {
       name: 'EJAM HTTP',
       call: () => runToolContract(getEjscreenTool, { latitude: 40, longitude: -75 }),
+      base: 'https://example.com/private-ejam/',
       status: 403,
       body: 'Forbidden',
       code: JsonRpcErrorCode.Forbidden,
+      message: 'EJAM returned HTTP 403.',
     },
     {
       name: 'EJAM HTML',
       call: () => runToolContract(getEjscreenTool, { latitude: 40, longitude: -75 }),
+      base: 'https://example.com/private-ejam/',
       status: 200,
       body: '<html>Unavailable</html>',
       code: JsonRpcErrorCode.ServiceUnavailable,
+      message: 'EJAM API returned HTML instead of JSON',
     },
     {
       name: 'EJAM empty',
       call: () => runToolContract(getEjscreenTool, { latitude: 40, longitude: -75 }),
+      base: 'https://example.com/private-ejam/',
       status: 200,
       body: '[]',
       code: JsonRpcErrorCode.ServiceUnavailable,
+      message: 'EJAM API returned an empty response.',
     },
   ])(
     'classifies $name without forwarding the request URL',
-    async ({ call, status, body, code }) => {
-      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(body, { status }));
+    async ({ call, base, status, body, code, message }) => {
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockImplementation(async () => new Response(body, { status }));
       const pending = call();
       await vi.runAllTimersAsync();
       const result = await pending;
       expect(result.isError).toBe(true);
       expect(result.structuredContent).toMatchObject({ error: { code } });
+      expect(JSON.stringify(result.content)).toContain(`Error: ${message}`);
+
+      // The configured base URL was really on the wire, so its absence from the result means
+      // the error surfaces dropped it rather than never having seen it.
+      const requested = fetchSpy.mock.calls.map(([input]) => String(input));
+      expect(requested.length).toBeGreaterThan(0);
+      for (const url of requested) {
+        expect(url.startsWith(base)).toBe(true);
+        expect(JSON.stringify(result)).not.toContain(new URL(url).host + new URL(url).pathname);
+      }
       expect(JSON.stringify(result)).not.toContain('https://example.com/private-');
-      expect(JSON.stringify(result.content)).toContain('Error:');
     },
   );
 

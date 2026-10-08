@@ -36,6 +36,34 @@ async function readReply(response: Response): Promise<string> {
   }
 }
 
+/** The `result` of the JSON-RPC response in a reply body (plain JSON or SSE `data:` frames). */
+function rpcResult(reply: string): Record<string, unknown> {
+  const payloads = reply.trimStart().startsWith('{')
+    ? [reply]
+    : reply
+        .split('\n')
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trim())
+        .filter((data) => data !== '');
+  const message = payloads
+    .map((data) => JSON.parse(data) as { id?: unknown; result?: Record<string, unknown> })
+    .find((parsed) => 'id' in parsed);
+  if (!message?.result) throw new Error(`Expected a JSON-RPC result, got: ${reply}`);
+  return message.result;
+}
+
+/** Tools served without AIRNOW_API_KEY: every keyless tool, never epa_get_air_quality. */
+const KEYLESS_TOOL_NAMES = [
+  'epa_get_ejscreen',
+  'epa_get_facility',
+  'epa_get_tri_releases',
+  'epa_search_facilities',
+  'epa_search_superfund',
+  'epa_search_tri_releases',
+  'epa_search_violations',
+  'epa_search_water_systems',
+];
+
 async function inspectSession(mode: string | undefined, expected: 'stateful' | 'stateless') {
   const reservation = createServer();
   reservation.listen(0, '127.0.0.1');
@@ -101,7 +129,7 @@ async function inspectSession(mode: string | undefined, expected: 'stateful' | '
       }),
     });
     expect(initialized.ok).toBe(true);
-    expect(await readReply(initialized)).toContain('2025-11-25');
+    expect(rpcResult(await readReply(initialized)).protocolVersion).toBe('2025-11-25');
     const sid = initialized.headers.get('mcp-session-id');
     if (expected === 'stateful') expect(sid).toBeTruthy();
     else expect(sid).toBeNull();
@@ -119,9 +147,8 @@ async function inspectSession(mode: string | undefined, expected: 'stateful' | '
       body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }),
     });
     expect(listed.ok).toBe(true);
-    const list = await readReply(listed);
-    expect(list).toContain('epa_search_facilities');
-    expect(list).not.toContain('"name":"epa_get_air_quality"');
+    const tools = rpcResult(await readReply(listed)).tools as { name: string }[];
+    expect(tools.map((t) => t.name).sort()).toEqual(KEYLESS_TOOL_NAMES);
     const card = await fetch(`${origin}/.well-known/mcp.json`).then((response) => response.json());
     expect(card).toMatchObject({
       _meta: { 'io.github.cyanheads.mcp-ts-core/sessionMode': expected },
