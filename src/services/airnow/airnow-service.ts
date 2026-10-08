@@ -1,52 +1,146 @@
 /**
- * @fileoverview AirNow API service for real-time and forecast air quality data.
- * Wraps www.airnowapi.org/aq endpoints. Responses cached at ~1 hour TTL per the
- * AirNow API's recommendation to avoid rate-limiting.
+ * @fileoverview AirNow API service for current observations and issued forecasts.
+ * Wraps the 2026 www.airnowapi.org/aq web services `observation/current/ziplatlong/`
+ * and `forecast/current/`. Responses cached at ~1 hour TTL per the AirNow API's
+ * recommendation to avoid rate-limiting.
  * @module services/airnow/airnow-service
  */
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
-import { serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
+import {
+  serializationError,
+  serviceUnavailable,
+  validationError,
+} from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { httpErrorFromResponse, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
-import type { AirQualityResult, RawAirNowRecord } from './types.js';
+import type {
+  AirNowLocation,
+  AirQualityArea,
+  AirQualityLookup,
+  RawForecast,
+  RawObservation,
+} from './types.js';
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
-/** Normalize raw AirNow records (grouped by reporting area) into AirQualityResult[]. */
-function normalizeRecords(records: RawAirNowRecord[]): AirQualityResult[] {
-  // Group by reporting area + date/hour
-  const grouped = new Map<string, AirQualityResult>();
+/** The six AirNow AQI descriptors (lowercased) and their category numbers. */
+const AQI_CATEGORY_NUMBERS = new Map([
+  ['good', 1],
+  ['moderate', 2],
+  ['unhealthy for sensitive groups', 3],
+  ['unhealthy', 4],
+  ['very unhealthy', 5],
+  ['hazardous', 6],
+]);
 
-  for (const r of records) {
-    const key = `${r.ReportingArea ?? ''}|${r.DateObserved ?? ''}|${r.HourObserved ?? ''}`;
-    let entry = grouped.get(key);
-    if (!entry) {
-      entry = {
-        ...(r.ReportingArea && { reportingArea: r.ReportingArea.trim() }),
-        ...(r.StateCode && { stateCode: r.StateCode }),
-        ...(r.Latitude !== undefined && { latitude: r.Latitude }),
-        ...(r.Longitude !== undefined && { longitude: r.Longitude }),
-        ...(r.DateObserved && { dateObserved: r.DateObserved.trim() }),
-        ...(r.HourObserved !== undefined && { hourObserved: r.HourObserved }),
-        ...(r.LocalTimeZone && { localTimeZone: r.LocalTimeZone }),
+/** A parsed AirNow body: an array of records, or AirNow's own explanation of why there are none. */
+type AirNowBody = { rows: unknown[] } | { noDataMessage: string };
+
+/** The message(s) of an `{"WebServiceError":[{"Message":…}]}` body; undefined for any other shape. */
+function webServiceErrorMessage(body: unknown): string | undefined {
+  if (typeof body !== 'object' || body === null || !('WebServiceError' in body)) return;
+  const entries = body.WebServiceError;
+  if (!Array.isArray(entries)) return;
+  const messages = entries.flatMap((entry) =>
+    typeof entry?.Message === 'string' && entry.Message.trim() !== '' ? [entry.Message] : [],
+  );
+  return messages.length > 0 ? messages.join(' ') : undefined;
+}
+
+/** Classify a 200 body. Anything but a record array or a WebServiceError message fails loudly. */
+function parseBody(text: string): AirNowBody {
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch (cause) {
+    throw serializationError('AirNow returned a response that is not JSON.', undefined, { cause });
+  }
+  if (Array.isArray(body)) return { rows: body };
+  const noDataMessage = webServiceErrorMessage(body);
+  if (noDataMessage !== undefined) return { noDataMessage };
+  throw serializationError(
+    'AirNow returned an unrecognized response: expected an array of records or a WebServiceError message.',
+  );
+}
+
+/** An AQI value, or undefined when upstream sent none (forecasts use -1 for category-only). */
+function validAqi(value: number | undefined): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/** Group observation records by reporting area and observed hour; one reading per pollutant. */
+function normalizeObservations(rows: RawObservation[]): AirQualityArea[] {
+  const areas = new Map<string, AirQualityArea>();
+  for (const r of rows) {
+    const aqi = validAqi(r.nowcastAQI);
+    if (!r.parameterName || (aqi === undefined && !r.aqiCategoryName)) continue;
+    const key = [r.reportingAreaName, r.dateObserved, r.hourObserved, r.localTimeZone].join('|');
+    let area = areas.get(key);
+    if (!area) {
+      area = {
+        ...(r.reportingAreaName && { reportingArea: r.reportingAreaName }),
+        ...(r.dateObserved && { dateObserved: r.dateObserved }),
+        ...(r.hourObserved && { hourObserved: r.hourObserved }),
+        ...(r.localTimeZone && { localTimeZone: r.localTimeZone }),
         readings: [],
       };
-      grouped.set(key, entry);
+      areas.set(key, area);
     }
-    if (r.ParameterName && r.AQI !== undefined) {
-      entry.readings.push({
-        parameterName: r.ParameterName,
-        aqi: r.AQI,
-        ...(r.Category?.Number !== undefined && { categoryNumber: r.Category.Number }),
-        ...(r.Category?.Name && { categoryName: r.Category.Name }),
-      });
-    }
+    const categoryNumber = r.aqiCategoryName
+      ? AQI_CATEGORY_NUMBERS.get(r.aqiCategoryName.trim().toLowerCase())
+      : undefined;
+    area.readings.push({
+      parameterName: r.parameterName,
+      ...(aqi !== undefined && { aqi }),
+      ...(r.aqiCategoryName && { categoryName: r.aqiCategoryName }),
+      ...(categoryNumber !== undefined && { categoryNumber }),
+      ...(r.siteName && { siteName: r.siteName }),
+      ...(r.siteID && { siteID: r.siteID }),
+      ...(r.reportingAgency && { reportingAgency: r.reportingAgency }),
+    });
   }
+  return [...areas.values()];
+}
 
-  return Array.from(grouped.values());
+/** Group forecast records by reporting area; one reading per pollutant per valid date. */
+function normalizeForecasts(rows: RawForecast[]): AirQualityArea[] {
+  const areas = new Map<string, AirQualityArea>();
+  for (const r of rows) {
+    const aqi = validAqi(r.aqi);
+    if (
+      !r.parameterName ||
+      (aqi === undefined && !r.categoryName && r.categoryNumber === undefined)
+    ) {
+      continue;
+    }
+    const key = r.reportingAreaCode ?? r.reportingArea ?? '';
+    let area = areas.get(key);
+    if (!area) {
+      area = {
+        ...(r.reportingArea && { reportingArea: r.reportingArea }),
+        ...(r.reportingAreaCode && { reportingAreaCode: r.reportingAreaCode }),
+        ...(r.stateCode && { stateCode: r.stateCode }),
+        readings: [],
+      };
+      areas.set(key, area);
+    }
+    // AirNow repeats the area's discussion on every row; keep it once, verbatim.
+    if (!area.discussion && r.discussion) area.discussion = r.discussion;
+    area.readings.push({
+      parameterName: r.parameterName,
+      ...(aqi !== undefined && { aqi }),
+      ...(r.categoryNumber !== undefined && { categoryNumber: r.categoryNumber }),
+      ...(r.categoryName && { categoryName: r.categoryName }),
+      ...(r.dateIssue && { dateIssue: r.dateIssue }),
+      ...(r.dateValid && { dateValid: r.dateValid }),
+      ...(r.forecastAgency && { forecastAgency: r.forecastAgency }),
+      ...(typeof r.actionDay === 'boolean' && { actionDay: r.actionDay }),
+    });
+  }
+  return [...areas.values()];
 }
 
 export class AirNowService {
@@ -66,21 +160,34 @@ export class AirNowService {
     this.apiKey = serverConfig.airNowApiKey;
   }
 
-  private buildUrl(path: string, params: Record<string, string | number | undefined>): string {
+  /** Current hourly observations: per pollutant, the closest monitor within AirNow's 50-mile boundary. */
+  async getCurrent(location: AirNowLocation, ctx: Context): Promise<AirQualityLookup> {
+    const body = await this.fetchBody('observation', location, ctx);
+    return 'noDataMessage' in body
+      ? { areas: [], noDataMessage: body.noDataMessage }
+      : { areas: normalizeObservations(body.rows as RawObservation[]) };
+  }
+
+  /** Every forecast day the location's reporting area has issued. */
+  async getForecast(location: AirNowLocation, ctx: Context): Promise<AirQualityLookup> {
+    const body = await this.fetchBody('forecast', location, ctx);
+    return 'noDataMessage' in body
+      ? { areas: [], noDataMessage: body.noDataMessage }
+      : { areas: normalizeForecasts(body.rows as RawForecast[]) };
+  }
+
+  private buildUrl(path: string, params: Record<string, string | number>): string {
     const url = new URL(`${this.baseUrl}/${path}`);
     url.searchParams.set('format', 'application/json');
     url.searchParams.set('API_KEY', this.apiKey);
     for (const [key, val] of Object.entries(params)) {
-      if (val !== undefined && val !== '') {
-        url.searchParams.set(key, String(val));
-      }
+      url.searchParams.set(key, String(val));
     }
     return url.toString();
   }
 
-  private cacheKey(kind: string, params: Record<string, string | number | undefined>): string {
+  private cacheKey(kind: string, params: Record<string, string | number>): string {
     const stable = Object.entries(params)
-      .filter(([, v]) => v !== undefined)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([k, v]) => `${k}-${String(v).replace(/[^a-zA-Z0-9_.\-/]/g, '_')}`)
       .join('_');
@@ -89,21 +196,45 @@ export class AirNowService {
     return `airnow/${safeKind}/${stable}`;
   }
 
-  private async fetchWithCache(
-    url: string,
-    cacheKey: string,
+  private async fetchBody(
+    service: 'observation' | 'forecast',
+    location: AirNowLocation,
     ctx: Context,
-  ): Promise<RawAirNowRecord[]> {
-    // Try cache first
-    const cached = await ctx.state.get<{ data: RawAirNowRecord[]; expiresAt: number }>(cacheKey);
+  ): Promise<AirNowBody> {
+    const params =
+      location.kind === 'zip'
+        ? { zipCode: location.zipCode }
+        : { latitude: location.latitude, longitude: location.longitude };
+    const cacheKey = this.cacheKey(`${service}:${location.kind}`, params);
+
+    const cached = await ctx.state.get<{ body: AirNowBody; expiresAt: number }>(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
       ctx.log.debug('AirNow cache hit', { cacheKey });
-      return cached.data;
+      return cached.body;
     }
 
-    const data = await withRetry(
+    const path =
+      service === 'observation' ? 'observation/current/ziplatlong/' : 'forecast/current/';
+    const url = this.buildUrl(path, params);
+    ctx.log.debug('AirNow request', { service, ...params });
+
+    const body = await withRetry(
       async () => {
         const response = await fetch(url, { signal: ctx.signal });
+        // A ZIP is the only caller-supplied input on a ZIP request, so a 400 rejects it.
+        if (response.status === 400 && location.kind === 'zip') {
+          const upstream = await response.text();
+          let detail: string | undefined;
+          try {
+            detail = webServiceErrorMessage(JSON.parse(upstream));
+          } catch {
+            // Non-JSON 400 body: report the status alone.
+          }
+          throw validationError(
+            `AirNow rejected zip_code "${location.zipCode}": ${detail ?? 'HTTP 400'}.`,
+            { reason: 'invalid_zip_code', zipCode: location.zipCode },
+          );
+        }
         if (!response.ok) {
           throw await httpErrorFromResponse(response, { service: 'AirNow' });
         }
@@ -113,8 +244,7 @@ export class AirNowService {
             'AirNow API returned HTML instead of JSON — likely rate-limited.',
           );
         }
-        const parsed = JSON.parse(text) as unknown;
-        return Array.isArray(parsed) ? (parsed as RawAirNowRecord[]) : [];
+        return parseBody(text);
       },
       {
         operation: 'AirNowService.fetch',
@@ -123,94 +253,8 @@ export class AirNowService {
       },
     );
 
-    // Store in cache
-    await ctx.state.set(cacheKey, { data, expiresAt: Date.now() + CACHE_TTL_MS });
-    return data;
-  }
-
-  /** Get current air quality by ZIP code. */
-  async getCurrentByZip(
-    params: {
-      zipCode: string;
-      distanceMiles?: number;
-    },
-    ctx: Context,
-  ): Promise<AirQualityResult[]> {
-    const qparams = { zipCode: params.zipCode, distance: params.distanceMiles ?? 25 };
-    const url = this.buildUrl('observation/zipCode/current/', qparams);
-    const ck = this.cacheKey('current:zip', qparams);
-    ctx.log.debug('AirNow current by ZIP', { zipCode: params.zipCode });
-    const records = await this.fetchWithCache(url, ck, ctx);
-    return normalizeRecords(records);
-  }
-
-  /** Get current air quality by lat/lng. */
-  async getCurrentByLatLng(
-    params: {
-      latitude: number;
-      longitude: number;
-      distanceMiles?: number;
-    },
-    ctx: Context,
-  ): Promise<AirQualityResult[]> {
-    const qparams = {
-      latitude: params.latitude,
-      longitude: params.longitude,
-      distance: params.distanceMiles ?? 25,
-    };
-    const url = this.buildUrl('observation/latLong/current/', qparams);
-    const ck = this.cacheKey('current:latlng', qparams);
-    ctx.log.debug('AirNow current by lat/lng', { lat: params.latitude, lng: params.longitude });
-    const records = await this.fetchWithCache(url, ck, ctx);
-    return normalizeRecords(records);
-  }
-
-  /** Get air quality forecast by ZIP code. */
-  async getForecastByZip(
-    params: {
-      zipCode: string;
-      date: string;
-      distanceMiles?: number;
-    },
-    ctx: Context,
-  ): Promise<AirQualityResult[]> {
-    const qparams = {
-      zipCode: params.zipCode,
-      date: params.date,
-      distance: params.distanceMiles ?? 25,
-    };
-    const url = this.buildUrl('forecast/zipCode/', qparams);
-    const ck = this.cacheKey('forecast:zip', qparams);
-    ctx.log.debug('AirNow forecast by ZIP', { zipCode: params.zipCode, date: params.date });
-    const records = await this.fetchWithCache(url, ck, ctx);
-    return normalizeRecords(records);
-  }
-
-  /** Get air quality forecast by lat/lng. */
-  async getForecastByLatLng(
-    params: {
-      latitude: number;
-      longitude: number;
-      date: string;
-      distanceMiles?: number;
-    },
-    ctx: Context,
-  ): Promise<AirQualityResult[]> {
-    const qparams = {
-      latitude: params.latitude,
-      longitude: params.longitude,
-      date: params.date,
-      distance: params.distanceMiles ?? 25,
-    };
-    const url = this.buildUrl('forecast/latLong/', qparams);
-    const ck = this.cacheKey('forecast:latlng', qparams);
-    ctx.log.debug('AirNow forecast by lat/lng', {
-      lat: params.latitude,
-      lng: params.longitude,
-      date: params.date,
-    });
-    const records = await this.fetchWithCache(url, ck, ctx);
-    return normalizeRecords(records);
+    await ctx.state.set(cacheKey, { body, expiresAt: Date.now() + CACHE_TTL_MS });
+    return body;
   }
 }
 

@@ -22,8 +22,8 @@ describe('EPA domain recovery contracts', () => {
     { tool: getAirQualityTool, input: {}, reason: 'no_location' },
     {
       tool: getAirQualityTool,
-      input: { zip_code: '98101', mode: 'forecast' },
-      reason: 'forecast_date_required',
+      input: { zip_code: '98101', forecast_date: '2026-10-08' },
+      reason: 'forecast_date_needs_forecast_mode',
     },
     {
       tool: getEjscreenTool,
