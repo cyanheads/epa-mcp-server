@@ -10,7 +10,7 @@ import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EjscreenService, normalizeEjscreen } from '@/services/ejscreen/ejscreen-service.js';
 import type { RawEjamRow } from '@/services/ejscreen/types.js';
 
@@ -255,5 +255,90 @@ describe('EjscreenService.getIndicators', () => {
     });
     // Deterministic rejection: no retry.
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('regression #42: one deadline per EJAM call', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /** A fetch that never answers; it rejects with the abort reason once its signal fires. */
+  const stubHungFetch = () =>
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal!.reason));
+        }),
+    );
+
+  /** Records how `call` settles, without awaiting it. */
+  function track(call: Promise<unknown>) {
+    const state: { settled: boolean; error?: unknown } = { settled: false };
+    call.then(
+      () => Object.assign(state, { settled: true }),
+      (error: unknown) => Object.assign(state, { settled: true, error }),
+    );
+    return state;
+  }
+
+  it('a hung EJAM request ends as a Timeout at 55 s after one request', async () => {
+    stubHungFetch();
+
+    const call = track(makeService().getIndicators(baltimoreParams, createMockContext()));
+    await vi.advanceTimersByTimeAsync(54_999);
+    expect(call.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(call.error).toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      message: 'EJAM request exceeded its 55000ms retry deadline after 1 attempt.',
+      data: { reason: 'retry_deadline_exceeded', deadlineMs: 55_000 },
+    });
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds the retry ladder: slow 503s stop at 55 s instead of running four attempts', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      (_url, init) =>
+        new Promise<Response>((resolve, reject) => {
+          const timer = setTimeout(() => resolve(new Response('busy', { status: 503 })), 20_000);
+          init?.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            reject(init.signal!.reason);
+          });
+        }),
+    );
+
+    const call = track(makeService().getIndicators(baltimoreParams, createMockContext()));
+    await vi.advanceTimersByTimeAsync(55_000);
+
+    expect(call.error).toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      data: { reason: 'retry_deadline_exceeded' },
+    });
+    expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('caller cancellation during a hung EJAM request surfaces as the abort, not a Timeout', async () => {
+    stubHungFetch();
+    const controller = new AbortController();
+
+    const call = track(
+      makeService().getIndicators(
+        baltimoreParams,
+        createMockContext({ signal: controller.signal }),
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    controller.abort(new DOMException('Client cancelled', 'AbortError'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(call.error).toMatchObject({ name: 'AbortError', message: 'Client cancelled' });
+    expect(call.error).not.toMatchObject({ code: JsonRpcErrorCode.Timeout });
   });
 });

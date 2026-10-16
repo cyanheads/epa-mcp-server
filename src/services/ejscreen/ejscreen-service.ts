@@ -24,6 +24,12 @@ import type {
 export const EJSCREEN_DATA_SOURCE =
   'EJScreen v2.2 (2022 data) via the community-maintained EJAM API (api.ejanalysis.com, Public Environmental Data Partners), which rehosts EJScreen after EPA discontinued public access in 2025.';
 
+/**
+ * Budget for one EJAM lookup — every attempt and backoff — kept under the 60 s default request
+ * timeout of MCP SDK clients with room for transport.
+ */
+const REQUEST_DEADLINE_MS = 55_000;
+
 /** The 13 EJScreen environmental indicators, in report order, with display units. */
 const ENV_INDICATORS: ReadonlyArray<{ code: string; label: string; unit: string }> = [
   { code: 'pm', label: 'PM2.5', unit: 'µg/m³' },
@@ -233,7 +239,7 @@ export class EjscreenService {
   ): Promise<RawEjamRow> {
     const url = `${this.baseUrl}/data`;
     return withRetry(
-      async () => {
+      async ({ signal }) => {
         const response = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -241,7 +247,7 @@ export class EjscreenService {
             sites: [{ lat: params.latitude, lon: params.longitude }],
             buffer: params.bufferMiles,
           }),
-          signal: ctx.signal,
+          signal,
         });
         if (!response.ok) {
           // Bad input (e.g. invalid coordinates) returns HTTP 400 with {"error":[...]}. This is
@@ -270,9 +276,10 @@ export class EjscreenService {
         return first as RawEjamRow;
       },
       {
-        operation: 'EjscreenService.fetchData',
+        operation: 'EJAM request',
         baseDelayMs: 1000,
         signal: ctx.signal,
+        deadlineMs: REQUEST_DEADLINE_MS,
       },
     );
   }

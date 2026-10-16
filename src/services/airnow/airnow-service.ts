@@ -26,6 +26,12 @@ import type {
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
+/**
+ * Budget for one AirNow lookup — every attempt and backoff — kept under the 60 s default request
+ * timeout of MCP SDK clients with room for transport.
+ */
+const REQUEST_DEADLINE_MS = 55_000;
+
 /** The six AirNow AQI descriptors (lowercased) and their category numbers. */
 const AQI_CATEGORY_NUMBERS = new Map([
   ['good', 1],
@@ -219,8 +225,8 @@ export class AirNowService {
     ctx.log.debug('AirNow request', { service, ...params });
 
     const body = await withRetry(
-      async () => {
-        const response = await fetch(url, { signal: ctx.signal });
+      async ({ signal }) => {
+        const response = await fetch(url, { signal });
         // A ZIP is the only caller-supplied input on a ZIP request, so a 400 rejects it.
         if (response.status === 400 && location.kind === 'zip') {
           const upstream = await response.text();
@@ -247,9 +253,10 @@ export class AirNowService {
         return parseBody(text);
       },
       {
-        operation: 'AirNowService.fetch',
+        operation: 'AirNow request',
         baseDelayMs: 2000,
         signal: ctx.signal,
+        deadlineMs: REQUEST_DEADLINE_MS,
       },
     );
 

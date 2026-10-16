@@ -679,3 +679,88 @@ describe('AirNow 2026 forecasts (forecast/current/)', () => {
     expect(textOf(result)).toContain(upstream);
   });
 });
+
+describe('regression #42: one deadline per AirNow call', () => {
+  /** Serve every AirNow request with a response that never arrives until its signal aborts. */
+  const serveHung = () =>
+    http.route({
+      match: isAirNow,
+      respond: (req) =>
+        new Promise<Response>((_resolve, reject) => {
+          req.signal.addEventListener('abort', () => reject(req.signal.reason));
+        }),
+    });
+
+  it('a hung AirNow request ends as a server-side Timeout at 55 s on both surfaces', async () => {
+    vi.useFakeTimers();
+    serveHung();
+    let result: Awaited<ReturnType<typeof runToolContract>> | undefined;
+    void runToolContract(getAirQualityTool, { zip_code: '98101' }).then((r) => {
+      result = r;
+    });
+
+    await vi.advanceTimersByTimeAsync(54_999);
+    expect(result).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(result?.isError).toBe(true);
+    expect(result?.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.Timeout, data: { reason: 'retry_deadline_exceeded' } },
+    });
+    expect(textOf(result!)).toContain('AirNow request exceeded its 55000ms retry deadline');
+    expect(http.calls).toHaveLength(1);
+    expect(JSON.stringify(result)).not.toContain('synthetic-secret');
+  });
+
+  it('bounds the retry ladder: slow 503s stop at 55 s instead of running four attempts', async () => {
+    vi.useFakeTimers();
+    http.route({
+      match: isAirNow,
+      respond: (req) =>
+        new Promise<Response>((resolve, reject) => {
+          const timer = setTimeout(() => resolve(new Response('busy', { status: 503 })), 20_000);
+          req.signal.addEventListener('abort', () => {
+            clearTimeout(timer);
+            reject(req.signal.reason);
+          });
+        }),
+    });
+    const pending = runToolContract(getAirQualityTool, { zip_code: '98101' });
+    await vi.advanceTimersByTimeAsync(55_000);
+    const result = await pending;
+
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.Timeout, data: { reason: 'retry_deadline_exceeded' } },
+    });
+    // 20 s + ~2 s backoff + 20 s + ~4 s backoff puts the third attempt in flight at the deadline.
+    expect(http.calls).toHaveLength(3);
+  });
+
+  it('caller cancellation during a hung AirNow request surfaces as the abort, not a Timeout', async () => {
+    vi.useFakeTimers();
+    serveHung();
+    const controller = new AbortController();
+    const service = new AirNowService({} as AppConfig, {} as StorageService);
+    let outcome: unknown;
+    service
+      .getForecast(
+        { kind: 'zip', zipCode: '98101' },
+        createMockContext({ signal: controller.signal, tenantId: 'abort-test' }),
+      )
+      .then(
+        () => {
+          outcome = 'resolved';
+        },
+        (error: unknown) => {
+          outcome = error;
+        },
+      );
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    controller.abort(new DOMException('Client cancelled', 'AbortError'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(outcome).toMatchObject({ name: 'AbortError', message: 'Client cancelled' });
+    expect(http.calls).toHaveLength(1);
+  });
+});
