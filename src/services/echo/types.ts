@@ -3,37 +3,58 @@
  * @module services/echo/types
  */
 
-/** Raw ECHO get_facility_info response facility record. Fields may be absent or empty string. */
+/**
+ * Raw ECHO facility row from echo_rest_services.get_facility_info / get_qid. Which columns a
+ * row carries depends on the request's `qcolumns`; ECHO reports a missing value as null.
+ */
 export interface RawEchoFacility {
-  AIRFlag?: string;
-  AIRPenalties?: string;
-  CWAFlag?: string;
-  CWAPenalties?: string;
-  FacCity?: string;
-  FacComplianceStatus?: string;
-  FacCounty?: string;
-  FacFIPSCode?: string;
-  FacLat?: string;
-  FacLon?: string;
-  FacName?: string;
-  FacState?: string;
-  FacStreet?: string;
-  FacZip?: string;
-  InspectionCount?: string;
-  RCRFlag?: string;
-  RCRPenalties?: string;
-  RegistryID?: string;
-  SDWAFlag?: string;
-  TRIFlag?: string;
-  TRIReleasesTransfers?: string;
-  [key: string]: string | undefined;
+  /** "Y" when the facility has an ICIS-Air record. */
+  AIRFlag?: string | null;
+  FacCity?: string | null;
+  FacComplianceStatus?: string | null;
+  FacCounty?: string | null;
+  /** County FIPS ECHO derives from the coordinates; its default row carries this, not FacFIPSCode. */
+  FacDerivedStctyFIPS?: string | null;
+  FacFIPSCode?: string | null;
+  /** Inspections over the last five years, across programs. */
+  FacInspectionCount?: string | null;
+  FacLat?: string | null;
+  FacLong?: string | null;
+  FacName?: string | null;
+  /** Quarters with noncompliance in the last three years, across programs. */
+  FacQtrsWithNC?: string | null;
+  FacState?: string | null;
+  FacStreet?: string | null;
+  /** Penalties from formal actions over the last five years, dollar-formatted ("$5,000"). */
+  FacTotalPenalties?: string | null;
+  FacZip?: string | null;
+  /** "Y" when the facility has an ICIS-NPDES record. */
+  NPDESFlag?: string | null;
+  /** "Y" when the facility has an RCRAInfo record. */
+  RCRAFlag?: string | null;
+  RegistryID?: string | null;
+  /** "Y" when the facility has an SDWIS record. */
+  SDWISFlag?: string | null;
+  /** Space-separated TRI facility IDs ("77506CLNSC1423H 7750WVNKCR1431P"); null when the facility has none. */
+  TRIIDs?: string | null;
+  /** TRI releases and transfers in pounds for ECHO's latest TRI year. */
+  TRIReleasesTransfers?: string | null;
+  [key: string]: string | null | undefined;
 }
 
-/** Raw ECHO get_facility_info top-level response envelope. */
+/** One parameter ECHO reports having applied, from a search response's `QueryParameters`. */
+export interface RawEchoQueryParameter {
+  QP: string;
+  QV?: string | null;
+}
+
+/** Raw ECHO get_facility_info / get_qid top-level response envelope. */
 export interface RawEchoFacilityResponse {
   Results?: {
     Facilities?: RawEchoFacility[];
     QueryID?: string;
+    /** Parameters ECHO applied; one it does not recognize is left out. */
+    QueryParameters?: RawEchoQueryParameter[];
     QueryRows?: string;
     PageNo?: string;
     TotalPagesAvailable?: string;
@@ -41,61 +62,80 @@ export interface RawEchoFacilityResponse {
   };
 }
 
-/** Raw ECHO DFR compliance summary response envelope. */
+/** One statute's row of get_dfr `EnforcementComplianceSummaries.Summaries[]`. Counts are strings. */
 export interface RawEchoDfrComplianceSummary {
-  Results?: {
-    ComplianceSummary?: {
-      MediaStatusCode?: string;
-      MediaStatusDesc?: string;
-      QtrsInViol?: string | number;
-      QtrsInNC?: string | number;
-    };
+  CurrentStatus?: string | null;
+  FormalActions?: string | null;
+  InformalActions?: string | null;
+  Inspections?: string | null;
+  LastInspection?: string | null;
+  QtrsInNC?: string | null;
+  QtrsInSNC?: string | null;
+  Statute?: string;
+  /** Dollar-formatted, e.g. "$1,750". */
+  TotalPenalties?: string | null;
+}
+
+/** One statute's reporting windows from get_dfr `EnforcementComplianceSummaries.ProgramDates[]`. */
+export interface RawEchoDfrProgramDates {
+  EndDate?: string;
+  Program?: string;
+  StartDate3Yr?: string;
+  StartDate5Yr?: string;
+}
+
+/** One compliance monitoring record from get_dfr `ComplianceHistory.Inspection[]`. */
+export interface RawEchoDfrInspection {
+  /** "Inspection/Evaluation", "Compliance Investigation", "Information Request", …; empty for RCRA and SDWA. */
+  ActivityType?: string | null;
+  /** MM/DD/YYYY. */
+  Date?: string | null;
+  EPASystem?: string;
+  Finding?: string | null;
+  InspectionType?: string | null;
+  LeadAgency?: string | null;
+  SourceID?: string;
+  Statute?: string;
+}
+
+/** One formal enforcement action from get_dfr `FormalActions.Action[]`. */
+export interface RawEchoDfrFormalAction {
+  /** MM/DD/YYYY. */
+  ActionDate?: string | null;
+  ActionType?: string | null;
+  LeadAgency?: string | null;
+  /** Dollar-formatted, e.g. "$1,000"; null when none was assessed. */
+  PenaltyAmount?: string | null;
+  SourceID?: string;
+  Statute?: string;
+}
+
+/** One enforcement case from get_dfr `CaseFormalActions.Action[]`. */
+export interface RawEchoDfrCaseAction {
+  /** Null for RCRAInfo actions. */
+  CaseID?: string | null;
+  /** MM/DD/YYYY; "01/01/0001" when ECHO has none. */
+  IssueDate?: string | null;
+  Settlements?: {
+    Settlement?: Array<{
+      /** Dollar-formatted, e.g. "$1,000". */
+      FederalPenalty?: string | null;
+      SettlementDate?: string | null;
+      /** Dollar-formatted, e.g. "$25,000". */
+      StateLocalPenalty?: string | null;
+    }>;
   };
+  /** Prefixed with the program, e.g. "AIR/WAPSC0005303321147". */
+  SourceID?: string;
+  StatuteCode?: string;
 }
 
-/** Raw inspection/enforcement record from ECHO DFR. */
-export interface RawEchoInspection {
-  ActivityDate?: string;
-  ActivityType?: string;
-  ActivityTypeDescription?: string;
-}
-
-/** Raw formal action/penalty record from ECHO DFR. */
-export interface RawEchoFormalAction {
-  CaseID?: string;
-  FormalActionType?: string;
-  PenaltyAssessed?: string | number;
-  SettlementDate?: string;
-}
-
-/** Raw ECHO DFR inspection and enforcement response. */
-export interface RawEchoDfrInspectionEnforcement {
-  Results?: {
-    Inspections?: RawEchoInspection[];
-    FormalActions?: RawEchoFormalAction[];
-  };
-}
-
-/** Raw ECHO DFR air compliance record. */
-export interface RawEchoDfrAir {
-  Results?: {
-    AirComplianceSummary?: {
-      ProgramID?: string;
-      Status?: string;
-      StatusDate?: string;
-    };
-  };
-}
-
-/** Raw ECHO DFR water compliance record. */
-export interface RawEchoDfrWater {
-  Results?: {
-    WaterCompliance?: {
-      ProgramID?: string;
-      Status?: string;
-      PermitID?: string;
-    };
-  };
+/** One annual TRI total from get_dfr `TRIHistory.Sources[].ReleaseYear[]`. */
+export interface RawEchoDfrTriYear {
+  SourceID?: string;
+  /** Comma-formatted pounds, e.g. "75,223". */
+  TotalReleasesTransfers?: string | null;
+  Year?: string;
 }
 
 /** A single permit/program record from dfr_rest_services.get_dfr Results.Permits[]. */
@@ -103,8 +143,9 @@ export interface RawEchoDfrPermit {
   EPARegion?: string;
   EPASystem?: string;
   FacilityCity?: string;
-  FacilityCountyName?: string;
-  FacilityFipsCode?: string;
+  /** "King County"; null on the FRS entry, set on program entries. */
+  FacilityCountyName?: string | null;
+  FacilityFipsCode?: string | null;
   FacilityName?: string;
   FacilityState?: string;
   FacilityStatus?: string | null;
@@ -129,15 +170,15 @@ export interface RawEchoDfrFullResponse {
       Latitude83?: string;
       Longitude83?: string;
     };
-    /** Compliance summary (same as dfr_rest_services.get_compliance_summary.Results.ComplianceSummary). */
-    ComplianceSummary?: {
-      Source?: Array<{
-        Statute?: string;
-        SourceID?: string;
-        CurrentSNC?: string;
-        QtrsInNC?: string;
-      }>;
+    /** Per-statute status, inspections, and enforcement over ECHO's 3- and 5-year windows. */
+    EnforcementComplianceSummaries?: {
+      ProgramDates?: RawEchoDfrProgramDates[];
+      Summaries?: RawEchoDfrComplianceSummary[];
     };
+    ComplianceHistory?: { Inspection?: RawEchoDfrInspection[] };
+    FormalActions?: { Action?: RawEchoDfrFormalAction[] };
+    CaseFormalActions?: { Action?: RawEchoDfrCaseAction[] };
+    TRIHistory?: { Sources?: Array<{ ReleaseYear?: RawEchoDfrTriYear[] }> };
     Message?: string;
   };
 }
@@ -175,6 +216,11 @@ export interface RawEchoCaseInfoResponse {
   Results?: {
     /** Opaque query ID to pass to get_qid for the actual case records. */
     QueryID?: string;
+    /**
+     * Parameters ECHO applied, plus defaults it was not sent (p_name_type, mapset); one it does
+     * not recognize is left out.
+     */
+    QueryParameters?: RawEchoQueryParameter[];
     /** Total rows matched across all pages. */
     QueryRows?: string;
     Message?: string;
@@ -231,7 +277,26 @@ export interface EpaCase {
   state?: string;
 }
 
-/** Full facility compliance profile aggregated from multiple DFR endpoints. */
+/** One statute's ECHO enforcement and compliance summary. */
+export interface EpaProgramCompliance {
+  currentStatus?: string;
+  fiveYearPeriodStart?: string;
+  formalActions?: number;
+  informalActions?: number;
+  inspections?: number;
+  lastInspectionDate?: string;
+  periodEnd?: string;
+  quartersInNoncompliance?: number;
+  quartersInSignificantNoncompliance?: number;
+  statute: string;
+  threeYearPeriodStart?: string;
+  totalPenaltiesInDollars?: number;
+}
+
+/**
+ * Full facility compliance profile, built from one dfr_rest_services.get_dfr response plus a
+ * best-effort echo_rest_services.get_facility_info?p_frs row for the facility-level status.
+ */
 export interface EpaFacilityProfile {
   airCompliance?: {
     programId?: string;
@@ -248,19 +313,30 @@ export interface EpaFacilityProfile {
   county?: string;
   fipsCode?: string;
   formalActions: Array<{
-    caseId?: string;
-    settlementDate?: string;
-    penaltyAssessedInDollars?: number;
+    actionDate?: string;
     actionType?: string;
+    caseId?: string;
+    leadAgency?: string;
+    penaltyAssessedInDollars?: number;
+    settlementDate?: string;
+    sourceId?: string;
+    statute?: string;
   }>;
   inspections: Array<{
-    activityType?: string;
     activityDate?: string;
+    activityType?: string;
+    category?: string;
     description?: string;
+    leadAgency?: string;
+    sourceId?: string;
+    statute?: string;
   }>;
+  /** Records in the 5-year history; `inspections` holds the newest of them. */
+  inspectionsTotal: number;
   latitude?: number;
   longitude?: number;
   name: string;
+  programCompliance: EpaProgramCompliance[];
   programs: {
     air: boolean;
     water: boolean;
@@ -271,7 +347,10 @@ export interface EpaFacilityProfile {
   registryId: string;
   state?: string;
   street?: string;
+  /** TRI facility IDs, most recently reported first. */
+  triFacilityIds: string[];
   triReleasesTransfersInLbs?: number;
+  triReleasesTransfersYear?: number;
   waterCompliance?: {
     programId?: string;
     status?: string;

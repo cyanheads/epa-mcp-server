@@ -12,13 +12,18 @@ import { getEchoService } from '@/services/echo/echo-service.js';
 export const searchFacilitiesTool = tool('epa_search_facilities', {
   title: 'Search EPA Facilities',
   description:
-    'Search EPA-regulated facilities by location, industry program, or compliance status across all environmental programs (CAA, CWA, RCRA, TRI, SDWA). Returns facility name, EPA Registry ID, coordinates, county FIPS code, per-program registration flags, inspection counts, penalty totals, and TRI release totals. Registry IDs returned here feed epa_get_facility. Supports proximity search via latitude + longitude + radius_miles. At least one geographic filter (zip_code, state, city, or a complete latitude+longitude+radius_miles triple) is required — unscoped searches time out.',
+    'Search EPA-regulated facilities by location, environmental program, or compliance status across CAA, CWA, RCRA, TRI, and SDWA. Returns facility name, EPA Registry ID, coordinates, county FIPS code, per-program registration flags, five-year inspection and penalty totals, and TRI release totals. Registry IDs returned here feed epa_get_facility. Supports proximity search via latitude + longitude + radius_miles. At least one geographic filter (zip_code, state, city, or a complete latitude+longitude+radius_miles triple) is required — unscoped searches time out.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
     zip_code: z.string().optional().describe('5-digit ZIP code to search within'),
     state: z.string().optional().describe('2-letter US state abbreviation (e.g. "WA", "CA")'),
-    city: z.string().optional().describe('City name. Pair with state for best results.'),
+    city: z
+      .string()
+      .optional()
+      .describe(
+        'City name, case-insensitive; matches cities that begin with it ("TACOMA", or "SEAT" for SEATTLE and SEATAC). Pair with state.',
+      ),
     latitude: z
       .number()
       .min(-90)
@@ -43,17 +48,23 @@ export const searchFacilitiesTool = tool('epa_search_facilities', {
       .describe(
         'Search radius in miles around the given latitude/longitude (max 100). Requires latitude and longitude.',
       ),
-    active_only: z.boolean().optional().describe('When true, return only active facilities'),
+    active_only: z
+      .boolean()
+      .optional()
+      .describe('When true, return only facilities with an active permit'),
     programs: z
       .array(z.enum(['CAA', 'CWA', 'RCRA', 'TRI', 'SDWA']))
+      .max(1)
       .optional()
       .describe(
-        'Restrict results to facilities registered in these environmental programs. CAA=air, CWA=water, RCRA=waste, TRI=toxic releases, SDWA=drinking water.',
+        'Restrict results to facilities registered in one environmental program — ECHO filters on a single program per search, so pass one value. CAA=air, CWA=water, RCRA=hazardous waste, TRI=toxic releases, SDWA=drinking water.',
       ),
     has_violation: z
       .boolean()
       .optional()
-      .describe('When true, return only facilities with recent significant violations'),
+      .describe(
+        'When true, return only facilities with at least one program in significant noncompliance (complianceStatus "Significant Violation")',
+      ),
     limit: z
       .number()
       .int()
@@ -89,26 +100,41 @@ export const searchFacilitiesTool = tool('epa_search_facilities', {
               .describe('Overall compliance status text from ECHO'),
             programs: z
               .object({
-                air: z.boolean().describe('Registered under Clean Air Act (CAA)'),
-                water: z.boolean().describe('Registered under Clean Water Act (CWA)'),
-                rcra: z
+                air: z
                   .boolean()
-                  .describe('Registered under Resource Conservation and Recovery Act (RCRA)'),
-                tri: z.boolean().describe('Participates in Toxic Release Inventory (TRI)'),
-                sdwa: z.boolean().describe('Regulated under Safe Drinking Water Act (SDWA)'),
+                  .describe('Has a Clean Air Act (CAA) stationary-source record in ICIS-Air'),
+                water: z
+                  .boolean()
+                  .describe('Has a Clean Water Act (CWA) discharge permit record in ICIS-NPDES'),
+                rcra: z.boolean().describe('Has an RCRA hazardous waste handler record'),
+                tri: z
+                  .boolean()
+                  .describe(
+                    'Has a Toxics Release Inventory (TRI) facility ID, whether or not it reported in the latest year',
+                  ),
+                sdwa: z
+                  .boolean()
+                  .describe('Has a Safe Drinking Water Act (SDWA) public water system record'),
               })
-              .describe('Program registration flags'),
+              .describe(
+                'Program registration flags — the same programs the programs filter selects',
+              ),
             triReleasesTransfersInLbs: z
               .number()
               .optional()
               .describe(
-                'Total TRI on/off-site releases and transfers in pounds (summary). For the per-chemical breakdown, call epa_get_tri_releases with the TRI facility ID that epa_search_tri_releases returns as facilityId — the Registry ID is not a TRI facility ID.',
+                "Total TRI on/off-site releases and transfers in pounds for ECHO's latest TRI year (summary). For the per-chemical breakdown, call epa_get_tri_releases with the TRI facility ID that epa_search_tri_releases returns as facilityId — the Registry ID is not a TRI facility ID.",
               ),
-            inspectionCount: z.number().optional().describe('Number of EPA inspections on record'),
+            inspectionCount: z
+              .number()
+              .optional()
+              .describe('Inspections over the last five years, across programs'),
             totalPenaltiesInDollars: z
               .number()
               .optional()
-              .describe('Total assessed penalties in dollars across all programs'),
+              .describe(
+                'Penalties from formal enforcement actions over the last five years, across programs, in dollars',
+              ),
           })
           .describe(
             'EPA facility record with Registry ID, location, program flags, and compliance summary',
@@ -184,7 +210,7 @@ export const searchFacilitiesTool = tool('epa_search_facilities', {
         ...(longitude !== undefined && { longitude }),
         ...(radiusMiles !== undefined && { radiusMiles }),
         ...(input.active_only && { activeOnly: input.active_only }),
-        ...(input.programs?.length && { programs: input.programs }),
+        ...(input.programs?.[0] && { program: input.programs[0] }),
         ...(input.has_violation && { hasViolation: input.has_violation }),
         limit: input.limit,
       },
@@ -199,6 +225,7 @@ export const searchFacilitiesTool = tool('epa_search_facilities', {
       if (input.state) parts.push(`state="${input.state}"`);
       if (input.city) parts.push(`city="${input.city}"`);
       if (hasProximity) parts.push(`within ${radiusMiles} mi of (${latitude}, ${longitude})`);
+      if (input.active_only) parts.push('active_only=true');
       if (input.programs?.length) parts.push(`programs=[${input.programs.join(', ')}]`);
       if (input.has_violation) parts.push('has_violation=true');
       return {

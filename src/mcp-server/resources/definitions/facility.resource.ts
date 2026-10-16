@@ -4,30 +4,32 @@
  */
 
 import { resource, z } from '@cyanheads/mcp-ts-core';
-import { notFound } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getEchoService } from '@/services/echo/echo-service.js';
 
 export const facilityResource = resource('epa://facility/{registry_id}', {
   name: 'epa-facility',
   description:
-    'Full compliance profile for an EPA-regulated facility by EPA FRS Registry ID. Returns the same data as epa_get_facility.',
+    "Full compliance profile for an EPA-regulated facility by EPA FRS Registry ID. Returns the same data as epa_get_facility, with its notice as a `notice` field when ECHO's facility status lookup failed.",
   mimeType: 'application/json',
   params: z.object({
     registry_id: z.string().describe('EPA FRS Registry ID for the facility'),
   }),
 
+  errors: [
+    {
+      reason: 'facility_not_found',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'ECHO has no facility for the given Registry ID.',
+      recovery:
+        'Use epa_search_facilities to discover valid Registry IDs, then read this resource again.',
+      thrownBy: 'service',
+    },
+  ],
+
   async handler(params, ctx) {
     ctx.log.info('epa://facility resource', { registryId: params.registry_id });
-
-    const profile = await getEchoService().getFacility(params.registry_id, ctx);
-
-    if (!profile.registryId) {
-      throw notFound(
-        `No facility found for Registry ID "${params.registry_id}". Use epa_search_facilities to discover valid Registry IDs.`,
-        { registryId: params.registry_id },
-      );
-    }
-
-    return profile;
+    const { profile, notice } = await getEchoService().getFacilityReport(params.registry_id, ctx);
+    return notice ? { ...profile, notice } : profile;
   },
 });

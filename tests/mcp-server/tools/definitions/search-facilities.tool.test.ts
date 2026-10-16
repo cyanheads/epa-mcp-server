@@ -70,14 +70,49 @@ describe('searchFacilitiesTool', () => {
     expect(result.facilities).toEqual([boeingFacility]);
   });
 
-  it('passes program filter to service', async () => {
+  it('regression #38: passes the one program and the violation and activity filters to the service', async () => {
     mockSearchFacilities.mockResolvedValue({ facilities: [boeingFacility], totalCount: 1 });
     const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
-    const input = searchFacilitiesTool.input.parse({ state: 'WA', programs: ['TRI', 'CAA'] });
+    const input = searchFacilitiesTool.input.parse({
+      state: 'WA',
+      programs: ['TRI'],
+      has_violation: true,
+      active_only: true,
+    });
     await searchFacilitiesTool.handler(input, ctx);
     expect(mockSearchFacilities).toHaveBeenCalledWith(
-      expect.objectContaining({ programs: ['TRI', 'CAA'] }),
-      expect.anything(),
+      { state: 'WA', program: 'TRI', hasViolation: true, activeOnly: true, limit: 50 },
+      ctx,
+    );
+  });
+
+  it('regression #38: rejects more than one program at the schema', () => {
+    // ECHO's p_med takes one media code; a list ran the search unfiltered.
+    const parsed = searchFacilitiesTool.input.safeParse({ state: 'WA', programs: ['TRI', 'CAA'] });
+    expect(parsed.success).toBe(false);
+    expect(searchFacilitiesTool.input.safeParse({ state: 'WA', programs: [] }).success).toBe(true);
+  });
+
+  it('sends no program for an empty programs list', async () => {
+    mockSearchFacilities.mockResolvedValue({ facilities: [boeingFacility], totalCount: 1 });
+    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
+    const input = searchFacilitiesTool.input.parse({ state: 'WA', programs: [] });
+    await searchFacilitiesTool.handler(input, ctx);
+    expect(mockSearchFacilities).toHaveBeenCalledWith({ state: 'WA', limit: 50 }, ctx);
+  });
+
+  it('echoes active_only and the program in the no-match message', async () => {
+    mockSearchFacilities.mockResolvedValue({ facilities: [], totalCount: 0 });
+    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
+    const input = searchFacilitiesTool.input.parse({
+      zip_code: '98108',
+      programs: ['SDWA'],
+      active_only: true,
+      has_violation: true,
+    });
+    const result = await searchFacilitiesTool.handler(input, ctx);
+    expect(result.message).toBe(
+      'No facilities matched: zip_code="98108", active_only=true, programs=[SDWA], has_violation=true. Try broadening the geographic area or removing program/violation filters.',
     );
   });
 
