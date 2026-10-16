@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.4.1](changelog/0.4.x/0.4.1.md) — 2026-10-16
+
+epa_get_facility builds its profile from one detailed facility report, with compliance status, per-statute summaries, inspections, enforcement, and TRI IDs; ECHO search filters, TRI search ordering, and punctuated text filters work as documented; every tool call ends before the 60 s client timeout.
+
 ## [0.4.0](changelog/0.4.x/0.4.0.md) — 2026-10-08 · ⚠️ Breaking
 
 epa_get_air_quality moves to AirNow's 2026 web services (breaking: distance_miles removed, observation coordinates removed, aqi optional); TRI search runs as one DMAP join with a working county filter and opt-in release breakdown; water-system has_violation counts open violations; hosted endpoint at epa.caseyjhand.com.

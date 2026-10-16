@@ -1,6 +1,6 @@
 # epa-mcp-server - Directory Structure
 
-Generated on: 2026-10-08 13:41:26
+Generated on: 2026-10-16 16:41:41
 
 ```text
 epa-mcp-server/
@@ -173,9 +173,10 @@ epa-mcp-server/
 │   │   ├── echo/
 │   │   │   ├── echo-service.ts
 │   │   │   └── types.ts
-│   │   └── ejscreen/
-│   │       ├── ejscreen-service.ts
-│   │       └── types.ts
+│   │   ├── ejscreen/
+│   │   │   ├── ejscreen-service.ts
+│   │   │   └── types.ts
+│   │   └── call-budget.ts
 │   └── index.ts
 ├── tests/
 │   ├── config/
@@ -206,6 +207,7 @@ epa-mcp-server/
 │   │   ├── dmap/
 │   │   │   └── dmap-service.test.ts
 │   │   ├── echo/
+│   │   │   ├── echo-fixtures.ts
 │   │   │   └── echo-service.test.ts
 │   │   ├── ejscreen/
 │   │   │   └── ejscreen-service.test.ts
