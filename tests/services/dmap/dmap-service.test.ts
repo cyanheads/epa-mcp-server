@@ -7,10 +7,12 @@
  */
 
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
-import { validationError } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { getTriReleasesTool } from '@/mcp-server/tools/definitions/get-tri-releases.tool.js';
+import { searchSuperfundTool } from '@/mcp-server/tools/definitions/search-superfund.tool.js';
 import { searchTriReleasesTool } from '@/mcp-server/tools/definitions/search-tri-releases.tool.js';
 import { DmapService, initDmapService } from '@/services/dmap/dmap-service.js';
 
@@ -70,12 +72,44 @@ function makeService(): DmapService {
 type DmapRow = Record<string, unknown>;
 type DmapFilter = { column: string; operator: string; value: string };
 
-/** Apply one DMAP filter. Text comparisons are case-insensitive, as DMAP documents. */
+/**
+ * A filter value DMAP's path parser cannot read (live, 2026-10-16): a character outside letters,
+ * digits, space, `,` `-` `_` `?` `@` is HTTP 500 "The query could not be parsed" (apostrophes,
+ * brackets, parentheses, periods, slashes, non-ASCII letters); `%` is an nginx HTTP 403.
+ */
+class DmapParseError extends Error {
+  constructor(
+    readonly status: 403 | 500,
+    readonly character: string,
+  ) {
+    super(`The query could not be parsed. No terminal matches '${character}'`);
+  }
+}
+
+function checkDmapValue(value: string): void {
+  for (const character of value) {
+    if (character === '%') throw new DmapParseError(403, character);
+    if (!/[A-Za-z0-9 ,\-_?@]/.test(character)) throw new DmapParseError(500, character);
+  }
+}
+
+/**
+ * Apply one DMAP filter the way the live service does (2026-10-16). Text comparisons are
+ * case-insensitive. A comma ends an `equals` or `contains` value — DMAP ignores the rest, so
+ * `contains/1,3-Butadiene` matches any name containing "1" — and in `contains`, `_` and `?` match
+ * any one character (`Michler_s` matches "Michler's ketone").
+ */
 function dmapRowMatches(row: DmapRow, filter: DmapFilter): boolean {
   const cell = String(row[filter.column] ?? '').toLowerCase();
   const value = filter.value.toLowerCase();
-  if (filter.operator === 'equals') return cell === value;
-  if (filter.operator === 'contains') return cell.includes(value);
+  const head = value.split(',')[0]!;
+  if (filter.operator === 'equals') return cell === head;
+  if (filter.operator === 'contains') {
+    const pattern = Array.from(head, (c) =>
+      c === '_' || c === '?' ? '.' : c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+    ).join('');
+    return new RegExp(pattern, 'su').test(cell);
+  }
   if (filter.operator === 'in') return value.split(',').includes(cell);
   throw new Error(`Fake DMAP has no operator ${filter.operator}`);
 }
@@ -84,7 +118,13 @@ function dmapRowMatches(row: DmapRow, filter: DmapFilter): boolean {
 function readDmapFilters(segments: string[], start: number): [DmapFilter[], number] {
   const filters: DmapFilter[] = [];
   let i = start;
-  while (i + 2 < segments.length && !/^\d+:\d+$/.test(segments[i]!) && segments[i] !== 'join') {
+  while (
+    i + 2 < segments.length &&
+    !/^\d+:\d+$/.test(segments[i]!) &&
+    segments[i] !== 'join' &&
+    segments[i] !== 'sort'
+  ) {
+    checkDmapValue(segments[i + 2]!);
     filters.push({ column: segments[i]!, operator: segments[i + 1]!, value: segments[i + 2]! });
     i += 3;
     if (segments[i] !== 'and') break;
@@ -93,16 +133,34 @@ function readDmapFilters(segments: string[], start: number): [DmapFilter[], numb
   return [filters, i];
 }
 
+/** Order two DMAP cells: numerically when both are numbers, otherwise as text. */
+function compareDmapCells(a: unknown, b: unknown): number {
+  const numeric = (v: unknown) =>
+    typeof v === 'number' || (typeof v === 'string' && /^\d+(\.\d+)?$/.test(v));
+  if (numeric(a) && numeric(b)) return Number(a) - Number(b);
+  const [x, y] = [String(a ?? ''), String(b ?? '')];
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+
 /**
- * Evaluate a DMAP URL against in-memory tables, the way the live service does (2026-10-08):
- * `{table}/{filters}[/join/{table}/{left}/equals/{right}[/and/{filter}…]]/{first}:{last}/json`.
+ * Evaluate a DMAP URL against in-memory tables, the way the live service does (2026-10-08,
+ * sort 2026-10-16):
+ * `{table}/{filters}[/join/{table}/{left}/equals/{right}[/and/{filter}…]][/sort/{key},…]/{first}:{last}/json`.
  * Filters before the join bind to the first table and a filter on a column it lacks is an error;
  * `and` filters after the join comparison bind to the joined table; joined rows come out in
- * first-table order, each carrying both tables' columns; the range is 1-based and inclusive.
+ * first-table order, each carrying both tables' columns. A sort key is
+ * `{schema}.{table}.{column}:{asc|desc}`; an unqualified column resolves against the first table
+ * (live: `reporting_year:desc` on the facility join is HTTP 500 "The order field
+ * tri.tri_facility.reporting_year does not exist."). The range is 1-based and inclusive.
+ * DMAP decodes the path before splitting it and drops empty segments, so an encoded slash at
+ * either end of a value reads as no slash at all (live, 2026-10-16: `equals/98108THBNG7500E%2F`,
+ * `equals/%2F98108THBNG7500E`, and `contains/Seattle%2F` answer as the bare value does).
  */
 function evaluateDmapUrl(url: string, tables: Record<string, DmapRow[]>): DmapRow[] {
   const path = url.replace(/^https:\/\/data\.epa\.gov\/dmapservice\//, '').replace(/\/json$/, '');
-  const segments = path.split('/').map(decodeURIComponent);
+  const segments = decodeURIComponent(path)
+    .split('/')
+    .filter((segment) => segment !== '');
   const tableRows = (name: string): DmapRow[] => {
     const rows = tables[name];
     if (!rows) throw new Error(`Fake DMAP has no table ${name}`);
@@ -122,9 +180,10 @@ function evaluateDmapUrl(url: string, tables: Record<string, DmapRow[]>): DmapRo
   checkColumns(baseName, baseFilters);
   let rows = tableRows(baseName).filter((row) => baseFilters.every((f) => dmapRowMatches(row, f)));
   let i = afterBase;
+  let joinName: string | undefined;
 
   if (segments[i] === 'join') {
-    const joinName = segments[i + 1]!;
+    joinName = segments[i + 1]!;
     const [leftColumn, , rightColumn] = segments.slice(i + 2, i + 5);
     i += 5;
     let joinFilters: DmapFilter[] = [];
@@ -140,28 +199,91 @@ function evaluateDmapUrl(url: string, tables: Record<string, DmapRow[]>): DmapRo
     );
   }
 
+  if (segments[i] === 'sort') {
+    const keys = segments[i + 1]!.split(',').map((key) => {
+      const [field = '', direction] = key.split(':');
+      const dot = field.lastIndexOf('.');
+      const table = dot === -1 ? baseName : field.slice(0, dot);
+      const column = field.slice(dot + 1);
+      const tableRowsForKey = table === baseName || table === joinName ? tableRows(table) : [];
+      if (
+        (table !== baseName && table !== joinName) ||
+        (tableRowsForKey.length > 0 && !tableRowsForKey.some((row) => column in row))
+      ) {
+        throw new Error(`The order field ${table}.${column} does not exist.`);
+      }
+      if (direction !== 'asc' && direction !== 'desc') {
+        throw new Error(`Unknown sort direction ${direction}`);
+      }
+      return { column, sign: direction === 'desc' ? -1 : 1 };
+    });
+    rows = rows.toSorted((a, b) => {
+      for (const { column, sign } of keys) {
+        const order = compareDmapCells(a[column], b[column]);
+        if (order !== 0) return sign * order;
+      }
+      return 0;
+    });
+    i += 2;
+  }
+
   const range = /^(\d+):(\d+)$/.exec(segments[i] ?? '');
   if (!range) throw new Error(`No first:last range in ${url}`);
   return rows.slice(Math.max(Number(range[1]), 1) - 1, Number(range[2]));
 }
 
+/** The HTTP/1.1 request line a GET of `url` sends: method, path and query, protocol. */
+function requestLine(url: string): string {
+  const { pathname, search } = new URL(url);
+  return `GET ${pathname}${search} HTTP/1.1`;
+}
+
 /**
- * Stub fetch with a fake DMAP over `tables`, recording every URL. `beforeResponse` runs before each
- * response and can hold or fail it (the abort tests park a request there).
+ * DMAP's front end refuses a request line past 4,094 bytes with this HTTP 400 page. It counts 11
+ * bytes fewer than the client sends (live, 2026-10-16: a 4,105-byte client line is answered, a
+ * 4,106-byte one is "Request Line is too large (4095 &gt; 4094)").
+ */
+const DMAP_UNCOUNTED_BYTES = 11;
+
+function requestLineTooLarge(length: number): Response {
+  return new Response(
+    `<html>\n  <head>\n    <title>Bad Request</title>\n  </head>\n  <body>\n    <h1><p>Bad Request</p></h1>\n    Request Line is too large (${length} &gt; 4094)\n  </body>\n</html>\n`,
+    { status: 400, statusText: 'Bad Request' },
+  );
+}
+
+/**
+ * Stub fetch with a fake DMAP over `tables`, recording every URL. A request line past 4,094 bytes
+ * gets DMAP's HTTP 400. `beforeResponse` runs before each response and can hold or fail it (the
+ * abort tests park a request there), or answer it with a Response of its own.
  */
 function stubFakeDmap(
   tables: Record<string, DmapRow[]>,
-  beforeResponse?: (url: string, signal: AbortSignal | undefined) => Promise<void>,
+  beforeResponse?: (url: string, signal: AbortSignal | undefined) => Promise<unknown>,
 ): string[] {
   const urls: string[] = [];
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = String(input);
     urls.push(url);
-    await beforeResponse?.(url, init?.signal ?? undefined);
+    const counted = Buffer.byteLength(requestLine(url)) - DMAP_UNCOUNTED_BYTES;
+    if (counted > 4094) return requestLineTooLarge(counted);
+    const held = await beforeResponse?.(url, init?.signal ?? undefined);
+    if (held instanceof Response) return held;
     let rows: DmapRow[];
     try {
       rows = evaluateDmapUrl(url, tables);
     } catch (error) {
+      if (error instanceof DmapParseError) {
+        return error.status === 403
+          ? new Response('<html><head><title>403 Forbidden</title></head></html>', {
+              status: 403,
+              statusText: 'Forbidden',
+            })
+          : new Response(JSON.stringify({ error: error.message }), {
+              status: 500,
+              statusText: 'INTERNAL SERVER ERROR',
+            });
+      }
       throw validationError(`Fake DMAP rejected ${url}: ${(error as Error).message}`, {
         retryable: false,
       });
@@ -713,7 +835,8 @@ describe('DmapService.searchTriReleases per-medium breakdown', () => {
       'tri.tri_reporting_form': [
         triForm('KEEP1', 'FAC1', 'Benzene', 2022),
         triForm('KEEP2', 'FAC1', 'Toluene', 2022),
-        triForm('DROP3', 'FAC1', 'Xylene', 2022),
+        // Older than the two kept forms, so the newest-first sort puts it past the limit.
+        triForm('DROP3', 'FAC1', 'Xylene', 2021),
       ],
       'tri.tri_release_qty': [],
     });
@@ -803,7 +926,7 @@ describe('DmapService.searchTriReleases request shape', () => {
 
     expect(releases.map((r) => r.facilityId)).toEqual(['FAC1']);
     expect(urls).toEqual([
-      `https://data.epa.gov/dmapservice/tri.tri_facility/state_abbr/equals/WA${joinPath}/1:1/json`,
+      `https://data.epa.gov/dmapservice/tri.tri_facility/state_abbr/equals/WA${joinPath}${NEWEST_FIRST_SORT}/1:1/json`,
     ]);
   });
 
@@ -950,7 +1073,7 @@ describe('DmapService.searchTriReleases against DMAP semantics', () => {
     ]);
   });
 
-  it('caps the records at limit in facility order', async () => {
+  it('caps the records at limit, newest reporting year first', async () => {
     stubFakeDmap(tables);
 
     const releases = await makeService().searchTriReleases(
@@ -958,10 +1081,11 @@ describe('DmapService.searchTriReleases against DMAP semantics', () => {
       createMockContext(),
     );
 
+    // The 2021 form precedes two of these in table order; the sort moves it past the limit.
     expect(releases.map((r) => `${r.facilityId}/${r.chemicalName}/${r.reportingYear}`)).toEqual([
       '98001KINGA/Lead/2022',
-      '98001KINGA/Lead compounds/2021',
       '98001KINGA/Toluene/2022',
+      '98002KINGB/Lead compounds/2022',
     ]);
   });
 
@@ -1634,5 +1758,1095 @@ describe('DmapService one-based row ranges', () => {
 
     expect(systems).toEqual([expect.objectContaining({ pwsid: 'WA0001000', hasViolation: true })]);
     expect(urls.find((u) => u.includes('/sdwis.violation/'))).toContain('/1:1000/json');
+  });
+});
+
+/**
+ * Alaska facilities and reporting forms captured live from DMAP (2026-10-16), trimmed. In table
+ * order the state's first joined rows are ALASKA PULP CORP's 1990s forms; the newest year on file
+ * is 2024.
+ */
+const AK_TABLES = {
+  'tri.tri_facility': [
+    triFacility('99835LSKPLMILE6', 'ALASKA PULP CORP', 'AK', 'SITKA'),
+    triFacility('99752RDDGP90MIL', 'RED DOG OPERATIONS', 'AK', 'NORTHWEST ARCTIC BOROUGH'),
+    triFacility(
+      '99901SCSTG1300S',
+      'U.S. COAST GUARD BASE KETCHIKAN',
+      'AK',
+      'KETCHIKAN GATEWAY BOROUGH',
+    ),
+  ],
+  'tri.tri_reporting_form': [
+    triForm('1394085314363', '99835LSKPLMILE6', 'Polychlorinated biphenyls', 1994),
+    triForm('1392060208939', '99835LSKPLMILE6', 'Acetone', 1992),
+    triForm('1392060208941', '99835LSKPLMILE6', 'Ammonia', 1992),
+    triForm('1324222523654', '99752RDDGP90MIL', 'Lead compounds', 2024),
+    triForm('1324222523639', '99752RDDGP90MIL', 'Cyanide compounds', 2024),
+    triForm('1324222523641', '99752RDDGP90MIL', 'Ammonia', 2024),
+    triForm('1324222469734', '99901SCSTG1300S', 'Lead', 2024),
+  ],
+  'tri.tri_release_qty': [
+    {
+      doc_ctrl_num: '1324222469734',
+      environmental_medium: 'AIR STACK',
+      total_release: 0.5,
+      release_na: '0',
+    },
+    {
+      doc_ctrl_num: '1392060208939',
+      environmental_medium: 'AIR FUG',
+      total_release: 750,
+      release_na: '0',
+    },
+  ],
+};
+
+const NEWEST_FIRST_SORT =
+  '/sort/tri.tri_reporting_form.reporting_year:desc,tri.tri_reporting_form.doc_ctrl_num:asc';
+
+describe('DmapService.searchTriReleases result order', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const joinPath = '/join/tri.tri_reporting_form/tri_facility_id/equals/tri_facility_id';
+  const yearDoc = (r: { reportingYear: number; facilityId: string; chemicalName: string }) =>
+    `${r.reportingYear} ${r.facilityId} ${r.chemicalName}`;
+
+  it('without year returns the newest reporting years first, ties by submission number', async () => {
+    const urls = stubFakeDmap(AK_TABLES);
+
+    const releases = await makeService().searchTriReleases(
+      { state: 'AK', limit: 6 },
+      createMockContext(),
+    );
+
+    expect(releases.map(yearDoc)).toEqual([
+      '2024 99901SCSTG1300S Lead',
+      '2024 99752RDDGP90MIL Cyanide compounds',
+      '2024 99752RDDGP90MIL Ammonia',
+      '2024 99752RDDGP90MIL Lead compounds',
+      '1994 99835LSKPLMILE6 Polychlorinated biphenyls',
+      '1992 99835LSKPLMILE6 Acetone',
+    ]);
+    expect(urls).toEqual([
+      `https://data.epa.gov/dmapservice/tri.tri_facility/state_abbr/equals/AK${joinPath}${NEWEST_FIRST_SORT}/1:6/json`,
+    ]);
+  });
+
+  it('a smaller limit returns a prefix of a larger one', async () => {
+    stubFakeDmap(AK_TABLES);
+    const first3 = await makeService().searchTriReleases(
+      { state: 'AK', limit: 3 },
+      createMockContext(),
+    );
+    const all = await makeService().searchTriReleases(
+      { state: 'AK', limit: 7 },
+      createMockContext(),
+    );
+
+    expect(first3.map(yearDoc)).toEqual(all.slice(0, 3).map(yearDoc));
+    const years = all.map((r) => r.reportingYear);
+    expect(years).toEqual(years.toSorted((a, b) => b - a));
+  });
+
+  it('sorts after the county and chemical filters and before the row range', async () => {
+    const urls = stubFakeDmap(AK_TABLES);
+
+    // Both borough facilities filed a 2024 lead form; table order puts RED DOG's first, the
+    // submission-number tiebreak puts the Coast Guard's first, and limit 1 keeps only one.
+    const releases = await makeService().searchTriReleases(
+      { state: 'AK', county: 'BOROUGH', chemicalName: 'lead', limit: 1 },
+      createMockContext(),
+    );
+
+    expect(releases.map(yearDoc)).toEqual(['2024 99901SCSTG1300S Lead']);
+    expect(urls).toEqual([
+      `https://data.epa.gov/dmapservice/tri.tri_facility/state_abbr/equals/AK/and/county_name/contains/BOROUGH${joinPath}/and/cas_chem_name/contains/lead${NEWEST_FIRST_SORT}/1:1/json`,
+    ]);
+  });
+
+  it('with year sends the unsorted request and keeps table order', async () => {
+    const urls = stubFakeDmap(AK_TABLES);
+
+    const releases = await makeService().searchTriReleases(
+      { state: 'AK', year: 2024, limit: 5 },
+      createMockContext(),
+    );
+
+    expect(releases.map(yearDoc)).toEqual([
+      '2024 99752RDDGP90MIL Lead compounds',
+      '2024 99752RDDGP90MIL Cyanide compounds',
+      '2024 99752RDDGP90MIL Ammonia',
+      '2024 99901SCSTG1300S Lead',
+    ]);
+    expect(urls).toEqual([
+      `https://data.epa.gov/dmapservice/tri.tri_facility/state_abbr/equals/AK${joinPath}/and/reporting_year/equals/2024/1:5/json`,
+    ]);
+  });
+
+  it('adds the breakdown to the sorted records it keeps', async () => {
+    const urls = stubFakeDmap(AK_TABLES);
+
+    const releases = await makeService().searchTriReleases(
+      { state: 'AK', limit: 1, includeReleaseBreakdown: true },
+      createMockContext(),
+    );
+
+    expect(releases).toEqual([
+      {
+        facilityId: '99901SCSTG1300S',
+        facilityName: 'U.S. COAST GUARD BASE KETCHIKAN',
+        countyName: 'KETCHIKAN GATEWAY BOROUGH',
+        chemicalName: 'Lead',
+        reportingYear: 2024,
+        releasesToAirInLbs: 0.5,
+      },
+    ]);
+    expect(urls[1]).toBe(
+      'https://data.epa.gov/dmapservice/tri.tri_release_qty/doc_ctrl_num/in/1324222469734/1:30/json',
+    );
+  });
+
+  it('carries the newest-first records on both tool surfaces', async () => {
+    initDmapService({} as AppConfig, {} as StorageService);
+    stubFakeDmap(AK_TABLES);
+
+    const call = await runToolContract(searchTriReleasesTool, { state: 'AK', limit: 2 });
+
+    expect(call.isError).toBeFalsy();
+    const structured = call.structuredContent as { releases: Array<Record<string, unknown>> };
+    expect(structured.releases.map((r) => r.reportingYear)).toEqual([2024, 2024]);
+    const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    const headings = text.split('\n').filter((line) => line.startsWith('### '));
+    expect(headings).toEqual([
+      '### Lead — U.S. COAST GUARD BASE KETCHIKAN (99901SCSTG1300S) (2024)',
+      '### Cyanide compounds — RED DOG OPERATIONS (99752RDDGP90MIL) (2024)',
+    ]);
+  });
+});
+
+const BOEING = '98108THBNG7500E';
+
+/**
+ * The Boeing Field facility (98108THBNG7500E) as DMAP held it on 2026-10-16: 375 reporting forms,
+ * 1997–2024, each with a 13-digit doc_ctrl_num. The first and last forms and their release rows
+ * are live captures; the forms between are synthetic, each with one AIR STACK row carrying its
+ * index, so every chunk's rows are traceable in the merged result.
+ */
+function boeingTables(count = 375): Record<string, DmapRow[]> {
+  const middle = Array.from({ length: count - 2 }, (_, n) => ({
+    ...triForm(`13980${String(n + 1).padStart(8, '0')}`, BOEING, `Chemical ${n + 1}`, 2005),
+  }));
+  const forms = [
+    triForm('1397110322979', BOEING, 'Toluene', 1997),
+    ...middle,
+    triForm('1324222981425', BOEING, 'Naphthalene', 2024),
+  ];
+  const liveQty = [
+    ['1397110322979', 'AIR FUG', null, '0', '3'],
+    ['1397110322979', 'AIR STACK', 0, '0', null],
+    ['1397110322979', 'UNINJ I', null, '1', null],
+    ['1397110322979', 'WATER', null, '0', null],
+    ['1324222981425', 'UNINJ I', null, '1', null],
+    ['1324222981425', 'AIR FUG', 18.67, '0', null],
+    ['1324222981425', 'AIR STACK', 0.14, '0', null],
+    ['1324222981425', 'SI 5.5.3A', null, '1', null],
+    ['1324222981425', 'WATER', 0, '0', null],
+  ].map(([doc, medium, total, na, range]) => ({
+    doc_ctrl_num: doc,
+    environmental_medium: medium,
+    total_release: total,
+    release_na: na,
+    release_range_code: range,
+  }));
+  return {
+    'tri.tri_reporting_form': forms,
+    'tri.tri_release_qty': [
+      ...liveQty,
+      ...middle.map((form, n) => ({
+        doc_ctrl_num: form.doc_ctrl_num,
+        environmental_medium: 'AIR STACK',
+        total_release: n + 1,
+        release_na: '0',
+      })),
+    ],
+  };
+}
+
+/** The doc_ctrl_nums a `tri.tri_release_qty` URL asks for through its `doc_ctrl_num/in` filter. */
+function docInFilter(url: string): string[] {
+  const match = /\/doc_ctrl_num\/in\/([^/]+)\//.exec(url);
+  return match ? decodeURIComponent(match[1]!).split(',') : [];
+}
+
+const breakdownUrlsOf = (urls: string[]) => urls.filter((u) => u.includes('/tri.tri_release_qty/'));
+
+describe('DmapService TRI release breakdown under the request-line limit', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('splits a 375-form facility into breakdown requests under 4,094 bytes and merges every row', async () => {
+    const tables = boeingTables();
+    const urls = stubFakeDmap(tables);
+
+    const releases = await makeService().getTriReleases(
+      { facilityId: BOEING },
+      createMockContext(),
+    );
+
+    const breakdownUrls = breakdownUrlsOf(urls);
+    expect(breakdownUrls.length).toBeGreaterThan(1);
+    for (const url of breakdownUrls) {
+      expect(requestLine(url).length).toBeLessThan(4094);
+      expect(url).toMatch(new RegExp(`/1:${docInFilter(url).length * 30}/json$`));
+    }
+    const requested = breakdownUrls.flatMap(docInFilter);
+    const allDocs = tables['tri.tri_reporting_form']!.map((f) => f.doc_ctrl_num as string);
+    expect(requested.toSorted()).toEqual(allDocs.toSorted());
+
+    expect(releases).toHaveLength(375);
+    // Live 1997 form: hard AIR STACK zero; range-coded AIR FUG and null WATER add nothing.
+    expect(releases[0]).toEqual({
+      facilityId: BOEING,
+      chemicalName: 'Toluene',
+      reportingYear: 1997,
+      releasesToAirInLbs: 0,
+    });
+    // Live 2024 form, the last one — in a later chunk than the first.
+    expect(releases.at(-1)).toEqual({
+      facilityId: BOEING,
+      chemicalName: 'Naphthalene',
+      reportingYear: 2024,
+      releasesToAirInLbs: 18.81,
+      releasesToWaterInLbs: 0,
+    });
+    expect(releases.slice(1, -1).map((r) => r.releasesToAirInLbs)).toEqual(
+      Array.from({ length: 373 }, (_, n) => n + 1),
+    );
+  });
+
+  it('epa_get_tri_releases returns a many-form facility with its breakdown on both surfaces', async () => {
+    initDmapService({} as AppConfig, {} as StorageService);
+    stubFakeDmap(boeingTables());
+
+    const call = await runToolContract(getTriReleasesTool, { facility_id: BOEING });
+
+    expect(call.isError).toBeFalsy();
+    const structured = call.structuredContent as { releases: Array<Record<string, unknown>> };
+    expect(structured.releases).toHaveLength(375);
+    expect(structured.releases.at(-1)).toEqual({
+      facilityId: BOEING,
+      chemicalName: 'Naphthalene',
+      reportingYear: 2024,
+      releasesToAirInLbs: 18.81,
+      releasesToWaterInLbs: 0,
+    });
+    const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    expect(text).toContain('**Records:** 375');
+    const naphthalene = text.split('\n### ').find((s) => s.startsWith('Naphthalene (2024)'));
+    expect(naphthalene).toContain('**Air Releases:** 18.81 lbs');
+    expect(naphthalene).toContain('**Water Releases:** 0 lbs');
+  });
+
+  it('fetches the chunks concurrently, at most three at a time', async () => {
+    // 40-character submission numbers (live ones are 13) force more chunks than the pool holds.
+    const forms = Array.from({ length: 500 }, (_, n) =>
+      triForm(`D${String(n).padStart(39, '0')}`, BOEING, `Chemical ${n}`, 2010),
+    );
+    const releaseQty = forms.map((form, n) => ({
+      doc_ctrl_num: form.doc_ctrl_num,
+      environmental_medium: 'AIR STACK',
+      total_release: n + 1,
+      release_na: '0',
+    }));
+    let inFlight = 0;
+    let peak = 0;
+    const urls = stubFakeDmap(
+      { 'tri.tri_reporting_form': forms, 'tri.tri_release_qty': releaseQty },
+      async (url) => {
+        if (!url.includes('/tri.tri_release_qty/')) return;
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight -= 1;
+      },
+    );
+
+    const releases = await makeService().getTriReleases(
+      { facilityId: BOEING },
+      createMockContext(),
+    );
+
+    const breakdownUrls = breakdownUrlsOf(urls);
+    expect(breakdownUrls.length).toBeGreaterThan(3);
+    expect(breakdownUrls.flatMap(docInFilter)).toHaveLength(500);
+    expect(peak).toBe(3);
+    // Every chunk's rows merge onto their own submission, the last chunk's included.
+    expect(releases.map((r) => r.releasesToAirInLbs)).toEqual(
+      Array.from({ length: 500 }, (_, n) => n + 1),
+    );
+  });
+
+  it('a 200-record search with the breakdown stays in one request under the limit', async () => {
+    const facilities = [triFacility(BOEING, 'BOEING FIELD', 'WA', 'KING')];
+    const forms = boeingTables(200)['tri.tri_reporting_form']!;
+    const urls = stubFakeDmap({
+      'tri.tri_facility': facilities,
+      'tri.tri_reporting_form': forms,
+      'tri.tri_release_qty': boeingTables(200)['tri.tri_release_qty']!,
+    });
+
+    const releases = await makeService().searchTriReleases(
+      { state: 'WA', limit: 200, includeReleaseBreakdown: true },
+      createMockContext(),
+    );
+
+    expect(releases).toHaveLength(200);
+    expect(releases[0]).toMatchObject({ chemicalName: 'Naphthalene', releasesToAirInLbs: 18.81 });
+    const breakdownUrls = breakdownUrlsOf(urls);
+    expect(breakdownUrls).toHaveLength(1);
+    expect(requestLine(breakdownUrls[0]!).length).toBeLessThan(4094);
+    expect(docInFilter(breakdownUrls[0]!)).toHaveLength(200);
+  });
+
+  it('retries a chunk that fails transiently and still merges its rows', async () => {
+    vi.useFakeTimers();
+    let failed = false;
+    const urls = stubFakeDmap(boeingTables(), async (url) => {
+      if (!failed && url.includes('/tri.tri_release_qty/') && url.includes('1324222981425')) {
+        failed = true;
+        return new Response('upstream busy', { status: 503 });
+      }
+      return;
+    });
+
+    const pending = makeService().getTriReleases({ facilityId: BOEING }, createMockContext());
+    await vi.runAllTimersAsync();
+    const releases = await pending;
+
+    const lastChunkRequests = breakdownUrlsOf(urls).filter((u) => u.includes('1324222981425'));
+    expect(lastChunkRequests).toHaveLength(2);
+    expect(releases.at(-1)).toMatchObject({ releasesToAirInLbs: 18.81 });
+  });
+
+  it('settles a hung chunk as a Timeout under the 60-second client timeout', async () => {
+    vi.useFakeTimers();
+    stubFakeDmap(boeingTables(), (url, signal) =>
+      url.includes('/tri.tri_release_qty/')
+        ? new Promise((_, reject) => {
+            signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+          })
+        : Promise.resolve(),
+    );
+
+    let settled: unknown;
+    const pending = makeService()
+      .getTriReleases({ facilityId: BOEING }, createMockContext())
+      .then(
+        () => {
+          settled = 'resolved';
+        },
+        (error: unknown) => {
+          settled = error;
+        },
+      );
+    await vi.advanceTimersByTimeAsync(55_000);
+    await pending;
+
+    expect(settled).toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      message:
+        'DMAP did not finish the TRI release lookup within 50 seconds. Narrow it with year or chemical_name, or call again later.',
+      data: { reason: 'retry_deadline_exceeded', deadlineMs: 50_000 },
+    });
+  });
+
+  it('carries the narrowing Timeout on both surfaces of epa_get_tri_releases', async () => {
+    vi.useFakeTimers();
+    initDmapService({} as AppConfig, {} as StorageService);
+    stubFakeDmap({}, (_url, signal) => hang(signal));
+
+    let call: Awaited<ReturnType<typeof runToolContract>> | undefined;
+    const pending = runToolContract(getTriReleasesTool, { facility_id: BOEING }).then((result) => {
+      call = result;
+    });
+    await vi.advanceTimersByTimeAsync(55_000);
+    await pending;
+
+    expect(call?.isError).toBe(true);
+    expect(call?.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.Timeout, data: { reason: 'retry_deadline_exceeded' } },
+    });
+    const text = call?.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    expect(text).toContain('Narrow it with year or chemical_name, or call again later.');
+  });
+
+  it('rejects with the cancellation when the caller aborts during the breakdown', async () => {
+    const controller = new AbortController();
+    const abort = abortWhileInFlight(controller);
+    stubFakeDmap(boeingTables(), (url, signal) =>
+      url.includes('/tri.tri_release_qty/') ? abort(url, signal) : Promise.resolve(),
+    );
+
+    const call = makeService().getTriReleases(
+      { facilityId: BOEING },
+      createMockContext({ signal: controller.signal }),
+    );
+
+    await expect(call).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('reports a DMAP HTTP 400 as this server failing, after exactly one request', async () => {
+    initDmapService({} as AppConfig, {} as StorageService);
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => requestLineTooLarge(5313));
+
+    const call = await runToolContract(getTriReleasesTool, { facility_id: BOEING });
+
+    expect(call.isError).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(call.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.InternalError },
+    });
+    const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    expect(text).toContain('DMAP returned HTTP 400');
+  });
+});
+
+/**
+ * Reporting forms whose chemical names (live TRI names, tri.tri_chem_info 2026-10-16) carry the
+ * characters DMAP cannot take in a path: commas, an apostrophe, brackets, Greek letters.
+ */
+const PUNCTUATED_TABLES = {
+  'tri.tri_facility': [
+    triFacility('77001HSTNP100MA', 'HOUSTON PLANT', 'TX', 'HARRIS'),
+    triFacility('20743PRNCG1500W', 'PRINCE GEORGES PLANT', 'MD', "PRINCE GEORGE'S"),
+    triFacility('20744VRNTB2200W', 'VARIANT PLANT', 'MD', 'PRINCE GEORGE S'),
+  ],
+  'tri.tri_reporting_form': [
+    triForm('1322220000001', '77001HSTNP100MA', '1,1,1-Trichloroethane', 2022),
+    triForm('1322220000002', '77001HSTNP100MA', '1,2,4-Trimethylbenzene', 2022),
+    triForm('1322220000003', '77001HSTNP100MA', '1,3-Butadiene', 2022),
+    triForm('1322220000004', '77001HSTNP100MA', "Michler's ketone", 2022),
+    triForm('1322220000005', '77001HSTNP100MA', 'Benzo[g,h,i]perylene', 2022),
+    triForm('1322220000006', '77001HSTNP100MA', 'Thiols, C4-10, γ-ω-perfluoro', 2022),
+    triForm('1322220000007', '20743PRNCG1500W', 'Lead', 2022),
+    triForm('1322220000008', '20744VRNTB2200W', 'Lead', 2022),
+  ],
+  'tri.tri_release_qty': [],
+};
+
+/** The notice a wildcarded text filter carries when its page limit ends the walk short. */
+const WILDCARD_CAP_NOTICE = (text: string, rowsRead: number, kept: number) =>
+  `"${text}" was searched with a one-character wildcard in place of punctuation, and the first ${rowsRead.toLocaleString('en-US')} rows matching the wildcard held ${kept} ${kept === 1 ? 'match' : 'matches'} spelled as given, so more may exist past them. Narrow the search with other filters or more of the text.`;
+
+/** A sems.envirofacts_site row. */
+function semsSite(id: string, city: string, state = 'ID'): DmapRow {
+  return { site_id: id, name: `SITE ${id}`, city_name: city, fk_ref_state_code: state };
+}
+
+const chemicalsOf = (releases: Array<{ chemicalName: string }>) =>
+  releases.map((r) => r.chemicalName);
+
+describe('DmapService text filters DMAP cannot carry in a URL path', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('matches a chemical name with commas exactly, not just its text before the first comma', async () => {
+    const urls = stubFakeDmap(PUNCTUATED_TABLES);
+
+    const releases = await makeService().searchTriReleases(
+      { state: 'TX', year: 2022, chemicalName: '1,3-Butadiene', limit: 5 },
+      createMockContext(),
+    );
+
+    expect(chemicalsOf(releases)).toEqual(['1,3-Butadiene']);
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain('/and/cas_chem_name/contains/1_3-Butadiene/');
+  });
+
+  it.each([
+    ["Michler's ketone", "Michler's ketone", 'Michler_s%20ketone'],
+    ['benzo[g,h,i]PERYLENE', 'Benzo[g,h,i]perylene', 'benzo_g_h_i_PERYLENE'],
+    ['γ-ω-perfluoro', 'Thiols, C4-10, γ-ω-perfluoro', '_-_-perfluoro'],
+  ])(
+    'finds "%s" in one request through a one-character wildcard',
+    async (input, chemical, sent) => {
+      const urls = stubFakeDmap(PUNCTUATED_TABLES);
+
+      const releases = await makeService().getTriReleases(
+        { facilityId: '77001HSTNP100MA', chemicalName: input },
+        createMockContext(),
+      );
+
+      expect(chemicalsOf(releases)).toEqual([chemical]);
+      expect(urls[0]).toContain(`/cas_chem_name/contains/${sent}/`);
+      expect(urls.filter((u) => u.includes('/tri.tri_reporting_form/'))).toHaveLength(1);
+    },
+  );
+
+  it('keeps only the county spelled as given, dropping a wildcard near-match', async () => {
+    const urls = stubFakeDmap(PUNCTUATED_TABLES);
+
+    const releases = await makeService().searchTriReleases(
+      { state: 'MD', county: "PRINCE GEORGE'S", year: 2022, limit: 5 },
+      createMockContext(),
+    );
+
+    expect(releases.map((r) => r.countyName)).toEqual(["PRINCE GEORGE'S"]);
+    expect(urls[0]).toContain('/county_name/contains/PRINCE%20GEORGE_S/');
+  });
+
+  it('epa_search_tri_releases carries an apostrophe search on both surfaces', async () => {
+    initDmapService({} as AppConfig, {} as StorageService);
+    stubFakeDmap(PUNCTUATED_TABLES);
+
+    const call = await runToolContract(searchTriReleasesTool, {
+      state: 'TX',
+      chemical_name: "Michler's ketone",
+    });
+
+    expect(call.isError).toBeFalsy();
+    const structured = call.structuredContent as { releases: Array<Record<string, unknown>> };
+    expect(structured.releases.map((r) => r.chemicalName)).toEqual(["Michler's ketone"]);
+    const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    expect(text).toContain("### Michler's ketone — HOUSTON PLANT (77001HSTNP100MA) (2022)");
+  });
+
+  it('reads the next page when the exact match drops near-variants from a full page', async () => {
+    // Superfund city names carry spelling variants: SEMS lists both COEUR D'ALENE and COEUR D ALENE.
+    const sites = [
+      ...Array.from({ length: 99 }, (_, n) => semsSite(`V${n}`, 'COEUR D ALENE')),
+      semsSite('E1', "COEUR D'ALENE"),
+      semsSite('E2', "COEUR D'ALENE"),
+      semsSite('E3', "COEUR D'ALENE"),
+    ];
+    const urls = stubFakeDmap({ 'sems.envirofacts_site': sites });
+
+    const result = await makeService().searchSuperfund(
+      { state: 'ID', city: "Coeur d'Alene", limit: 2 },
+      createMockContext(),
+    );
+
+    expect(result.map((s) => s.siteId)).toEqual(['E1', 'E2']);
+    expect(urls.map((u) => /\/(\d+:\d+)\/json$/.exec(u)?.[1])).toEqual(['1:100', '101:200']);
+    expect(urls[0]).toContain('/city_name/contains/Coeur%20d_Alene/');
+  });
+
+  it('reads at most three pages of near-variants, and says more matches may exist', async () => {
+    const sites = [
+      ...Array.from({ length: 300 }, (_, n) => semsSite(`V${n}`, 'COEUR D ALENE')),
+      semsSite('E1', "COEUR D'ALENE"),
+    ];
+    const urls = stubFakeDmap({ 'sems.envirofacts_site': sites });
+    const ctx = createMockContext();
+
+    const result = await makeService().searchSuperfund(
+      { state: 'ID', city: "Coeur d'Alene", limit: 5 },
+      ctx,
+    );
+
+    expect(result).toEqual([]);
+    expect(urls).toHaveLength(3);
+    expect(getEnrichment(ctx)).toEqual({ notice: WILDCARD_CAP_NOTICE("Coeur d'Alene", 300, 0) });
+  });
+
+  it('adds no notice when DMAP runs out of wildcard rows before the page limit', async () => {
+    const sites = [
+      ...Array.from({ length: 150 }, (_, n) => semsSite(`V${n}`, 'COEUR D ALENE')),
+      semsSite('E1', "COEUR D'ALENE"),
+    ];
+    stubFakeDmap({ 'sems.envirofacts_site': sites });
+    const ctx = createMockContext();
+
+    const result = await makeService().searchSuperfund(
+      { state: 'ID', city: "Coeur d'Alene", limit: 5 },
+      ctx,
+    );
+
+    expect(result.map((s) => s.siteId)).toEqual(['E1']);
+    expect(getEnrichment(ctx)).not.toHaveProperty('notice');
+  });
+
+  it('adds no notice when the exact matches fill the limit within the page limit', async () => {
+    const sites = [
+      ...Array.from({ length: 299 }, (_, n) => semsSite(`V${n}`, 'COEUR D ALENE')),
+      semsSite('E1', "COEUR D'ALENE"),
+      semsSite('E2', "COEUR D'ALENE"),
+    ];
+    const urls = stubFakeDmap({ 'sems.envirofacts_site': sites });
+    const ctx = createMockContext();
+
+    const result = await makeService().searchSuperfund(
+      { state: 'ID', city: "Coeur d'Alene", limit: 1 },
+      ctx,
+    );
+
+    expect(result.map((s) => s.siteId)).toEqual(['E1']);
+    expect(urls).toHaveLength(3);
+    expect(getEnrichment(ctx)).not.toHaveProperty('notice');
+  });
+
+  it('epa_search_tri_releases discloses a wildcard walk cut short, beside the records it found', async () => {
+    initDmapService({} as AppConfig, {} as StorageService);
+    // Live 2026-10-16: TX "C.I." reads three pages of C_I_ wildcard rows and keeps 3 records.
+    const facilities = [triFacility('77001HSTNP100MA', 'HOUSTON PLANT', 'TX', 'HARRIS')];
+    const forms = [
+      triForm('1322220000001', '77001HSTNP100MA', 'C.I. Food Red 15', 2024),
+      ...Array.from({ length: 300 }, (_, n) =>
+        triForm(`13222201${String(n).padStart(5, '0')}`, '77001HSTNP100MA', 'CHIC SOLVENT', 2023),
+      ),
+      triForm('1322220099999', '77001HSTNP100MA', 'C.I. Solvent Yellow 34', 2022),
+    ];
+    stubFakeDmap({
+      'tri.tri_facility': facilities,
+      'tri.tri_reporting_form': forms,
+      'tri.tri_release_qty': [],
+    });
+
+    const call = await runToolContract(searchTriReleasesTool, {
+      state: 'TX',
+      chemical_name: 'C.I.',
+    });
+
+    expect(call.isError).toBeFalsy();
+    const notice = WILDCARD_CAP_NOTICE('C.I.', 300, 1);
+    const structured = call.structuredContent as {
+      releases: Array<{ chemicalName: string }>;
+      notice?: string;
+    };
+    expect(structured.releases.map((r) => r.chemicalName)).toEqual(['C.I. Food Red 15']);
+    expect(structured.notice).toBe(notice);
+    const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    expect(text).toContain(notice);
+    expect(text).toContain('### C.I. Food Red 15 — HOUSTON PLANT (77001HSTNP100MA) (2024)');
+  });
+
+  it('epa_get_tri_releases discloses a wildcard walk cut short on both surfaces', async () => {
+    initDmapService({} as AppConfig, {} as StorageService);
+    const forms = Array.from({ length: 1500 }, (_, n) =>
+      triForm(`1322230${String(n).padStart(6, '0')}`, BOEING, 'CHIC SOLVENT', 2023),
+    );
+    const urls = stubFakeDmap({ 'tri.tri_reporting_form': forms, 'tri.tri_release_qty': [] });
+
+    const call = await runToolContract(getTriReleasesTool, {
+      facility_id: BOEING,
+      chemical_name: 'C.I.',
+    });
+
+    expect(call.isError).toBeFalsy();
+    expect(urls.map((u) => /\/(\d+:\d+)\/json$/.exec(u)?.[1])).toEqual([
+      '1:500',
+      '501:1000',
+      '1001:1500',
+    ]);
+    const notice = WILDCARD_CAP_NOTICE('C.I.', 1500, 0);
+    const structured = call.structuredContent as { releases: unknown[]; notice?: string };
+    expect(structured.releases).toEqual([]);
+    expect(structured.notice).toBe(notice);
+    const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    expect(text).toContain(notice);
+    expect(text).toContain('No TRI releases found');
+  });
+
+  it('epa_search_superfund discloses a wildcard walk cut short on both surfaces', async () => {
+    initDmapService({} as AppConfig, {} as StorageService);
+    const sites = [
+      ...Array.from({ length: 300 }, (_, n) => semsSite(`V${n}`, 'COEUR D ALENE')),
+      semsSite('E1', "COEUR D'ALENE"),
+    ];
+    stubFakeDmap({ 'sems.envirofacts_site': sites });
+
+    const call = await runToolContract(searchSuperfundTool, {
+      state: 'ID',
+      city: "Coeur d'Alene",
+      limit: 5,
+    });
+
+    expect(call.isError).toBeFalsy();
+    const notice = WILDCARD_CAP_NOTICE("Coeur d'Alene", 300, 0);
+    const structured = call.structuredContent as { sites: unknown[]; notice?: string };
+    expect(structured.sites).toEqual([]);
+    expect(structured.notice).toBe(notice);
+    const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    expect(text).toContain(notice);
+  });
+
+  it('matches a literal underscore as written, not as a one-character wildcard', async () => {
+    const tables = {
+      ...PUNCTUATED_TABLES,
+      'tri.tri_reporting_form': [
+        triForm('1322220000011', '77001HSTNP100MA', 'C112 resin', 2022),
+        triForm('1322220000012', '77001HSTNP100MA', 'C_12 resin', 2022),
+      ],
+    };
+    const urls = stubFakeDmap(tables);
+
+    const releases = await makeService().getTriReleases(
+      { facilityId: '77001HSTNP100MA', chemicalName: 'C_12' },
+      createMockContext(),
+    );
+
+    expect(chemicalsOf(releases)).toEqual(['C_12 resin']);
+    expect(urls[0]).toContain('/cas_chem_name/contains/C_12/');
+  });
+
+  it('sends a plain text filter unchanged, in one request ranged to the limit', async () => {
+    const urls = stubFakeDmap({
+      'sems.envirofacts_site': [
+        semsSite('K1', 'KALISPELL', 'MT'),
+        semsSite('K2', 'KALISPELL', 'MT'),
+      ],
+    });
+
+    const result = await makeService().searchSuperfund(
+      { state: 'MT', city: 'Kalispell', limit: 1 },
+      createMockContext(),
+    );
+
+    expect(result.map((s) => s.siteId)).toEqual(['K1']);
+    expect(urls).toEqual([
+      'https://data.epa.gov/dmapservice/sems.envirofacts_site/fk_ref_state_code/equals/MT/and/city_name/contains/Kalispell/1:1/json',
+    ]);
+  });
+
+  it.each([
+    [
+      'a TRI facility ID',
+      () => makeService().getTriReleases({ facilityId: '98108THBNG7500E/X' }, createMockContext()),
+      '/',
+    ],
+    [
+      'a water-system state',
+      () => makeService().searchWaterSystems({ state: 'WA,OR' }, createMockContext()),
+      ',',
+    ],
+    [
+      'a Superfund ZIP',
+      () => makeService().searchSuperfund({ zipCode: '98104%' }, createMockContext()),
+      '%',
+    ],
+    [
+      'a TRI search state',
+      () => makeService().searchTriReleases({ state: "W'" }, createMockContext()),
+      "'",
+    ],
+  ])(
+    'rejects %s carrying a character DMAP cannot match, before any request',
+    async (_, call, character) => {
+      const urls = stubFakeDmap(PUNCTUATED_TABLES);
+
+      await expect(call()).rejects.toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        message: expect.stringContaining(`"${character}"`),
+        data: { character },
+      });
+      expect(urls).toEqual([]);
+    },
+  );
+
+  it('tells a comma-joined exact value to pass one value per call', async () => {
+    initDmapService({} as AppConfig, {} as StorageService);
+    const urls = stubFakeDmap(PUNCTUATED_TABLES);
+
+    const call = await runToolContract(searchSuperfundTool, { zip_code: '98104,98101' });
+
+    expect(call.isError).toBe(true);
+    expect(urls).toEqual([]);
+    const message =
+      '"98104,98101" contains ",", a character EPA\'s DMAP service cannot match in an exact-value filter. Pass one value per call.';
+    expect(call.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.ValidationError, message },
+    });
+    expect(JSON.stringify(call.content)).toContain('Pass one value per call.');
+  });
+
+  it.each([
+    ['a trailing', '98108THBNG7500E/'],
+    ['a leading', '/98108THBNG7500E'],
+    ['repeated', '//98108THBNG7500E//'],
+  ])('reads a TRI facility ID with %s slash as DMAP does, as the bare ID', async (_, id) => {
+    const urls = stubFakeDmap(boeingTables(3));
+
+    const releases = await makeService().getTriReleases({ facilityId: id }, createMockContext());
+
+    expect(urls[0]).toBe(
+      `https://data.epa.gov/dmapservice/tri.tri_reporting_form/tri_facility_id/equals/${BOEING}/1:500/json`,
+    );
+    expect(releases.map((r) => r.chemicalName)).toEqual(['Toluene', 'Chemical 1', 'Naphthalene']);
+  });
+
+  it.each([
+    [
+      'a water-system ZIP',
+      () => makeService().searchWaterSystems({ zipCode: '98104/' }, createMockContext()),
+      '/sdwis.water_system/zip_code/equals/98104/1:50/json',
+    ],
+    [
+      'a Superfund ZIP',
+      () => makeService().searchSuperfund({ zipCode: '/98104' }, createMockContext()),
+      '/sems.envirofacts_site/zip_code/equals/98104/1:50/json',
+    ],
+    [
+      'a Superfund city',
+      () => makeService().searchSuperfund({ state: 'WA', city: 'Seattle/' }, createMockContext()),
+      '/sems.envirofacts_site/fk_ref_state_code/equals/WA/and/city_name/contains/Seattle/1:50/json',
+    ],
+    [
+      'a TRI chemical name',
+      () =>
+        makeService().getTriReleases(
+          { facilityId: BOEING, chemicalName: 'Toluene/' },
+          createMockContext(),
+        ),
+      '/tri_facility_id/equals/98108THBNG7500E/and/cas_chem_name/contains/Toluene/1:500/json',
+    ],
+  ])('sends %s with a slash at an end as the bare value', async (_, call, path) => {
+    const urls = stubFakeDmap({
+      'sdwis.water_system': [
+        { pwsid: 'WA5377050', pws_name: 'SEATTLE PUBLIC UTILITIES', zip_code: '98104' },
+      ],
+      'sems.envirofacts_site': [
+        { ...semsSite('S1', 'SEATTLE', 'WA'), zip_code: '98104' },
+        semsSite('S2', 'SPOKANE', 'WA'),
+      ],
+      ...boeingTables(3),
+    });
+
+    const rows = (await call()) as unknown[];
+
+    expect(urls[0]).toContain(path);
+    expect(rows).toHaveLength(1);
+  });
+
+  it('still rejects a slash inside a value, and a value of slashes only, before any request', async () => {
+    const urls = stubFakeDmap(boeingTables(3));
+
+    for (const facilityId of ['98108THBNG7500E/X', '/', '//']) {
+      await expect(
+        makeService().getTriReleases({ facilityId }, createMockContext()),
+      ).rejects.toMatchObject({ code: JsonRpcErrorCode.ValidationError, data: { character: '/' } });
+    }
+    expect(urls).toEqual([]);
+  });
+
+  it('sends a Superfund city as long as DMAP still answers, on both surfaces', async () => {
+    initDmapService({} as AppConfig, {} as StorageService);
+    const urls = stubFakeDmap({ 'sems.envirofacts_site': [semsSite('S1', 'SEATTLE', 'WA')] });
+
+    // 4,029 letters at limit 1 make a 4,105-byte request line, which DMAP counts as 4,094.
+    const call = await runToolContract(searchSuperfundTool, { city: 'a'.repeat(4029), limit: 1 });
+
+    expect(call.isError).toBeFalsy();
+    expect(urls).toHaveLength(1);
+    expect(Buffer.byteLength(requestLine(urls[0]!))).toBe(4105);
+    const structured = call.structuredContent as { sites: unknown[]; message?: string };
+    expect(structured.sites).toEqual([]);
+    expect(structured.message).toContain('No Superfund sites found');
+    const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    expect(text).toContain('No Superfund sites found');
+  });
+
+  it('sends a facility chemical name as long as DMAP still answers', async () => {
+    const urls = stubFakeDmap(boeingTables(3));
+
+    const releases = await makeService().getTriReleases(
+      { facilityId: 'X', chemicalName: 'a'.repeat(3993) },
+      createMockContext(),
+    );
+
+    expect(releases).toEqual([]);
+    expect(urls).toHaveLength(1);
+    expect(Buffer.byteLength(requestLine(urls[0]!))).toBe(4105);
+  });
+
+  it('rejects one byte more than DMAP counts as its limit, before any request', async () => {
+    const urls = stubFakeDmap({ 'sems.envirofacts_site': [] });
+
+    await expect(
+      makeService().searchSuperfund({ city: 'a'.repeat(4030), limit: 1 }, createMockContext()),
+    ).rejects.toMatchObject({ code: JsonRpcErrorCode.ValidationError });
+    expect(urls).toEqual([]);
+  });
+
+  it('rejects a text filter with no letter or digit, before any request', async () => {
+    const urls = stubFakeDmap(PUNCTUATED_TABLES);
+
+    await expect(
+      makeService().searchTriReleases({ state: 'TX', chemicalName: "'" }, createMockContext()),
+    ).rejects.toMatchObject({ code: JsonRpcErrorCode.ValidationError });
+    expect(urls).toEqual([]);
+  });
+
+  it('rejects filters too long for DMAP request line as an input error, before any request', async () => {
+    const urls = stubFakeDmap(PUNCTUATED_TABLES);
+
+    await expect(
+      makeService().getTriReleases({ facilityId: 'A'.repeat(5000) }, createMockContext()),
+    ).rejects.toMatchObject({ code: JsonRpcErrorCode.ValidationError });
+    expect(urls).toEqual([]);
+  });
+});
+
+/** Hold a request until its signal aborts, then reject with the abort reason. */
+function hang(signal: AbortSignal | undefined): Promise<never> {
+  return new Promise((_, reject) => {
+    signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+  });
+}
+
+/** Answer a request after `ms`, or reject with the abort reason if its signal aborts first. */
+function respondAfter(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        reject(signal.reason);
+      },
+      { once: true },
+    );
+  });
+}
+
+/** Run `call` under fake timers for `ms` and return how it settled (undefined while pending). */
+async function settleWithin(call: () => Promise<unknown>, ms: number): Promise<unknown> {
+  let settled: unknown;
+  const pending = call().then(
+    () => {
+      settled = 'resolved';
+    },
+    (error: unknown) => {
+      settled = error;
+    },
+  );
+  await vi.advanceTimersByTimeAsync(ms);
+  if (settled !== undefined) await pending;
+  return settled;
+}
+
+describe('DmapService water-system and Superfund call deadline', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  const zipSystems = (count: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      pwsid: pwsidOf(i + 1),
+      pws_name: `System ${i + 1}`,
+      zip_code: '59901',
+      primacy_agency_code: 'MT',
+    }));
+
+  it('settles a ZIP violation check against a hung DMAP as a Timeout under 60 seconds', async () => {
+    vi.useFakeTimers();
+    stubFakeDmap({ 'sdwis.water_system': zipSystems(5), 'sdwis.violation': [] }, (url, signal) =>
+      url.includes('/sdwis.violation/') ? hang(signal) : Promise.resolve(),
+    );
+
+    const settled = await settleWithin(
+      () =>
+        makeService().searchWaterSystems(
+          { zipCode: '59901', hasViolation: true, limit: 10 },
+          createMockContext(),
+        ),
+      55_000,
+    );
+
+    expect(settled).toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      data: { reason: 'retry_deadline_exceeded' },
+    });
+  });
+
+  it('shares one deadline across the whole ZIP chain, not one per request', async () => {
+    vi.useFakeTimers();
+    // 1,000 systems: the ZIP read, then five 200-PWSID violation requests of 12 s each — 60 s in
+    // all, so only a deadline shared across the chain settles the call by 55 s.
+    stubFakeDmap(
+      { 'sdwis.water_system': zipSystems(1000), 'sdwis.violation': [] },
+      (url, signal) =>
+        url.includes('/sdwis.violation/') ? respondAfter(12_000, signal) : Promise.resolve(),
+    );
+
+    const settled = await settleWithin(
+      () =>
+        makeService().searchWaterSystems(
+          { zipCode: '59901', hasViolation: true, limit: 10 },
+          createMockContext(),
+        ),
+      55_000,
+    );
+
+    expect(settled).toMatchObject({ code: JsonRpcErrorCode.Timeout });
+  });
+
+  const waterNarrowing =
+    'DMAP did not finish the water system search within 50 seconds. Narrow it with zip_code or pws_type, or call again later.';
+
+  it.each([
+    [
+      'a state violation scan',
+      () =>
+        makeService().searchWaterSystems({ state: 'MT', hasViolation: true }, createMockContext()),
+      waterNarrowing,
+    ],
+    [
+      'a plain water-system search',
+      () => makeService().searchWaterSystems({ state: 'MT' }, createMockContext()),
+      waterNarrowing,
+    ],
+    [
+      'a Superfund search',
+      () => makeService().searchSuperfund({ state: 'MT' }, createMockContext()),
+      'DMAP did not finish the Superfund site search within 50 seconds. Narrow it with zip_code, city, or npl_status, or call again later.',
+    ],
+    [
+      'a Superfund site lookup',
+      () => makeService().searchSuperfundById('0800040', createMockContext()),
+      'DMAP did not finish the Superfund site lookup within 50 seconds. Call again later.',
+    ],
+    [
+      'a TRI search',
+      () => makeService().searchTriReleases({ state: 'MT' }, createMockContext()),
+      'DMAP did not finish the TRI release search within 50 seconds. Narrow it with year, county, or chemical_name, leave include_release_breakdown off, or call again later.',
+    ],
+  ])(
+    'settles %s against a hung DMAP as a Timeout naming how to narrow it',
+    async (_, call, message) => {
+      vi.useFakeTimers();
+      stubFakeDmap({}, (_url, signal) => hang(signal));
+
+      const settled = await settleWithin(call, 55_000);
+
+      expect(settled).toMatchObject({
+        code: JsonRpcErrorCode.Timeout,
+        message,
+        data: { reason: 'retry_deadline_exceeded', deadlineMs: 50_000 },
+      });
+    },
+  );
+
+  it('rejects with the cancellation when the caller aborts mid-chain', async () => {
+    const controller = new AbortController();
+    const abort = abortWhileInFlight(controller);
+    stubFakeDmap({ 'sdwis.water_system': zipSystems(5), 'sdwis.violation': [] }, (url, signal) =>
+      url.includes('/sdwis.violation/') ? abort(url, signal) : Promise.resolve(),
+    );
+
+    await expect(
+      makeService().searchWaterSystems(
+        { zipCode: '59901', hasViolation: true, limit: 10 },
+        createMockContext({ signal: controller.signal }),
+      ),
+    ).rejects.toMatchObject({ name: 'AbortError' });
   });
 });

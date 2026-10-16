@@ -8,7 +8,10 @@ import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { searchTriReleasesTool } from '@/mcp-server/tools/definitions/search-tri-releases.tool.js';
+import {
+  bareCountyName,
+  searchTriReleasesTool,
+} from '@/mcp-server/tools/definitions/search-tri-releases.tool.js';
 import { DmapService } from '@/services/dmap/dmap-service.js';
 
 const mockSearchTriReleases = vi.fn();
@@ -206,6 +209,15 @@ describe('searchTriReleasesTool', () => {
       expect(searchTriReleasesTool.description).not.toMatch(/and release quantity/);
     });
 
+    it('states that omitting year returns the newest reporting years first', () => {
+      expect(searchTriReleasesTool.input.shape.year.description).toContain(
+        'newest reporting year first',
+      );
+      expect(searchTriReleasesTool.description).toContain('without year');
+      expect(searchTriReleasesTool.description).toContain('newest first');
+      expect(searchTriReleasesTool.description).not.toContain('for a given reporting year');
+    });
+
     it('makes the breakdown opt-in and states its cost', () => {
       const flag = searchTriReleasesTool.input.shape.include_release_breakdown;
       expect(flag.parse(undefined)).toBe(false);
@@ -379,6 +391,50 @@ describe('searchTriReleasesTool', () => {
       expect(structured.message).toContain('No TRI releases found in WA in NOWHERE county');
       const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
       expect(text).toContain('No TRI releases found in WA in NOWHERE county');
+    });
+  });
+
+  describe('text filter bounds', () => {
+    /** The longest TRI chemical name (tri.tri_chem_info, live 2026-10-16), 542 characters. */
+    const longestChemical =
+      '2-Propenoic acid, butyl ester, telomer with 2-[[(heptadecafluorooctyl)sulfonyl]methylamino]ethyl 2-propenoate, 2-[methyl[(nonafluorobutyl)sulfonyl]amino]ethyl 2-propenoate, α-(2-methyl-1-oxo-2-propenyl)-ω-hydroxypoly(oxy-1,4-butanediyl), α-(2-methyl-1-oxo-2-propenyl)-ω-[(2-methyl-1-oxo-2-propenyl)oxy]poly(oxy-1,4-butanediyl), 2-[methyl[(pentadecafluoroheptyl)sulfonyl]amino]ethyl 2-propenoate, 2-[methyl[(tridecafluorohexyl)sulfonyl]amino]ethyl 2-propenoate, 2-[methyl[(undecafluoropentyl)sulfonyl]amino]ethyl 2-propenoate and 1-octanethiol';
+
+    it("accepts text up to DMAP's 4,094-byte request line and rejects longer text", () => {
+      const parse = (args: Record<string, unknown>) =>
+        searchTriReleasesTool.input.safeParse({ state: 'TX', ...args }).success;
+      expect(longestChemical).toHaveLength(542);
+      expect(parse({ chemical_name: longestChemical })).toBe(true);
+      expect(parse({ chemical_name: 'x'.repeat(4094) })).toBe(true);
+      expect(parse({ chemical_name: 'x'.repeat(4095) })).toBe(false);
+      expect(parse({ county: 'PRINCE OF WALES-OUTER KETCHIKAN' })).toBe(true);
+      expect(parse({ county: 'x'.repeat(4094) })).toBe(true);
+      expect(parse({ county: 'x'.repeat(4095) })).toBe(false);
+    });
+
+    it('strips a County suffix in time linear in the name length', () => {
+      // The suffix pattern used to backtrack over each run of inner whitespace: quadratic.
+      const name = (spaces: number) => `x${' '.repeat(spaces)}y`;
+      const cpuMicrosPerCall = (input: string, calls: number) => {
+        const start = process.threadCpuUsage();
+        for (let i = 0; i < calls; i++) bareCountyName(input);
+        const used = process.threadCpuUsage(start);
+        return (used.user + used.system) / calls;
+      };
+      // Warm both sizes before measuring.
+      cpuMicrosPerCall(name(60), 2_000);
+      cpuMicrosPerCall(name(4000), 20);
+      const short = Math.min(...[0, 1, 2].map(() => cpuMicrosPerCall(name(60), 20_000)));
+      const long = Math.min(...[0, 1, 2].map(() => cpuMicrosPerCall(name(4000), 300)));
+      // 4000 / 60 ≈ 67× the input: linear work stays under 256×; quadratic work is ~4,400×.
+      expect(long / short).toBeLessThan(256);
+      expect(bareCountyName(`  King \t County `)).toBe('KING');
+    });
+
+    it('says punctuation in the text filters is matched as written', () => {
+      expect(searchTriReleasesTool.input.shape.chemical_name.description).toContain(
+        'matched as written',
+      );
+      expect(searchTriReleasesTool.input.shape.county.description).toContain('matched as written');
     });
   });
 

@@ -119,6 +119,15 @@ describe('searchSuperfundTool', () => {
     );
   });
 
+  it("bounds city at 4,094 characters, DMAP's whole request-line limit", () => {
+    const parse = (city: string) => searchSuperfundTool.input.safeParse({ city }).success;
+    // The longest sems.envirofacts_site city_name (live 2026-10-16), 57 characters.
+    expect(parse('WAPPINGERS FALLS, TOWN OF WAPPINGER, TOWN OF POUGHKEEPSIE')).toBe(true);
+    expect(parse('x'.repeat(4094))).toBe(true);
+    expect(parse('x'.repeat(4095))).toBe(false);
+    expect(searchSuperfundTool.input.shape.city.description).toContain('matched as written');
+  });
+
   it('formats output with site ID, NPL status, and coordinates', () => {
     const output = { sites: [hanfordSite], totalCount: 1 };
     const blocks = searchSuperfundTool.format!(output);

@@ -11,7 +11,7 @@ import { getDmapService } from '@/services/dmap/dmap-service.js';
 export const getTriReleasesTool = tool('epa_get_tri_releases', {
   title: 'Get TRI Chemical Releases for Facility',
   description:
-    'Query Toxic Release Inventory annual chemical release data for a specific facility. Returns per-chemical release records with chemical name, reporting year, routine on-site releases by medium (air, water, land, underground injection), and the one-time / non-routine release quantity. Quantities are in pounds; dioxin and dioxin-like compounds, which TRI has facilities report in grams, are converted and marked with reportedUnit. TRI data lags ~18 months — the most recent available year is typically 2 years prior to the current calendar year. facility_id is the 15-character TRI facility ID: take it from the facilityId field of epa_search_tri_releases, which also identifies top emitters across a region. A 12-digit EPA Registry ID is a different identifier and matches no TRI records.',
+    'Query Toxic Release Inventory annual chemical release data for a specific facility. Returns per-chemical release records with chemical name, reporting year, routine on-site releases by medium (air, water, land, underground injection), and the one-time / non-routine release quantity. Quantities are in pounds; dioxin and dioxin-like compounds, which TRI has facilities report in grams, are converted and marked with reportedUnit. TRI data lags ~18 months — the most recent available year is typically 2 years prior to the current calendar year. facility_id is the 15-character TRI facility ID: take it from the facilityId field of epa_search_tri_releases, which also identifies top emitters across a region, or from the triFacilityIds of epa_get_facility for a facility you already hold a Registry ID for. A 12-digit EPA Registry ID is a different identifier and matches no TRI records.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -19,7 +19,7 @@ export const getTriReleasesTool = tool('epa_get_tri_releases', {
       .string()
       .min(1)
       .describe(
-        '15-character TRI facility ID (e.g. "9867WSNRWD1981S") — the facilityId field returned by epa_search_tri_releases. A 12-digit EPA Registry ID matches no TRI records.',
+        '15-character TRI facility ID (e.g. "9867WSNRWD1981S") — the facilityId field returned by epa_search_tri_releases, or an entry of epa_get_facility triFacilityIds. A 12-digit EPA Registry ID matches no TRI records.',
       ),
     year: z
       .number()
@@ -32,9 +32,10 @@ export const getTriReleasesTool = tool('epa_get_tri_releases', {
       ),
     chemical_name: z
       .string()
+      .max(4094)
       .optional()
       .describe(
-        'Optional filter to restrict results to a specific chemical (partial match, case-insensitive)',
+        'Optional filter to restrict results to a specific chemical (partial match, case-insensitive). Commas, apostrophes, brackets, and Greek letters are matched as written, e.g. "4,4\'-Methylenedianiline".',
       ),
   }),
 
@@ -95,13 +96,22 @@ export const getTriReleasesTool = tool('epa_get_tri_releases', {
       ),
   }),
 
+  enrichment: {
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'Present when a punctuated chemical_name filter read its page limit before finding every filing spelled as given, so more matching records may exist.',
+      ),
+  },
+
   errors: [
     {
       reason: 'no_releases_found',
       code: JsonRpcErrorCode.NotFound,
       when: 'No TRI records found for the given facility ID and filters.',
       recovery:
-        'Take the 15-character TRI facility ID from the facilityId field of epa_search_tri_releases. TRI data lags 18 months — try an earlier year.',
+        'Take the 15-character TRI facility ID from the facilityId field of epa_search_tri_releases, or from epa_get_facility triFacilityIds for a known Registry ID. TRI data lags 18 months — try an earlier year.',
     },
   ],
 
@@ -126,7 +136,7 @@ export const getTriReleasesTool = tool('epa_get_tri_releases', {
       return {
         releases: [],
         facilityId: input.facility_id,
-        message: `No TRI releases found for facility "${input.facility_id}"${yearNote}${chemNote}. TRI data lags ~18 months — try year ${new Date().getFullYear() - 2} or earlier. Verify the facility ID with epa_search_tri_releases — facility_id is its 15-character facilityId, not a 12-digit EPA Registry ID.`,
+        message: `No TRI releases found for facility "${input.facility_id}"${yearNote}${chemNote}. TRI data lags ~18 months — try year ${new Date().getFullYear() - 2} or earlier. Verify the facility ID with epa_search_tri_releases — facility_id is its 15-character facilityId, not a 12-digit EPA Registry ID; epa_get_facility returns a Registry ID's TRI IDs as triFacilityIds.`,
       };
     }
 

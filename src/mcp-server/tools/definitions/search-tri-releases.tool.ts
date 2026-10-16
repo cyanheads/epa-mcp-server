@@ -8,10 +8,21 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { formatTriReleaseLines } from '@/mcp-server/tools/format-tri-release.js';
 import { getDmapService } from '@/services/dmap/dmap-service.js';
 
+/**
+ * A county name as TRI stores it: trimmed, uppercase, and without a trailing County, Parish, or
+ * Borough ("KING", never "KING COUNTY"), so a suffixed input still matches. Linear in the name:
+ * the suffix match anchors on one whitespace character rather than a run of them.
+ */
+export function bareCountyName(county: string): string {
+  const name = county.trim();
+  const suffix = /\s(county|parish|borough)$/i.exec(name);
+  return (suffix ? name.slice(0, suffix.index).trimEnd() : name).toUpperCase();
+}
+
 export const searchTriReleasesTool = tool('epa_search_tri_releases', {
   title: 'Search TRI Releases by Region',
   description:
-    'Search Toxic Release Inventory data across facilities in a state or county for a given reporting year. Returns facility name and county, TRI facility ID, chemical name, and the one-time / non-routine release quantity; set include_release_breakdown to add routine on-site releases by medium (air, water, land, and underground-injection), at the cost of a slower call. Quantities are in pounds; dioxin and dioxin-like compounds, which TRI has facilities report in grams, are converted and marked with reportedUnit. Use to identify top polluters in an area or build an environmental exposure profile. Use epa_get_tri_releases for detailed release records for a single facility. TRI data lags ~18 months from the current calendar year.',
+    'Search Toxic Release Inventory data across facilities in a state or county, for one reporting year or, without year, every available year newest first. Returns facility name and county, TRI facility ID, chemical name, and the one-time / non-routine release quantity; set include_release_breakdown to add routine on-site releases by medium (air, water, land, and underground-injection), at the cost of a slower call. Quantities are in pounds; dioxin and dioxin-like compounds, which TRI has facilities report in grams, are converted and marked with reportedUnit. Use to identify top polluters in an area or build an environmental exposure profile. Use epa_get_tri_releases for detailed release records for a single facility. TRI data lags ~18 months from the current calendar year.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -22,9 +33,10 @@ export const searchTriReleasesTool = tool('epa_search_tri_releases', {
       .describe('2-letter US state abbreviation (required, e.g. "WA", "TX")'),
     county: z
       .string()
+      .max(4094)
       .optional()
       .describe(
-        'County name to narrow results within the state, e.g. "King". Case-insensitive partial match on the bare name, so a short name can also match a longer one (LAKE matches LAKE OF THE WOODS; check countyName on each record); a trailing "County", "Parish", or "Borough" is dropped before matching.',
+        'County name to narrow results within the state, e.g. "King". Case-insensitive partial match on the bare name, so a short name can also match a longer one (LAKE matches LAKE OF THE WOODS; check countyName on each record); a trailing "County", "Parish", or "Borough" is dropped before matching. Punctuation is matched as written ("Prince George\'s").',
       ),
     year: z
       .number()
@@ -33,13 +45,14 @@ export const searchTriReleasesTool = tool('epa_search_tri_releases', {
       .max(2030)
       .optional()
       .describe(
-        'Reporting year. Defaults to all available years in the state. TRI data lags ~18 months.',
+        'Reporting year. Omit to search every available year in the state, newest reporting year first, so limit keeps the most recent filings. TRI data lags ~18 months.',
       ),
     chemical_name: z
       .string()
+      .max(4094)
       .optional()
       .describe(
-        'Optional filter to restrict results to a specific chemical (partial match, case-insensitive)',
+        'Optional filter to restrict results to a specific chemical (partial match, case-insensitive). Commas, apostrophes, brackets, and Greek letters are matched as written, e.g. "4,4\'-Methylenedianiline".',
       ),
     limit: z
       .number()
@@ -130,6 +143,12 @@ export const searchTriReleasesTool = tool('epa_search_tri_releases', {
       .optional()
       .describe('Number of release records returned. Present only when truncated.'),
     cap: z.number().optional().describe('The limit that was applied. Present only when truncated.'),
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'Present when a punctuated county or chemical_name filter read its page limit before finding limit matches spelled as given, so more matching records may exist.',
+      ),
   },
 
   errors: [
@@ -150,11 +169,7 @@ export const searchTriReleasesTool = tool('epa_search_tri_releases', {
       includeReleaseBreakdown: input.include_release_breakdown,
     });
 
-    // TRI stores bare county names ("KING", never "KING COUNTY"), so a suffixed input would match nothing.
-    const county = input.county
-      ?.trim()
-      .replace(/\s+(county|parish|borough)$/i, '')
-      .toUpperCase();
+    const county = input.county === undefined ? undefined : bareCountyName(input.county);
     const chemicalName = input.chemical_name?.trim();
     const releases = await getDmapService().searchTriReleases(
       {

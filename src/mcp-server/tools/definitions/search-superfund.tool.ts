@@ -16,7 +16,13 @@ export const searchSuperfundTool = tool('epa_search_superfund', {
 
   input: z.object({
     state: z.string().optional().describe('2-letter US state abbreviation to filter sites'),
-    city: z.string().optional().describe('City name (partial match within state)'),
+    city: z
+      .string()
+      .max(4094)
+      .optional()
+      .describe(
+        'City name (partial match within state, case-insensitive). Punctuation is matched as written ("St. Louis", "Coeur d\'Alene").',
+      ),
     zip_code: z.string().optional().describe('5-digit ZIP code to filter sites'),
     latitude: z
       .number()
@@ -81,6 +87,15 @@ export const searchSuperfundTool = tool('epa_search_superfund', {
       .optional()
       .describe('Recovery hint when no sites are found. Absent when sites are returned.'),
   }),
+
+  enrichment: {
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'Present when a punctuated city filter read its page limit before finding limit sites spelled as given, so more matching sites may exist.',
+      ),
+  },
 
   errors: [
     {

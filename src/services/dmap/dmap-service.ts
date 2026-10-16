@@ -6,10 +6,15 @@
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
-import { serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
+import {
+  JsonRpcErrorCode,
+  serviceUnavailable,
+  validationError,
+} from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { httpErrorFromResponse, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
+import { type CallBudget, callBudget } from '@/services/call-budget.js';
 import type {
   RawSdwisViolation,
   RawSdwisWaterSystem,
@@ -22,8 +27,148 @@ import type {
   WaterSystem,
 } from './types.js';
 
-/** One DMAP URL filter: `{column}/{operator}/{value}`. */
-type DmapFilter = { column: string; operator: string; value: string };
+/**
+ * One DMAP URL filter: `{column}/{operator}/{value}`. `literal` is set on a `contains` filter
+ * whose value had characters replaced by DMAP's wildcard (containsFilter); rows must contain it.
+ */
+type DmapFilter = { column: string; operator: string; value: string; literal?: string };
+
+/**
+ * Characters DMAP reads literally in a `contains` value. Live (2026-10-16), its path parser
+ * answers any other punctuation and every non-ASCII letter with HTTP 500 "The query could not be
+ * parsed" (apostrophes, brackets, parentheses, periods, slashes, Greek letters), `%` draws an nginx
+ * HTTP 403, a comma ends the value (`contains/1,3-Butadiene` matches every name containing "1"),
+ * and `_` and `?` match any one character.
+ */
+const CONTAINS_LITERAL = /^[A-Za-z0-9 -]$/;
+
+/** Characters DMAP reads literally in an `equals` or `in` value, where `_` and `?` are not wildcards. */
+const EXACT_LITERAL = /^[A-Za-z0-9 _?@-]$/;
+
+/**
+ * `value` without slashes at either end, unless it is nothing but slashes. DMAP decodes its path
+ * before splitting it and drops empty segments, so an end slash never reached a filter: live
+ * (2026-10-16), `equals/98108THBNG7500E%2F`, `equals/%2F98108THBNG7500E`, and
+ * `contains/Seattle%2F` answer exactly as the bare values do. A slash inside a value shifts the
+ * path apart and is still rejected.
+ */
+function trimSlashes(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === '/') start++;
+  while (end > start && value[end - 1] === '/') end--;
+  return start === end ? value : value.slice(start, end);
+}
+
+/**
+ * A `contains` filter DMAP can carry. Each character it cannot read literally becomes `_`, its
+ * one-character wildcard, and `literal` keeps the text as given so fetchMatchingRows keeps only
+ * the rows that contain it; a `_` the caller wrote is a wildcard too, so it gets the same pass.
+ * Across all 860 TRI chemical names and every TRI county name, the wildcard form of a name
+ * matches no other name; Superfund city names carry spelling variants (COEUR D ALENE beside
+ * COEUR D'ALENE) that the exact pass drops.
+ */
+function containsFilter(column: string, text: string): DmapFilter {
+  const value = trimSlashes(text);
+  const characters = Array.from(value);
+  if (characters.every((c) => CONTAINS_LITERAL.test(c))) {
+    return { column, operator: 'contains', value };
+  }
+  const pattern = characters.map((c) => (CONTAINS_LITERAL.test(c) ? c : '_')).join('');
+  if (!/[A-Za-z0-9]/.test(pattern)) {
+    throw validationError(
+      `"${value}" has no letter or digit to search on. EPA's DMAP service matches text by its letters, digits, spaces, and hyphens.`,
+      { value },
+    );
+  }
+  return { column, operator: 'contains', value: pattern, literal: value };
+}
+
+/**
+ * An `equals` or `in` filter as DMAP reads it: end slashes dropped (trimSlashes), and a value
+ * carrying a character DMAP cannot match rejected before any request.
+ */
+function exactFilter(filter: DmapFilter): DmapFilter {
+  if (filter.operator === 'contains') return filter;
+  const exact = { ...filter, value: trimSlashes(filter.value) };
+  const values = exact.operator === 'in' ? exact.value.split(',') : [exact.value];
+  for (const value of values) {
+    for (const character of value) {
+      if (!EXACT_LITERAL.test(character)) {
+        const recovery = character === ',' ? 'Pass one value per call.' : 'Remove it and retry.';
+        throw validationError(
+          `"${value}" contains "${character}", a character EPA's DMAP service cannot match in an exact-value filter. ${recovery}`,
+          { value, character },
+        );
+      }
+    }
+  }
+  return exact;
+}
+
+/** Rows read per page while a wildcard filter's exact matches are collected. */
+const EXACT_TEXT_PAGE_ROWS = 100;
+
+/**
+ * Pages read for a wildcard filter before returning what matched. Reaching it takes hundreds of
+ * near-variant rows ahead of the exact ones in DMAP's order.
+ */
+const EXACT_TEXT_MAX_PAGES = 3;
+
+/** DMAP's front end refuses a longer request line with HTTP 400 "Request Line is too large". */
+const DMAP_REQUEST_LINE_LIMIT = 4094;
+
+/**
+ * Bytes of the client's request line DMAP leaves out of that count: live (2026-10-16), a
+ * 4,105-byte line is answered and a 4,106-byte one is refused as "(4095 > 4094)".
+ */
+const DMAP_UNCOUNTED_BYTES = 11;
+
+/** One DMAP sort key. `column` is table-qualified (`tri.tri_reporting_form.reporting_year`). */
+type DmapSortKey = { column: string; direction: 'asc' | 'desc' };
+
+/**
+ * Newest reporting year first, then submission number, so a row range pages deterministically.
+ * Keys must be table-qualified: DMAP resolves a bare column against the first table of a join
+ * (`reporting_year` there is HTTP 500). Without the doc_ctrl_num tiebreak, AK rows `1:50` and
+ * `51:100` shared 36 records.
+ */
+const NEWEST_FIRST: DmapSortKey[] = [
+  { column: 'tri.tri_reporting_form.reporting_year', direction: 'desc' },
+  { column: 'tri.tri_reporting_form.doc_ctrl_num', direction: 'asc' },
+];
+
+/**
+ * Request-line budget for a batched `in` list, under DMAP_REQUEST_LINE_LIMIT. DMAP counts 11 bytes
+ * fewer than the client sends, and the budget leaves a further ~300 bytes of margin.
+ */
+const IN_LIST_REQUEST_LINE_BUDGET = 3800;
+
+/**
+ * Breakdown chunks in flight at once. An uncached tri.tri_release_qty request takes ~18 s however
+ * many submissions it names, so chunks run side by side: getTriReleases' 500 forms make at most
+ * three chunks, one wave.
+ */
+const BREAKDOWN_CONCURRENCY = 3;
+
+/**
+ * One budget for every DMAP request a service call chains — a TRI search and its breakdown chunks,
+ * a ZIP's system read and its violation checks, every retry and backoff — so the call settles
+ * under the 60 s request timeout of MCP SDK clients. An expiry names how to narrow the call.
+ */
+const CALL_DEADLINE_MS = 50_000;
+
+const dmapBudget = (task: string, narrow: string) =>
+  callBudget('DMAP', task, CALL_DEADLINE_MS, narrow);
+
+/** Max tri.tri_release_qty rows read per submission (live submissions carry about 10). */
+const RELEASE_QTY_ROWS_PER_SUBMISSION = 30;
+
+/** The HTTP/1.1 request line a GET of `url` sends: method, path and query, protocol. */
+function requestLineBytes(url: string): number {
+  const { pathname, search } = new URL(url);
+  return Buffer.byteLength(`GET ${pathname}${search} HTTP/1.1`);
+}
 
 /** Parse a numeric field, returning undefined if absent/NaN. */
 function parseNum(val: string | number | undefined): number | undefined {
@@ -69,8 +214,8 @@ function normalizeTriRelease(raw: RawTriReportingForm): TriRelease {
     ...(inGrams && { reportedUnit: 'grams' as const }),
   };
   // one_time_release_qty is the only release qty in tri_reporting_form; the per-medium routine
-  // breakdown lives in tri.tri_release_qty and is merged in by the callers after one batched
-  // fetchReleaseBreakdown request (always for getTriReleases, opt-in for searchTriReleases).
+  // breakdown lives in tri.tri_release_qty and is merged in by the callers through
+  // fetchReleaseBreakdown (always for getTriReleases, opt-in for searchTriReleases).
   const oneTime = parseNum(raw.one_time_release_qty);
   if (oneTime !== undefined) result.totalReleasesInLbs = inGrams ? gramsToPounds(oneTime) : oneTime;
   return result;
@@ -221,8 +366,8 @@ export class DmapService {
   }
 
   /**
-   * Build a DMAP REST URL for a multi-filter query.
-   * Format: {base}/{schema}.{table}/{col1}/{op1}/{val1}/and/{col2}/{op2}/{val2}/{first}:{last}
+   * Build a DMAP REST JSON URL for a multi-filter query.
+   * Format: {base}/{schema}.{table}/{col1}/{op1}/{val1}/and/{col2}/{op2}/{val2}/{first}:{last}/json
    * Rows are 1-based and inclusive: `1:50` is 50 rows. DMAP reads a `first` of 0 as row 1, so
    * `0:49` would return only 49.
    *
@@ -230,38 +375,70 @@ export class DmapService {
    * `/join/{schema}.{table}/{leftColumn}/equals/{rightColumn}/and/{filter}…`. Filters before the
    * join bind to the first table only (DMAP rejects a column the first table lacks); filters
    * after the join comparison bind to the joined table. The range then counts joined rows.
+   *
+   * With `sort`, `/sort/{column}:{asc|desc},…` follows the filters and join, before the range.
+   *
+   * An `equals` or `in` value goes through exactFilter, so one carrying a character DMAP cannot
+   * match throws a ValidationError naming it; `contains` values arrive already rewritten by
+   * containsFilter.
    */
   private buildTableUrl(
     schema: string,
     table: string,
     filters: DmapFilter[],
     pagination: { first: number; last: number },
-    join?: {
-      table: string;
-      on: { left: string; right: string };
-      filters: DmapFilter[];
-    },
+    options: {
+      join?: {
+        table: string;
+        on: { left: string; right: string };
+        filters: DmapFilter[];
+      };
+      sort?: DmapSortKey[];
+    } = {},
   ): string {
+    const { join, sort } = options;
     const toPath = (list: DmapFilter[]) =>
       list
+        .map(exactFilter)
         .map((f) => `${encodeURIComponent(f.column)}/${f.operator}/${encodeURIComponent(f.value)}`)
         .join('/and/');
     const joinPath = join
       ? `/join/${join.table}/${join.on.left}/equals/${join.on.right}${join.filters.length > 0 ? `/and/${toPath(join.filters)}` : ''}`
       : '';
+    const sortPath = sort ? `/sort/${sort.map((k) => `${k.column}:${k.direction}`).join(',')}` : '';
     const pagePath = `${pagination.first}:${pagination.last}`;
-    return `${this.baseUrl}/${schema}.${table}/${toPath(filters)}${joinPath}/${pagePath}`;
+    return `${this.baseUrl}/${schema}.${table}/${toPath(filters)}${joinPath}${sortPath}/${pagePath}/json`;
   }
 
-  /** Fetch a DMAP table result as JSON array. */
-  // biome-ignore lint/suspicious/useAwait: delegates to withRetry() which returns a Promise — async typing is correct
-  private async fetchTable<T>(url: string, ctx: Context): Promise<T[]> {
+  /**
+   * Fetch a DMAP table result as JSON array. Every attempt and backoff ends within `budget`
+   * (shared by every request of one service call); expiry rejects with the budget's Timeout.
+   *
+   * A request line DMAP would count past DMAP_REQUEST_LINE_LIMIT is never sent: batched `in`
+   * lists are chunked to fit, so only caller-supplied filter text can push one over, and it fails
+   * as a ValidationError. DMAP answers HTTP 400 only from its front end, for a request it cannot
+   * parse, never for a filter value — those are HTTP 500. A 400 that still arrives is a request
+   * this server built wrong, not the caller's input, and maps to InternalError rather than the
+   * default InvalidParams.
+   */
+  private fetchTable<T>(url: string, ctx: Context, budget: CallBudget): Promise<T[]> {
+    const countedBytes = requestLineBytes(url) - DMAP_UNCOUNTED_BYTES;
+    if (countedBytes > DMAP_REQUEST_LINE_LIMIT) {
+      return Promise.reject(
+        validationError(
+          `The search filters are too long for EPA's DMAP service: the request would be ${countedBytes} bytes, over its ${DMAP_REQUEST_LINE_LIMIT}-byte limit. Shorten the text filters.`,
+          { requestLineBytes: countedBytes },
+        ),
+      );
+    }
     return withRetry(
-      async () => {
-        const jsonUrl = url.endsWith('/json') ? url : `${url}/json`;
-        const response = await fetch(jsonUrl, { signal: ctx.signal });
+      async ({ signal }) => {
+        const response = await fetch(url, { signal });
         if (!response.ok) {
-          throw await httpErrorFromResponse(response, { service: 'DMAP' });
+          throw await httpErrorFromResponse(response, {
+            service: 'DMAP',
+            codeOverride: (status) => (status === 400 ? JsonRpcErrorCode.InternalError : undefined),
+          });
         }
         const text = await response.text();
         if (/^\s*<(!DOCTYPE\s+html|html[\s>])/i.test(text)) {
@@ -279,8 +456,63 @@ export class DmapService {
         operation: 'DmapService.fetchTable',
         baseDelayMs: 1000,
         signal: ctx.signal,
+        deadlineMs: budget.remainingMs(),
       },
+    ).catch(budget.rethrow);
+  }
+
+  /**
+   * Fetch up to `wanted` rows. Without a wildcarded filter (containsFilter) that is one request
+   * ranged `1:wanted`. With one, DMAP's rows can include near-variants that match only through the
+   * wildcard, so pages of at least EXACT_TEXT_PAGE_ROWS are read and narrowed to rows containing
+   * the text as given, until `wanted` are found, DMAP runs out, or EXACT_TEXT_MAX_PAGES are read.
+   * A walk the page limit ends short of `wanted` carries a notice that more matches may exist.
+   */
+  private async fetchMatchingRows<T extends Record<string, unknown>>(
+    urlForRange: (range: { first: number; last: number }) => string,
+    filters: DmapFilter[],
+    wanted: number,
+    ctx: Context,
+    budget: CallBudget,
+  ): Promise<T[]> {
+    const wildcarded = filters.filter(
+      (f): f is DmapFilter & { literal: string } => f.literal !== undefined,
     );
+    if (wildcarded.length === 0) {
+      return this.fetchTable<T>(urlForRange({ first: 1, last: wanted }), ctx, budget);
+    }
+    const pageRows = Math.max(wanted, EXACT_TEXT_PAGE_ROWS);
+    const matches: T[] = [];
+    let exhausted = false;
+    for (let page = 0; page < EXACT_TEXT_MAX_PAGES && matches.length < wanted; page++) {
+      const first = page * pageRows + 1;
+      const rows = await this.fetchTable<T>(
+        urlForRange({ first, last: first + pageRows - 1 }),
+        ctx,
+        budget,
+      );
+      matches.push(
+        ...rows.filter((row) =>
+          wildcarded.every((f) =>
+            String(row[f.column] ?? '')
+              .toLowerCase()
+              .includes(f.literal.toLowerCase()),
+          ),
+        ),
+      );
+      if (rows.length < pageRows) {
+        exhausted = true;
+        break;
+      }
+    }
+    if (!exhausted && matches.length < wanted) {
+      const texts = wildcarded.map((f) => `"${f.literal}"`).join(' and ');
+      const kept = `${matches.length} ${matches.length === 1 ? 'match' : 'matches'}`;
+      ctx.enrich.notice(
+        `${texts} ${wildcarded.length === 1 ? 'was' : 'were'} searched with a one-character wildcard in place of punctuation, and the first ${(EXACT_TEXT_MAX_PAGES * pageRows).toLocaleString('en-US')} rows matching the wildcard held ${kept} spelled as given, so more may exist past them. Narrow the search with other filters or more of the text.`,
+      );
+    }
+    return matches.slice(0, wanted);
   }
 
   /** Get TRI releases for a specific facility. */
@@ -300,28 +532,34 @@ export class DmapService {
     }
     if (params.chemicalName) {
       // actual field is cas_chem_name, not chemical_name_text
-      filters.push({
-        column: 'cas_chem_name',
-        operator: 'contains',
-        value: params.chemicalName,
-      });
+      filters.push(containsFilter('cas_chem_name', params.chemicalName));
     }
 
-    const url = this.buildTableUrl('tri', 'tri_reporting_form', filters, { first: 1, last: 500 });
+    const budget = dmapBudget(
+      'TRI release lookup',
+      'Narrow it with year or chemical_name, or call again later.',
+    );
     ctx.log.debug('DMAP TRI releases query', { facilityId: params.facilityId, year: params.year });
 
-    const rows = await this.fetchTable<RawTriReportingForm>(url, ctx);
-    return this.withReleaseBreakdown(rows, rows.map(normalizeTriRelease), ctx);
+    const rows = await this.fetchMatchingRows<RawTriReportingForm>(
+      (range) => this.buildTableUrl('tri', 'tri_reporting_form', filters, range),
+      filters,
+      500,
+      ctx,
+      budget,
+    );
+    return this.withReleaseBreakdown(rows, rows.map(normalizeTriRelease), ctx, budget);
   }
 
   /**
-   * Add each release's per-medium routine breakdown (tri.tri_release_qty, joined on doc_ctrl_num)
-   * with one batched request. `releases[i]` is the normalized form of `rows[i]`.
+   * Add each release's per-medium routine breakdown (tri.tri_release_qty, joined on doc_ctrl_num).
+   * `releases[i]` is the normalized form of `rows[i]`.
    */
   private async withReleaseBreakdown<T extends TriRelease>(
     rows: RawTriReportingForm[],
     releases: T[],
     ctx: Context,
+    budget: CallBudget,
   ): Promise<T[]> {
     const docCtrlNums = [
       ...new Set(
@@ -331,7 +569,7 @@ export class DmapService {
       ),
     ];
     if (docCtrlNums.length === 0) return releases;
-    const breakdownByDoc = await this.fetchReleaseBreakdown(docCtrlNums, ctx);
+    const breakdownByDoc = await this.fetchReleaseBreakdown(docCtrlNums, ctx, budget);
     return releases.map((release, i) => {
       const doc = rows[i]?.doc_ctrl_num;
       return withBreakdown(release, typeof doc === 'string' ? breakdownByDoc.get(doc) : undefined);
@@ -339,11 +577,15 @@ export class DmapService {
   }
 
   /**
-   * Batch-fetch the per-medium routine releases (tri.tri_release_qty) for a set of TRI
-   * submissions and roll them up into air/water/land/underground-injection sums keyed by
-   * doc_ctrl_num. getTriReleases makes this one request per call; searchTriReleases makes it
-   * once per call, and only when includeReleaseBreakdown is set — an uncached tri_release_qty
-   * query takes ~20 s upstream.
+   * Fetch the per-medium routine releases (tri.tri_release_qty) for a set of TRI submissions and
+   * roll them up into air/water/land/underground-injection sums keyed by doc_ctrl_num.
+   * getTriReleases does this on every call; searchTriReleases only when includeReleaseBreakdown
+   * is set — an uncached tri_release_qty request takes ~18 s upstream.
+   *
+   * The submissions travel as one `doc_ctrl_num in` list per request, split so each request line
+   * stays within IN_LIST_REQUEST_LINE_BUDGET (about 230 thirteen-digit numbers per request). The
+   * chunks run BREAKDOWN_CONCURRENCY at a time against the call's deadline, and their rows merge
+   * into one rollup; the lists are disjoint, so no row is counted twice.
    *
    * Sparsity is preserved: a row flagged release_na="1" (medium not applicable) or carrying only
    * a release_range_code (no hard total_release) contributes nothing — a null quantity is never
@@ -352,16 +594,49 @@ export class DmapService {
   private async fetchReleaseBreakdown(
     docCtrlNums: string[],
     ctx: Context,
+    budget: CallBudget,
   ): Promise<Map<string, MediumBreakdown>> {
-    const url = this.buildTableUrl(
-      'tri',
-      'tri_release_qty',
-      [{ column: 'doc_ctrl_num', operator: 'in', value: docCtrlNums.join(',') }],
-      { first: 1, last: docCtrlNums.length * 30 },
-    );
-    ctx.log.debug('DMAP TRI release-qty breakdown query', { submissions: docCtrlNums.length });
+    const urlFor = (docs: string[]) =>
+      this.buildTableUrl(
+        'tri',
+        'tri_release_qty',
+        [{ column: 'doc_ctrl_num', operator: 'in', value: docs.join(',') }],
+        { first: 1, last: docs.length * RELEASE_QTY_ROWS_PER_SUBMISSION },
+      );
+    const urls: string[] = [];
+    let chunk: string[] = [];
+    for (const doc of docCtrlNums) {
+      if (
+        chunk.length > 0 &&
+        requestLineBytes(urlFor([...chunk, doc])) > IN_LIST_REQUEST_LINE_BUDGET
+      ) {
+        urls.push(urlFor(chunk));
+        chunk = [];
+      }
+      chunk.push(doc);
+    }
+    urls.push(urlFor(chunk));
+    ctx.log.debug('DMAP TRI release-qty breakdown query', {
+      submissions: docCtrlNums.length,
+      requests: urls.length,
+    });
 
-    const rows = await this.fetchTable<RawTriReleaseQty>(url, ctx);
+    const rows: RawTriReleaseQty[] = [];
+    let next = 0;
+    let failed = false;
+    const worker = async () => {
+      while (!failed && next < urls.length) {
+        const url = urls[next++] as string;
+        try {
+          rows.push(...(await this.fetchTable<RawTriReleaseQty>(url, ctx, budget)));
+        } catch (error) {
+          // The call has already failed; start no further chunks.
+          failed = true;
+          throw error;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(BREAKDOWN_CONCURRENCY, urls.length) }, worker));
 
     const byDoc = new Map<string, MediumBreakdown>();
     for (const row of rows) {
@@ -386,9 +661,11 @@ export class DmapService {
    * Search TRI releases by state, optionally filtered by county, year, or chemical.
    * tri.tri_reporting_form carries no state, so one request joins it to tri.tri_facility: the
    * state and county filters bind to the facility table, the year and chemical filters to the
-   * forms, and the row range caps the joined rows at `limit`. However sparse the filters, the
-   * search is one request; with includeReleaseBreakdown, one fetchReleaseBreakdown request adds
-   * the per-medium routine releases to every kept record.
+   * forms, and the row range caps the joined rows at `limit`. Without `year` the joined rows are
+   * sorted newest reporting year first, so `limit` keeps the most recent filings; with `year` the
+   * request is unsorted (table order already pages deterministically). However sparse the
+   * filters, the search is one request; with includeReleaseBreakdown, fetchReleaseBreakdown adds
+   * the per-medium routine releases to every kept record (one request at the 200-record cap).
    */
   async searchTriReleases(
     params: {
@@ -410,7 +687,7 @@ export class DmapService {
       // DMAP matches county_name case-insensitively; `contains` catches states that store both a
       // bare and a suffixed form of one county (CALCASIEU / CALCASIEU PARISH), at the cost of
       // also matching a longer name that contains this one (LAKE / LAKE OF THE WOODS).
-      facilityFilters.push({ column: 'county_name', operator: 'contains', value: params.county });
+      facilityFilters.push(containsFilter('county_name', params.county));
     }
     const formFilters: DmapFilter[] = [];
     if (params.year !== undefined) {
@@ -422,23 +699,12 @@ export class DmapService {
     }
     if (params.chemicalName) {
       // actual field is cas_chem_name, not chemical_name_text
-      formFilters.push({
-        column: 'cas_chem_name',
-        operator: 'contains',
-        value: params.chemicalName,
-      });
+      formFilters.push(containsFilter('cas_chem_name', params.chemicalName));
     }
 
-    const url = this.buildTableUrl(
-      'tri',
-      'tri_facility',
-      facilityFilters,
-      { first: 1, last: limit },
-      {
-        table: 'tri.tri_reporting_form',
-        on: { left: 'tri_facility_id', right: 'tri_facility_id' },
-        filters: formFilters,
-      },
+    const budget = dmapBudget(
+      'TRI release search',
+      'Narrow it with year, county, or chemical_name, leave include_release_breakdown off, or call again later.',
     );
     ctx.log.debug('DMAP TRI facility-form join query', {
       state: params.state,
@@ -446,7 +712,22 @@ export class DmapService {
       year: params.year,
     });
 
-    const rows = await this.fetchTable<RawTriReportingForm & RawTriFacility>(url, ctx);
+    // Joined rows carry both tables' columns, so the exact pass reads county and chemical alike.
+    const rows = await this.fetchMatchingRows<RawTriReportingForm & RawTriFacility>(
+      (range) =>
+        this.buildTableUrl('tri', 'tri_facility', facilityFilters, range, {
+          join: {
+            table: 'tri.tri_reporting_form',
+            on: { left: 'tri_facility_id', right: 'tri_facility_id' },
+            filters: formFilters,
+          },
+          ...(params.year === undefined && { sort: NEWEST_FIRST }),
+        }),
+      [...facilityFilters, ...formFilters],
+      limit,
+      ctx,
+      budget,
+    );
     const kept = rows.slice(0, limit);
     const releases = kept.map((row) => ({
       ...normalizeTriRelease(row),
@@ -455,7 +736,7 @@ export class DmapService {
     }));
 
     return params.includeReleaseBreakdown
-      ? this.withReleaseBreakdown(kept, releases, ctx)
+      ? this.withReleaseBreakdown(kept, releases, ctx, budget)
       : releases;
   }
 
@@ -480,7 +761,7 @@ export class DmapService {
       filters.push({ column: 'fk_ref_state_code', operator: 'equals', value: params.state });
     }
     if (params.city) {
-      filters.push({ column: 'city_name', operator: 'contains', value: params.city });
+      filters.push(containsFilter('city_name', params.city));
     }
     if (params.zipCode) {
       filters.push({ column: 'zip_code', operator: 'equals', value: params.zipCode });
@@ -503,13 +784,18 @@ export class DmapService {
       params.latitude !== undefined && params.longitude !== undefined
         ? Math.min(500, limit * 10)
         : limit;
-    const url = this.buildTableUrl('sems', 'envirofacts_site', filters, {
-      first: 1,
-      last: pageSize,
-    });
     ctx.log.debug('DMAP Superfund query', { state: params.state, lat: params.latitude });
 
-    const rows = await this.fetchTable<RawSemsSite>(url, ctx);
+    const rows = await this.fetchMatchingRows<RawSemsSite>(
+      (range) => this.buildTableUrl('sems', 'envirofacts_site', filters, range),
+      filters,
+      pageSize,
+      ctx,
+      dmapBudget(
+        'Superfund site search',
+        'Narrow it with zip_code, city, or npl_status, or call again later.',
+      ),
+    );
     let sites = rows.map(normalizeSemsSite);
 
     if (params.latitude !== undefined && params.longitude !== undefined && params.radiusMiles) {
@@ -534,7 +820,11 @@ export class DmapService {
       { first: 1, last: 1 },
     );
     ctx.log.debug('DMAP Superfund by ID', { siteId });
-    const rows = await this.fetchTable<RawSemsSite>(url, ctx);
+    const rows = await this.fetchTable<RawSemsSite>(
+      url,
+      ctx,
+      dmapBudget('Superfund site lookup', 'Call again later.'),
+    );
     return rows.map(normalizeSemsSite);
   }
 
@@ -570,18 +860,22 @@ export class DmapService {
 
     if (filters.length === 0) return [];
 
+    const budget = dmapBudget(
+      'water system search',
+      'Narrow it with zip_code or pws_type, or call again later.',
+    );
     // sdwis.violation has no zip column: a ZIP's systems are checked by PWSID, a state is scanned.
     if (params.hasViolation && params.zipCode) {
-      return this.searchViolatingWaterSystemsInZip(params.zipCode, filters, limit, ctx);
+      return this.searchViolatingWaterSystemsInZip(params.zipCode, filters, limit, ctx, budget);
     }
     if (params.hasViolation && params.state) {
-      return this.searchViolatingWaterSystems(params.state, filters, limit, ctx);
+      return this.searchViolatingWaterSystems(params.state, filters, limit, ctx, budget);
     }
 
     const url = this.buildTableUrl('sdwis', 'water_system', filters, { first: 1, last: limit });
     ctx.log.debug('DMAP water systems query', { state: params.state });
 
-    const rows = await this.fetchTable<RawSdwisWaterSystem>(url, ctx);
+    const rows = await this.fetchTable<RawSdwisWaterSystem>(url, ctx, budget);
     return rows.slice(0, limit).map((r) => normalizeSdwisWaterSystem(r));
   }
 
@@ -597,6 +891,7 @@ export class DmapService {
     filters: DmapFilter[],
     limit: number,
     ctx: Context,
+    budget: CallBudget,
   ): Promise<WaterSystem[]> {
     const violUrl = this.buildTableUrl(
       'sdwis',
@@ -605,7 +900,7 @@ export class DmapService {
       { first: 1, last: VIOLATION_SCAN_ROWS },
     );
     ctx.log.debug('DMAP SDWIS violation query', { state });
-    const violRows = await this.fetchTable<RawSdwisViolation>(violUrl, ctx);
+    const violRows = await this.fetchTable<RawSdwisViolation>(violUrl, ctx, budget);
     const violatingPwsids = pwsidSet(violRows);
 
     if (violRows.length >= VIOLATION_SCAN_ROWS) {
@@ -625,7 +920,7 @@ export class DmapService {
         { first: 1, last: limit - systems.length },
       );
       ctx.log.debug('DMAP water systems query', { state, chunkStart: i, chunkSize: chunk.length });
-      const rows = await this.fetchTable<RawSdwisWaterSystem>(url, ctx);
+      const rows = await this.fetchTable<RawSdwisWaterSystem>(url, ctx, budget);
       for (const row of rows.slice(0, limit - systems.length)) {
         systems.push(normalizeSdwisWaterSystem(row, violatingPwsids));
       }
@@ -645,13 +940,14 @@ export class DmapService {
     filters: DmapFilter[],
     limit: number,
     ctx: Context,
+    budget: CallBudget,
   ): Promise<WaterSystem[]> {
     const url = this.buildTableUrl('sdwis', 'water_system', filters, {
       first: 1,
       last: ZIP_SYSTEM_SCAN_ROWS,
     });
     ctx.log.debug('DMAP water systems query', { zipCode });
-    const zipRows = await this.fetchTable<RawSdwisWaterSystem>(url, ctx);
+    const zipRows = await this.fetchTable<RawSdwisWaterSystem>(url, ctx, budget);
 
     const notices: string[] = [];
     if (zipRows.length >= ZIP_SYSTEM_SCAN_ROWS) {
@@ -681,7 +977,7 @@ export class DmapService {
         chunkStart: i,
         chunkSize: chunk.length,
       });
-      const violRows = await this.fetchTable<RawSdwisViolation>(violUrl, ctx);
+      const violRows = await this.fetchTable<RawSdwisViolation>(violUrl, ctx, budget);
       if (violRows.length >= VIOLATION_SCAN_ROWS) truncatedChunk = true;
       const violatingPwsids = pwsidSet(violRows);
       for (const row of chunk) {

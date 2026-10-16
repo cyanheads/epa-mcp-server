@@ -230,6 +230,38 @@ describe('getTriReleasesTool', () => {
       expect(text).toContain('epa_search_tri_releases');
       expect(text).not.toContain('epa_search_facilities');
     });
+
+    it('regression #31: every source pointer also names epa_get_facility triFacilityIds', async () => {
+      mockGetTriReleases.mockResolvedValue([]);
+      const input = getTriReleasesTool.input.parse({ facility_id: '110070322017' });
+      const result = await getTriReleasesTool.handler(
+        input,
+        createMockContext({ errors: getTriReleasesTool.errors }),
+      );
+      for (const text of [
+        getTriReleasesTool.description,
+        getTriReleasesTool.input.shape.facility_id.description ?? '',
+        recovery,
+        result.message ?? '',
+      ]) {
+        expect(text).toContain('epa_get_facility');
+        expect(text).toContain('triFacilityIds');
+      }
+    });
+  });
+
+  it("bounds chemical_name at 4,094 characters, DMAP's whole request-line limit", () => {
+    const longestChemical =
+      '2-Propenoic acid, butyl ester, telomer with 2-[[(heptadecafluorooctyl)sulfonyl]methylamino]ethyl 2-propenoate, 2-[methyl[(nonafluorobutyl)sulfonyl]amino]ethyl 2-propenoate, α-(2-methyl-1-oxo-2-propenyl)-ω-hydroxypoly(oxy-1,4-butanediyl), α-(2-methyl-1-oxo-2-propenyl)-ω-[(2-methyl-1-oxo-2-propenyl)oxy]poly(oxy-1,4-butanediyl), 2-[methyl[(pentadecafluoroheptyl)sulfonyl]amino]ethyl 2-propenoate, 2-[methyl[(tridecafluorohexyl)sulfonyl]amino]ethyl 2-propenoate, 2-[methyl[(undecafluoropentyl)sulfonyl]amino]ethyl 2-propenoate and 1-octanethiol';
+    const parse = (chemical_name: string) =>
+      getTriReleasesTool.input.safeParse({ facility_id: '98108THBNG7500E', chemical_name }).success;
+    expect(longestChemical).toHaveLength(542);
+    expect(parse(longestChemical)).toBe(true);
+    expect(parse('x'.repeat(4094))).toBe(true);
+    expect(parse('x'.repeat(4095))).toBe(false);
+    expect(getTriReleasesTool.input.shape.chemical_name.description).toContain(
+      'matched as written',
+    );
   });
 
   it('carries every per-medium field through the output schema to structuredContent', async () => {
