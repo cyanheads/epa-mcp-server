@@ -480,7 +480,7 @@ export class EchoService {
     const status = await this.fetchFacilityStatusRow(
       confirmedId,
       ctx,
-      FACILITY_DEADLINE_MS - (Date.now() - startedAt),
+      Math.max(0, FACILITY_DEADLINE_MS - (Date.now() - startedAt)),
     );
     const statusRow = status.row;
 

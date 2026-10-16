@@ -1096,6 +1096,34 @@ describe('EchoService.getFacility best-effort compliance status lookup', () => {
     expect(getEnrichment(ctx)).toEqual({ notice: STATUS_LOOKUP_NOTICE });
   });
 
+  it('gives the p_frs lookup a zero budget, never a negative timer, when get_dfr ends past 50 s', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (endpointOf(new URL(String(input))) === 'dfr_rest_services.get_dfr') {
+        return answerAfter(49_990, init?.signal, () => {
+          // Reading a very large report carries the call 40 ms past its 50 s budget.
+          vi.setSystemTime(Date.now() + 40);
+          return new Response(JSON.stringify(DFR_BOEING_110017848105));
+        });
+      }
+      return hang(init?.signal);
+    });
+    const timers = vi.spyOn(globalThis, 'setTimeout');
+    const ctx = createMockContext();
+
+    const call = track(newService().getFacility('110017848105', ctx));
+    await vi.advanceTimersByTimeAsync(49_990);
+    await vi.advanceTimersByTimeAsync(100);
+    const negativeDelays = timers.mock.calls.flatMap(([, ms]) =>
+      typeof ms === 'number' && ms < 0 ? [ms] : [],
+    );
+    timers.mockRestore();
+
+    expect(negativeDelays).toEqual([]);
+    expect(call.error).toBeUndefined();
+    expect((call.value as { registryId: string }).registryId).toBe('110017848105');
+    expect(getEnrichment(ctx)).toEqual({ notice: STATUS_LOOKUP_NOTICE });
+  });
+
   it('propagates caller cancellation during the p_frs lookup instead of degrading', async () => {
     const controller = new AbortController();
     vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
