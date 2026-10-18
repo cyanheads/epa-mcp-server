@@ -4,7 +4,6 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { formatTriReleaseLines } from '@/mcp-server/tools/format-tri-release.js';
 import { getDmapService } from '@/services/dmap/dmap-service.js';
 
@@ -151,16 +150,6 @@ export const searchTriReleasesTool = tool('epa_search_tri_releases', {
       ),
   },
 
-  errors: [
-    {
-      reason: 'no_releases_found',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'No TRI records found for the given state and filters.',
-      recovery:
-        'Verify the state abbreviation is valid. TRI data lags 18 months — try removing the year filter or using an earlier year.',
-    },
-  ],
-
   async handler(input, ctx) {
     ctx.log.info('epa_search_tri_releases', {
       state: input.state,
@@ -189,10 +178,25 @@ export const searchTriReleasesTool = tool('epa_search_tri_releases', {
       const yearNote = input.year ? ` for year ${input.year}` : '';
       const countyNote = county ? ` in ${county} county` : '';
       const chemNote = input.chemical_name ? ` for chemical "${input.chemical_name}"` : '';
+      const earlierYear =
+        input.year === undefined
+          ? undefined
+          : Math.min(input.year - 1, new Date().getFullYear() - 2);
+      const hints = ['TRI data lags ~18 months.'];
+      if (earlierYear !== undefined) {
+        hints.push(
+          earlierYear >= 1987
+            ? `For an earlier reporting period, try year ${earlierYear}, or remove year to search all available years.`
+            : 'Remove year to search all available years.',
+        );
+      }
+      if (chemicalName) hints.push('Remove chemical_name to include other chemicals.');
+      if (county) hints.push('Remove county to search the whole state.');
+      hints.push('Verify the state abbreviation or search a different state.');
       return {
         releases: [],
         state: input.state,
-        message: `No TRI releases found in ${input.state}${countyNote}${yearNote}${chemNote}. TRI data lags ~18 months — try year ${new Date().getFullYear() - 2} or removing filters.`,
+        message: `No TRI releases found in ${input.state}${countyNote}${yearNote}${chemNote}. ${hints.join(' ')}`,
       };
     }
 

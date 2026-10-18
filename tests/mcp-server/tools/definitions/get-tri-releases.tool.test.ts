@@ -195,10 +195,6 @@ describe('getTriReleasesTool', () => {
   });
 
   describe('facility_id source pointers', () => {
-    const recovery = getTriReleasesTool.errors!.find(
-      (e) => e.reason === 'no_releases_found',
-    )!.recovery;
-
     it('description sources facility_id from epa_search_tri_releases, never epa_search_facilities', () => {
       expect(getTriReleasesTool.description).toContain('epa_search_tri_releases');
       expect(getTriReleasesTool.description).toContain('15-character TRI facility ID');
@@ -212,11 +208,6 @@ describe('getTriReleasesTool', () => {
       expect(text).toContain('epa_search_tri_releases');
       expect(text).not.toContain('epa_search_facilities');
       expect(text).not.toContain('RegistryID');
-    });
-
-    it('no_releases_found recovery points at epa_search_tri_releases', () => {
-      expect(recovery).toContain('epa_search_tri_releases');
-      expect(recovery).not.toContain('epa_search_facilities');
     });
 
     it('empty-result message points at epa_search_tri_releases', async () => {
@@ -241,7 +232,6 @@ describe('getTriReleasesTool', () => {
       for (const text of [
         getTriReleasesTool.description,
         getTriReleasesTool.input.shape.facility_id.description ?? '',
-        recovery,
         result.message ?? '',
       ]) {
         expect(text).toContain('epa_get_facility');

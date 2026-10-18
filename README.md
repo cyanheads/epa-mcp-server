@@ -92,7 +92,7 @@ All resource data is also reachable via tools — use `epa_get_facility` and `ep
 ### `epa_get_tri_releases` <sub>tool</sub>
 
 - `facility_id` is the TRI `facilityId` from `epa_search_tri_releases` or `epa_get_facility` `triFacilityIds`; optional `year` (1987–2030) and partial `chemical_name`
-- Returns per-chemical air, water, land, and underground-injection releases plus a one-time/non-routine total, up to 500 filings per call (narrow with `year` or `chemical_name`)
+- Returns per-chemical air, water, land, and underground-injection releases plus a one-time/non-routine total, newest reporting year first when `year` is omitted. At 500 filings, both response surfaces warn that more may exist; narrow with `year` or `chemical_name`
 - Quantities are in pounds; dioxin records reported in grams are converted and carry `reportedUnit: "grams"`
 
 ---
@@ -109,6 +109,7 @@ All resource data is also reachable via tools — use `epa_get_facility` and `ep
 
 - Provide `state`/`city`/`zip_code`, or `latitude` + `longitude` + `radius_miles` (0.1–500); up to 200 sites (default 50)
 - Returns site identifiers, location, NPL, and cleanup status; `npl_status` filters listed, not-listed, proposed, or all (default)
+- Proximity searches check up to 500 candidate sites, then return those within the requested radius. A `notice` warns when the candidate cap may have omitted nearby sites, even if none were returned; sites without coordinates cannot be located
 
 ---
 

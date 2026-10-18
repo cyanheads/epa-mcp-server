@@ -358,6 +358,25 @@ function haversineDistanceMiles(lat1: number, lon1: number, lat2: number, lon2: 
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+/**
+ * Conservative integer latitude prefixes intersecting a spherical radius. DMAP compares
+ * coordinates as text, so prefixes intentionally overfetch (9 also matches 90). Both signed
+ * zero prefixes are needed at the equator; exact integer coordinates need no decimal suffix.
+ */
+function latitudePrefixes(latitude: number, radiusMiles: number): string[] {
+  const degrees = (radiusMiles / 3958.8) * (180 / Math.PI);
+  const low = Math.max(-90, latitude - degrees);
+  const high = Math.min(90, latitude + degrees);
+  const prefixes: string[] = [];
+  for (let degree = -90; degree <= 90; degree++) {
+    const bottom = degree < 0 ? degree - 1 : degree;
+    const top = degree < 0 ? degree : degree + 1;
+    if (bottom <= high && top >= low) prefixes.push(String(degree));
+  }
+  if (low <= 0 && high >= -1) prefixes.push('-0');
+  return prefixes;
+}
+
 export class DmapService {
   private readonly baseUrl: string;
 
@@ -515,7 +534,7 @@ export class DmapService {
     return matches.slice(0, wanted);
   }
 
-  /** Get TRI releases for a specific facility. */
+  /** Get up to 500 TRI filings for a facility, newest first unless a year is supplied. */
   async getTriReleases(
     params: {
       facilityId: string;
@@ -542,12 +561,24 @@ export class DmapService {
     ctx.log.debug('DMAP TRI releases query', { facilityId: params.facilityId, year: params.year });
 
     const rows = await this.fetchMatchingRows<RawTriReportingForm>(
-      (range) => this.buildTableUrl('tri', 'tri_reporting_form', filters, range),
+      (range) =>
+        this.buildTableUrl('tri', 'tri_reporting_form', filters, range, {
+          ...(params.year === undefined && { sort: NEWEST_FIRST }),
+        }),
       filters,
       500,
       ctx,
       budget,
     );
+    if (rows.length >= 500) {
+      // Keep punctuation-scan notices intact; cap guidance has its own enrichment field.
+      ctx.enrich({
+        truncated: true,
+        shown: rows.length,
+        cap: 500,
+        guidance: `The lookup returned its 500-filing cap; more may exist. Narrow with ${params.year === undefined ? 'year or chemical_name' : 'chemical_name'}.`,
+      });
+    }
     return this.withReleaseBreakdown(rows, rows.map(normalizeTriRelease), ctx, budget);
   }
 
@@ -774,37 +805,76 @@ export class DmapService {
       }
     }
 
-    // Need at least one filter for DMAP; fall back to a no-op that returns empty
-    if (filters.length === 0) {
+    const { latitude, longitude, radiusMiles } = params;
+    const proximity =
+      latitude !== undefined && longitude !== undefined && radiusMiles !== undefined;
+    // A coordinate search supplies its own latitude-prefix filter below.
+    if (filters.length === 0 && !proximity) {
       ctx.log.debug('DMAP Superfund query: no filters, returning empty');
       return [];
     }
 
-    const pageSize =
-      params.latitude !== undefined && params.longitude !== undefined
-        ? Math.min(500, limit * 10)
-        : limit;
     ctx.log.debug('DMAP Superfund query', { state: params.state, lat: params.latitude });
-
-    const rows = await this.fetchMatchingRows<RawSemsSite>(
-      (range) => this.buildTableUrl('sems', 'envirofacts_site', filters, range),
-      filters,
-      pageSize,
-      ctx,
-      dmapBudget(
-        'Superfund site search',
-        'Narrow it with zip_code, city, or npl_status, or call again later.',
-      ),
+    const budget = dmapBudget(
+      'Superfund site search',
+      'Narrow it with zip_code, city, or npl_status, or call again later.',
     );
+    let rows: RawSemsSite[];
+    if (proximity) {
+      rows = [];
+      let read = 0;
+      const prefixes = latitudePrefixes(latitude, radiusMiles);
+      for (const prefix of prefixes) {
+        const page = await this.fetchTable<RawSemsSite>(
+          this.buildTableUrl(
+            'sems',
+            'envirofacts_site',
+            [
+              ...filters,
+              { column: 'primary_latitude_decimal_val', operator: 'beginsWith', value: prefix },
+            ],
+            { first: 1, last: 500 - read },
+          ),
+          ctx,
+          budget,
+        );
+        read += page.length;
+        rows.push(
+          ...page.filter((row) =>
+            filters.every(
+              (f) =>
+                f.literal === undefined ||
+                String(row[f.column] ?? '')
+                  .toLowerCase()
+                  .includes(f.literal.toLowerCase()),
+            ),
+          ),
+        );
+        if (read >= 500) {
+          ctx.enrich.notice(
+            'The proximity search read its 500-candidate cap. More nearby sites may exist beyond the retrieved candidates, even if none were found. Narrow the radius or add city, zip_code, or npl_status filters.',
+          );
+          break;
+        }
+      }
+      rows = [...new Map(rows.map((row) => [row.site_id || JSON.stringify(row), row])).values()];
+    } else {
+      rows = await this.fetchMatchingRows<RawSemsSite>(
+        (range) => this.buildTableUrl('sems', 'envirofacts_site', filters, range),
+        filters,
+        limit,
+        ctx,
+        budget,
+      );
+    }
     let sites = rows.map(normalizeSemsSite);
 
-    if (params.latitude !== undefined && params.longitude !== undefined && params.radiusMiles) {
-      const originLat = params.latitude;
-      const originLng = params.longitude;
+    if (proximity) {
       sites = sites.filter((site) => {
         if (site.latitude === undefined || site.longitude === undefined) return false;
-        const dist = haversineDistanceMiles(originLat, originLng, site.latitude, site.longitude);
-        return dist <= (params.radiusMiles ?? 0);
+        return (
+          haversineDistanceMiles(latitude, longitude, site.latitude, site.longitude) <= radiusMiles
+        );
       });
     }
 

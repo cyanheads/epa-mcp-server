@@ -4,7 +4,6 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { formatTriReleaseLines } from '@/mcp-server/tools/format-tri-release.js';
 import { getDmapService } from '@/services/dmap/dmap-service.js';
 
@@ -28,7 +27,7 @@ export const getTriReleasesTool = tool('epa_get_tri_releases', {
       .max(2030)
       .optional()
       .describe(
-        'Reporting year to retrieve. Defaults to all available years. TRI data is typically available through ~2 years prior to the current year.',
+        'Reporting year to retrieve. Omit for all available years, newest first. At most 500 filings are returned; narrow with year or chemical_name when capped. TRI data is typically available through ~2 years prior to the current year.',
       ),
     chemical_name: z
       .string()
@@ -97,6 +96,16 @@ export const getTriReleasesTool = tool('epa_get_tri_releases', {
   }),
 
   enrichment: {
+    truncated: z
+      .boolean()
+      .optional()
+      .describe('True when 500 filings were returned and more may exist.'),
+    shown: z.number().optional().describe('Number of filings returned when capped.'),
+    cap: z.number().optional().describe('The 500-filing lookup cap, present only when reached.'),
+    guidance: z
+      .string()
+      .optional()
+      .describe('How to narrow a capped lookup with year or a more specific chemical_name.'),
     notice: z
       .string()
       .optional()
@@ -104,16 +113,6 @@ export const getTriReleasesTool = tool('epa_get_tri_releases', {
         'Present when a punctuated chemical_name filter read its page limit before finding every filing spelled as given, so more matching records may exist.',
       ),
   },
-
-  errors: [
-    {
-      reason: 'no_releases_found',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'No TRI records found for the given facility ID and filters.',
-      recovery:
-        'Take the 15-character TRI facility ID from the facilityId field of epa_search_tri_releases, or from epa_get_facility triFacilityIds for a known Registry ID. TRI data lags 18 months — try an earlier year.',
-    },
-  ],
 
   async handler(input, ctx) {
     ctx.log.info('epa_get_tri_releases', { facilityId: input.facility_id, year: input.year });
@@ -133,10 +132,26 @@ export const getTriReleasesTool = tool('epa_get_tri_releases', {
     if (releases.length === 0) {
       const yearNote = input.year ? ` for year ${input.year}` : '';
       const chemNote = input.chemical_name ? ` matching chemical "${input.chemical_name}"` : '';
+      const earlierYear =
+        input.year === undefined
+          ? undefined
+          : Math.min(input.year - 1, new Date().getFullYear() - 2);
+      const hints = ['TRI data lags ~18 months.'];
+      if (earlierYear !== undefined) {
+        hints.push(
+          earlierYear >= 1987
+            ? `For an earlier reporting period, try year ${earlierYear}, or remove year to search all available years.`
+            : 'Remove year to search all available years.',
+        );
+      }
+      if (chemicalName) hints.push('Remove chemical_name to include other chemicals.');
+      hints.push(
+        "Verify the facility ID with epa_search_tri_releases — facility_id is its 15-character facilityId, not a 12-digit EPA Registry ID; epa_get_facility returns a Registry ID's TRI IDs as triFacilityIds.",
+      );
       return {
         releases: [],
         facilityId: input.facility_id,
-        message: `No TRI releases found for facility "${input.facility_id}"${yearNote}${chemNote}. TRI data lags ~18 months — try year ${new Date().getFullYear() - 2} or earlier. Verify the facility ID with epa_search_tri_releases — facility_id is its 15-character facilityId, not a 12-digit EPA Registry ID; epa_get_facility returns a Registry ID's TRI IDs as triFacilityIds.`,
+        message: `No TRI releases found for facility "${input.facility_id}"${yearNote}${chemNote}. ${hints.join(' ')}`,
       };
     }
 

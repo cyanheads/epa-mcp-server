@@ -93,7 +93,7 @@ export const searchSuperfundTool = tool('epa_search_superfund', {
       .string()
       .optional()
       .describe(
-        'Present when a punctuated city filter read its page limit before finding limit sites spelled as given, so more matching sites may exist.',
+        'Present when a proximity search reaches its combined 500-candidate cap or a punctuated city filter reaches its page limit. More matching sites may exist, including when no sites were returned.',
       ),
   },
 
@@ -163,7 +163,7 @@ export const searchSuperfundTool = tool('epa_search_superfund', {
       return {
         sites: [],
         totalCount: 0,
-        message: `No Superfund sites found near ${location} with npl_status="${input.npl_status}". Try expanding the area, removing NPL status filter, or using a different location.`,
+        message: `No Superfund sites found${hasLatLng ? ' in the retrieved candidates' : ''} near ${location} with npl_status="${input.npl_status}". Try expanding the area, removing NPL status filter, or using a different location.`,
       };
     }
 
