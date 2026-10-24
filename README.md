@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.5.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/epa-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/epa-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/epa-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.3-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.5.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/epa-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/epa-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/epa-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -35,44 +35,44 @@ EPA environmental data across five federal programs — facility compliance (ECH
 
 | Tool | Description |
 |:---|:---|
-| `epa_search_facilities` | Search EPA-regulated facilities by location, environmental program, or compliance status across CAA, CWA, RCRA, TRI, and SDWA |
-| `epa_get_facility` | Full compliance profile for one facility by EPA Registry ID — compliance status, inspections, enforcement actions, penalties, and TRI IDs |
-| `epa_search_violations` | Search EPA civil and criminal enforcement cases by state, program, or date range |
-| `epa_get_air_quality` | Current AQI observations or the issued AQI forecast from AirNow |
-| `epa_get_tri_releases` | Per-chemical Toxic Release Inventory data for a single facility |
-| `epa_search_tri_releases` | Toxic Release Inventory records across facilities in a state or county |
-| `epa_search_superfund` | Search Superfund (CERCLA/SEMS) sites by location or NPL listing status |
-| `epa_search_water_systems` | Search drinking water systems (SDWIS) by state or ZIP code |
-| `epa_get_ejscreen` | EJScreen environmental-justice indicators for a point and buffer |
+| `epa_echo_search_facilities` | Search EPA-regulated facilities by location, environmental program, or compliance status across CAA, CWA, RCRA, TRI, and SDWA |
+| `epa_echo_get_facility` | Full compliance profile for one facility by EPA Registry ID — compliance status, inspections, enforcement actions, penalties, and TRI IDs |
+| `epa_echo_search_violations` | Search EPA civil and criminal enforcement cases by state, program, or date range |
+| `epa_airnow_get_conditions` | Current AQI observations or the issued AQI forecast from AirNow |
+| `epa_tri_get_facility_releases` | Per-chemical Toxic Release Inventory data for a single facility |
+| `epa_tri_search_releases` | Toxic Release Inventory records across facilities in a state or county |
+| `epa_superfund_search_sites` | Search Superfund (CERCLA/SEMS) sites by location or NPL listing status |
+| `epa_water_search_systems` | Search drinking water systems (SDWIS) by state or ZIP code |
+| `epa_ejscreen_get_scores` | EJScreen environmental-justice indicators for a point and buffer |
 
 ### Resources
 
 | Resource | Description |
 |:---|:---|
-| `epa://facility/{registry_id}` | Full compliance profile for a facility by EPA Registry ID (same data as `epa_get_facility`) |
+| `epa://facility/{registry_id}` | Full compliance profile for a facility by EPA Registry ID (same data as `epa_echo_get_facility`) |
 | `epa://superfund/{site_id}` | Superfund site record by SEMS site ID |
 
-All resource data is also reachable via tools — use `epa_get_facility` and `epa_search_superfund` for programmatic access in tool-only MCP clients.
+All resource data is also reachable via tools — use `epa_echo_get_facility` and `epa_superfund_search_sites` for programmatic access in tool-only MCP clients.
 
 ## Capability reference
 
-### `epa_search_facilities` <sub>tool</sub>
+### `epa_echo_search_facilities` <sub>tool</sub>
 
 - Provide ZIP code, state, city (prefix match, preferably with state), or latitude + longitude + radius_miles (max 100 miles); up to 100 results (default 50)
-- Returns `registryId` for `epa_get_facility`, county and `fipsCode`, coordinates, per-program flags, and five-year inspection and penalty totals
+- Returns `registryId` for `epa_echo_get_facility`, county and `fipsCode`, coordinates, per-program flags, and five-year inspection and penalty totals
 - `programs` takes one of CAA, CWA, RCRA, TRI, or SDWA; `has_violation` keeps facilities in significant noncompliance; `active_only` keeps facilities with an active permit
 
 ---
 
-### `epa_get_facility` <sub>tool</sub>
+### `epa_echo_get_facility` <sub>tool</sub>
 
-- `registry_id` comes from `epa_search_facilities`
-- Returns `complianceStatus`, a per-statute `programCompliance` summary, the newest 100 inspections from the last five years (`inspectionsTotal` counts them all), five years of enforcement actions with penalties, the latest TRI total with `triReleasesTransfersYear`, and `triFacilityIds` for `epa_get_tri_releases`
+- `registry_id` comes from `epa_echo_search_facilities`
+- Returns `complianceStatus`, a per-statute `programCompliance` summary, the newest 100 inspections from the last five years (`inspectionsTotal` counts them all), five years of enforcement actions with penalties, the latest TRI total with `triReleasesTransfersYear`, and `triFacilityIds` for `epa_tri_get_facility_releases`
 - If the status lookup fails, the profile returns without `complianceStatus` and a `notice` says so; an unknown ID fails as `facility_not_found`
 
 ---
 
-### `epa_search_violations` <sub>tool</sub>
+### `epa_echo_search_violations` <sub>tool</sub>
 
 - Requires `state` or `zip_code`; up to 100 cases (default 50)
 - `program` filters CAA, CWA, RCRA, SDWA, CERCLA, FIFRA, or TSCA, matching any law a case cites; `case_type` is civil, criminal, or all (default)
@@ -80,7 +80,7 @@ All resource data is also reachable via tools — use `epa_get_facility` and `ep
 
 ---
 
-### `epa_get_air_quality` <sub>tool</sub>
+### `epa_airnow_get_conditions` <sub>tool</sub>
 
 - Provide `zip_code` or both `latitude` and `longitude`; `mode` is current (default) or forecast
 - Current mode returns each pollutant's latest hourly NowCast AQI from the closest monitor within 50 miles; forecast mode returns each issued day with `dateValid`, `actionDay`, and `discussion`, and `forecast_date` (YYYY-MM-DD) keeps one day
@@ -89,31 +89,31 @@ All resource data is also reachable via tools — use `epa_get_facility` and `ep
 
 ---
 
-### `epa_get_tri_releases` <sub>tool</sub>
+### `epa_tri_get_facility_releases` <sub>tool</sub>
 
-- `facility_id` is the TRI `facilityId` from `epa_search_tri_releases` or `epa_get_facility` `triFacilityIds`; optional `year` (1987–2030) and partial `chemical_name`
+- `facility_id` is the TRI `facilityId` from `epa_tri_search_releases` or `epa_echo_get_facility` `triFacilityIds`; optional `year` (1987–2030) and partial `chemical_name`
 - Returns per-chemical air, water, land, and underground-injection releases plus a one-time/non-routine total, newest reporting year first when `year` is omitted. At 500 filings, both response surfaces warn that more may exist; narrow with `year` or `chemical_name`
 - Quantities are in pounds; dioxin records reported in grams are converted and carry `reportedUnit: "grams"`
 
 ---
 
-### `epa_search_tri_releases` <sub>tool</sub>
+### `epa_tri_search_releases` <sub>tool</sub>
 
 - Requires 2-letter `state`; optional `county` (partial match, case-insensitive), partial `chemical_name`, and `year`; up to 200 records (default 50), newest reporting year first when `year` is omitted
-- Returns `facilityId` for `epa_get_tri_releases` and each record's one-time/non-routine total; `include_release_breakdown: true` adds air, water, land, and underground-injection releases at the cost of one more upstream request (up to ~20 seconds when EPA has not cached it)
+- Returns `facilityId` for `epa_tri_get_facility_releases` and each record's one-time/non-routine total; `include_release_breakdown: true` adds air, water, land, and underground-injection releases at the cost of one more upstream request (up to ~20 seconds when EPA has not cached it)
 - Dioxin records reported in grams are converted to pounds and carry `reportedUnit: "grams"`
 
 ---
 
-### `epa_search_superfund` <sub>tool</sub>
+### `epa_superfund_search_sites` <sub>tool</sub>
 
 - Provide `state`/`city`/`zip_code`, or `latitude` + `longitude` + `radius_miles` (0.1–500); up to 200 sites (default 50)
 - Returns site identifiers, location, NPL, and cleanup status; `npl_status` filters listed, not-listed, proposed, or all (default)
-- Proximity searches check up to 500 candidate sites, then return those within the requested radius. A `notice` warns when the candidate cap may have omitted nearby sites, even if none were returned; sites without coordinates cannot be located
+- Proximity searches page latitude/longitude candidates to exhaustion, apply exact distance, and return the nearest sites first. A `notice` says how many matching sites the result limit omitted; sites without coordinates cannot be located. All candidate pages share a 50-second deadline — narrow the radius or add filters if it times out
 
 ---
 
-### `epa_search_water_systems` <sub>tool</sub>
+### `epa_water_search_systems` <sub>tool</sub>
 
 - Requires `state` or `zip_code`; up to 200 systems (default 50). `zip_code` matches each system's address of record, not its service area
 - `has_violation` keeps systems with an open SDWIS violation; `pws_type` is community, non-transient, or transient, returned as CWS / NTNCWS / TNCWS in `type`
@@ -121,7 +121,7 @@ All resource data is also reachable via tools — use `epa_get_facility` and `ep
 
 ---
 
-### `epa_get_ejscreen` <sub>tool</sub>
+### `epa_ejscreen_get_scores` <sub>tool</sub>
 
 - Requires `latitude` and `longitude`; `distance` defaults to 1, `unit` to miles (kilometers accepted); buffer capped at 15 miles
 - Returns 13 environmental and 6 demographic indicators with national/state percentiles and demographic indices; outside coverage, `coverage.valid: false` carries a note
@@ -131,14 +131,14 @@ All resource data is also reachable via tools — use `epa_get_facility` and `ep
 
 ### `epa://facility/{registry_id}` <sub>resource</sub>
 
-- `registry_id` comes from `epa_search_facilities`
-- Returns the `epa_get_facility` compliance profile; errors when no facility resolves
+- `registry_id` comes from `epa_echo_search_facilities`
+- Returns the `epa_echo_get_facility` compliance profile; errors when no facility resolves
 
 ---
 
 ### `epa://superfund/{site_id}` <sub>resource</sub>
 
-- `site_id` comes from `epa_search_superfund`
+- `site_id` comes from `epa_superfund_search_sites`
 - Returns the Superfund site record; errors when no SEMS record resolves
 
 ## Features
@@ -154,14 +154,14 @@ EPA-specific:
 Agent-friendly output:
 
 - Search results carry the IDs the next tool needs: `registryId`, `fipsCode`, `facilityId`, and `triFacilityIds`
-- `epa_get_facility` returns a partial profile with a `notice` when the status lookup fails
+- `epa_echo_get_facility` returns a partial profile with a `notice` when the status lookup fails
 - Empty searches return a `message` that echoes the applied filters and suggests how to broaden them
 
 ## Getting started
 
 ### Public Hosted Instance
 
-A public instance is available at `https://epa.caseyjhand.com/mcp` — no installation required. It runs without an AirNow key, so `epa_get_air_quality` is not available there; the other 8 tools are. Point any MCP client at it via Streamable HTTP:
+A public instance is available at `https://epa.caseyjhand.com/mcp` — no installation required. It runs without an AirNow key, so `epa_airnow_get_conditions` is not available there; the other 8 tools are. Point any MCP client at it via Streamable HTTP:
 
 ```json
 {
@@ -176,7 +176,7 @@ A public instance is available at `https://epa.caseyjhand.com/mcp` — no instal
 
 ### Self-Hosted / Local
 
-Add the following to your MCP client configuration file. An AirNow API key is optional — set `AIRNOW_API_KEY` to enable `epa_get_air_quality` (register free at [docs.airnowapi.org](https://docs.airnowapi.org/account/request/)); without it the server starts with the other 8 tools. ECHO, DMAP, and EJScreen tools work without authentication.
+Add the following to your MCP client configuration file. An AirNow API key is optional — set `AIRNOW_API_KEY` to enable `epa_airnow_get_conditions` (register free at [docs.airnowapi.org](https://docs.airnowapi.org/account/request/)); without it the server starts with the other 8 tools. ECHO, DMAP, and EJScreen tools work without authentication.
 
 ```json
 {
@@ -242,8 +242,8 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 AIRNOW_API_KEY=... bun run start:http
 
 ### Prerequisites
 
-- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+); development and Docker use Bun v1.4.3.
-- (Optional) An AirNow API key to enable `epa_get_air_quality` — register free at [docs.airnowapi.org/account/request](https://docs.airnowapi.org/account/request/). Without it the server runs the other 8 tools. ECHO, DMAP, and EJScreen tools require no API key.
+- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+); development and Docker use Bun v1.4.4.
+- (Optional) An AirNow API key to enable `epa_airnow_get_conditions` — register free at [docs.airnowapi.org/account/request](https://docs.airnowapi.org/account/request/). Without it the server runs the other 8 tools. ECHO, DMAP, and EJScreen tools require no API key.
 
 ### Installation
 
@@ -278,7 +278,7 @@ All configuration is validated at startup via Zod schemas in `src/config/`. Key 
 
 | Variable | Description | Default |
 |:---|:---|:---|
-| `AIRNOW_API_KEY` | **Optional.** Enables `epa_get_air_quality`. | — |
+| `AIRNOW_API_KEY` | **Optional.** Enables `epa_airnow_get_conditions`. | — |
 | `EPA_ECHO_BASE_URL` | ECHO API base URL | `https://echodata.epa.gov/echo` |
 | `EPA_DMAP_BASE_URL` | Envirofacts DMAP API base URL | `https://data.epa.gov/dmapservice` |
 | `EPA_AIRNOW_BASE_URL` | AirNow API base URL | `https://www.airnowapi.org/aq` |

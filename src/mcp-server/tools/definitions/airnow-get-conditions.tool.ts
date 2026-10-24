@@ -1,7 +1,7 @@
 /**
  * @fileoverview Tool for getting current AQI observations or the issued AQI forecast for a
  * location from AirNow.
- * @module mcp-server/tools/definitions/get-air-quality.tool
+ * @module mcp-server/tools/definitions/airnow-get-conditions.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
@@ -36,10 +36,10 @@ function attributionFor(mode: 'current' | 'forecast', areas: AirQualityArea[]): 
   return `${credit} ${PRELIMINARY_NOTICE}`;
 }
 
-export const getAirQualityTool = tool('epa_get_air_quality', {
+export const airnowGetConditionsTool = tool('epa_airnow_get_conditions', {
   title: 'Get Air Quality Index',
   description:
-    "Get current AQI observations or the issued AQI forecast for a US location from the AirNow API. Provide either zip_code or both latitude and longitude. Current mode returns the latest hourly NowCast AQI for each pollutant (PM2.5, ozone, PM10) from the closest monitor within 50 miles, with the monitor site name, site ID, and reporting agency; pollutants in one reporting area can come from different monitors. Forecast mode returns every day the reporting area's agency has issued (typically one to five), each with the AQI category, an action-day flag, and the issue date, plus the agency's forecast discussion when one exists; some agencies forecast a category without an AQI number. In forecast mode, set forecast_date to keep only the forecast valid on that date; current mode rejects it. Data are preliminary — suitable for awareness, not regulatory, trend, or enforcement decisions. Responses are cached for ~1 hour.",
+    "AirNow: Get current AQI observations or the issued AQI forecast for a US location from the AirNow API. Provide either zip_code or both latitude and longitude. Current mode returns the latest hourly NowCast AQI for each pollutant (PM2.5, ozone, PM10) from the closest monitor within 50 miles, with the monitor site name, site ID, and reporting agency; pollutants in one reporting area can come from different monitors. Forecast mode returns every day the reporting area's agency has issued (typically one to five), each with the AQI category, an action-day flag, and the issue date, plus the agency's forecast discussion when one exists; some agencies forecast a category without an AQI number. In forecast mode, set forecast_date to keep only the forecast valid on that date; current mode rejects it. Data are preliminary — suitable for awareness, not regulatory, trend, or enforcement decisions. Responses are cached for ~1 hour.",
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -226,7 +226,7 @@ export const getAirQualityTool = tool('epa_get_air_quality', {
       );
     }
 
-    ctx.log.info('epa_get_air_quality', {
+    ctx.log.info('epa_airnow_get_conditions', {
       mode: input.mode,
       location: location.kind,
       forecastDate,
@@ -246,7 +246,7 @@ export const getAirQualityTool = tool('epa_get_air_quality', {
           })
         : lookup.areas;
 
-    ctx.log.info('epa_get_air_quality completed', { areas: observations.length });
+    ctx.log.info('epa_airnow_get_conditions completed', { areas: observations.length });
 
     const attribution = attributionFor(input.mode, observations);
     if (observations.length > 0) return { observations, mode: input.mode, attribution };

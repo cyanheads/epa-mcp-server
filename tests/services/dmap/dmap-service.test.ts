@@ -11,10 +11,14 @@ import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getTriReleasesTool } from '@/mcp-server/tools/definitions/get-tri-releases.tool.js';
-import { searchSuperfundTool } from '@/mcp-server/tools/definitions/search-superfund.tool.js';
-import { searchTriReleasesTool } from '@/mcp-server/tools/definitions/search-tri-releases.tool.js';
+import { superfundSearchSitesTool } from '@/mcp-server/tools/definitions/superfund-search-sites.tool.js';
+import { triGetFacilityReleasesTool } from '@/mcp-server/tools/definitions/tri-get-facility-releases.tool.js';
+import { triSearchReleasesTool } from '@/mcp-server/tools/definitions/tri-search-releases.tool.js';
 import { DmapService, initDmapService } from '@/services/dmap/dmap-service.js';
+import newarkCoordinates from './fixtures/newark-superfund-coordinates.json' with { type: 'json' };
+import seattleCoordinates from './fixtures/seattle-superfund-coordinates.json' with {
+  type: 'json',
+};
 
 /**
  * Route fetch by URL substring, returning each route's rows as a JSON array. A request no route
@@ -307,6 +311,130 @@ function abortWhileInFlight(controller: AbortController) {
 describe('DmapService Superfund proximity candidates', () => {
   afterEach(() => vi.restoreAllMocks());
 
+  /** Full latitude-band coordinate captures from EPA DMAP, 2026-10-24; names omitted. */
+  it.each([
+    ['Newark', newarkCoordinates, 40.7357, -74.1724, 203, '0202764', 3],
+    ['Seattle', seattleCoordinates, 47.6, -122.3, 15, '1003072', 1],
+  ] as const)(
+    'preserves the complete %s reference matches with fewer candidates',
+    async (_city, coordinates, latitude, longitude, total, nearest, requests) => {
+      const rows = coordinates.map(
+        ([site_id, primary_latitude_decimal_val, primary_longitude_decimal_val]) => ({
+          site_id,
+          name: site_id,
+          primary_latitude_decimal_val,
+          primary_longitude_decimal_val,
+        }),
+      );
+      const urls = stubFakeDmap({ 'sems.envirofacts_site': rows });
+      initDmapService({} as AppConfig, {} as StorageService);
+      const call = await runToolContract(superfundSearchSitesTool, {
+        latitude,
+        longitude,
+        radius_miles: 5,
+        limit: 200,
+      });
+      expect(call.isError).toBeFalsy();
+      const structured = call.structuredContent as { sites: { siteId: string }[]; notice?: string };
+      expect(structured.sites).toHaveLength(Math.min(total, 200));
+      expect(structured.sites[0]?.siteId).toBe(nearest);
+      expect(urls).toHaveLength(requests);
+      const text = call.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n');
+      expect(text).toContain(nearest);
+      if (total > 200) {
+        expect(structured.notice).toContain('nearest 200 of 203');
+        expect(text).toContain(structured.notice);
+      } else expect(structured).not.toHaveProperty('notice');
+    },
+  );
+
+  it('continues past a full page with no exact-radius matches and an empty later partition', async () => {
+    const rows = Array.from({ length: 501 }, (_, i) => ({
+      site_id: String(i).padStart(7, '0'),
+      name: `SITE ${i}`,
+      primary_latitude_decimal_val: i === 500 ? '9.99' : '90',
+      primary_longitude_decimal_val: '0',
+    }));
+    const urls = stubFakeDmap({ 'sems.envirofacts_site': rows });
+    const result = await makeService().searchSuperfund(
+      { latitude: 9.99, longitude: 0, radiusMiles: 5 },
+      createMockContext(),
+    );
+    expect(result.map((site) => site.siteId)).toEqual(['0000500']);
+    expect(urls.some((url) => url.includes('/501:1000/json'))).toBe(true);
+    expect(urls.some((url) => url.includes('/beginsWith/10/'))).toBe(true);
+  });
+
+  it('covers both literal zero signs in latitude and longitude', async () => {
+    const rows = ['0', '-0', '0.01', '-0.01'].flatMap((lat, i) =>
+      ['0', '-0', '0.01', '-0.01'].map((lon, j) => ({
+        site_id: `${i}${j}`,
+        name: `${i}${j}`,
+        primary_latitude_decimal_val: lat,
+        primary_longitude_decimal_val: lon,
+      })),
+    );
+    stubFakeDmap({ 'sems.envirofacts_site': rows });
+    const result = await makeService().searchSuperfund(
+      { latitude: 0, longitude: 0, radiusMiles: 5 },
+      createMockContext(),
+    );
+    expect(result.map((site) => site.siteId).sort()).toEqual([
+      '00',
+      '01',
+      '02',
+      '03',
+      '10',
+      '11',
+      '12',
+      '13',
+      '20',
+      '21',
+      '22',
+      '23',
+      '30',
+      '31',
+      '32',
+      '33',
+    ]);
+  });
+
+  it('exhausts stable pages and orders a later nearer site before applying limit', async () => {
+    const rows = Array.from({ length: 501 }, (_, i) => ({
+      site_id: String(i + 1).padStart(7, '0'),
+      name: `SITE ${i}`,
+      primary_latitude_decimal_val: i === 500 ? '40.7357' : '40.79',
+      primary_longitude_decimal_val: '-74.1724',
+    }));
+    const urls = stubFakeDmap({ 'sems.envirofacts_site': rows });
+    const result = await makeService().searchSuperfund(
+      { latitude: 40.7357, longitude: -74.1724, radiusMiles: 5, limit: 1 },
+      createMockContext(),
+    );
+    expect(result.map((site) => site.siteId)).toEqual(['0000501']);
+    expect(urls).toHaveLength(2);
+    expect(urls[0]).toContain('/primary_longitude_decimal_val/beginsWith/-74/');
+    expect(urls[0]).toContain('/sort/sems.envirofacts_site.site_id:asc/1:500/json');
+    expect(urls[1]).toContain('/501:1000/json');
+  });
+
+  it('rejects repeated pages instead of claiming complete results', async () => {
+    const page = Array.from({ length: 500 }, (_, i) => ({
+      site_id: String(i),
+      name: `SITE ${i}`,
+      primary_latitude_decimal_val: '40.7357',
+      primary_longitude_decimal_val: '-74.1724',
+    }));
+    const urls = stubDmapFetch([{ match: '/sems.envirofacts_site/', rows: page }]);
+    await expect(
+      makeService().searchSuperfund(
+        { latitude: 40.7357, longitude: -74.1724, radiusMiles: 5 },
+        createMockContext(),
+      ),
+    ).rejects.toMatchObject({ code: JsonRpcErrorCode.ServiceUnavailable });
+    expect(urls).toHaveLength(2);
+  });
+
   it('characterizes ZIP-only searches without coordinates', async () => {
     const urls = stubFakeDmap({
       'sems.envirofacts_site': [{ site_id: 'S1', name: 'SPARSE', zip_code: '98104' }],
@@ -343,8 +471,10 @@ describe('DmapService Superfund proximity candidates', () => {
       createMockContext(),
     );
     expect(sites.map((s) => s.siteId)).toEqual(['1002655']);
-    expect(urls).toHaveLength(1);
-    expect(urls[0]).toContain('/primary_latitude_decimal_val/beginsWith/47/1:500/json');
+    expect(urls).toHaveLength(2);
+    expect(urls[0]).toContain(
+      '/primary_latitude_decimal_val/beginsWith/47/and/primary_longitude_decimal_val/beginsWith/-122/',
+    );
   });
 
   it.each([
@@ -354,6 +484,11 @@ describe('DmapService Superfund proximity candidates', () => {
     ['9/10 boundary', 9.99, 0, 10.01, 0],
     ['negative 9/10 boundary', -9.99, 0, -10.01, 0],
     ['longitude wrap', 47.6, 179.99, 47.6, -179.99],
+    ['westward longitude wrap', 47.6, -179.99, 47.6, 179.99],
+    ['longitude 9/10 boundary', 0, 9.99, 0, 10.01],
+    ['negative longitude 9/10 boundary', 0, -9.99, 0, -10.01],
+    ['circle reaching north pole', 89.99, 0, 89.98, 180],
+    ['circle reaching south pole', -89.99, 0, -89.98, 180],
     ['north pole', 90, 0, 89.99, 180],
     ['south pole', -90, 0, -89.99, 180],
   ] as const)(
@@ -375,7 +510,9 @@ describe('DmapService Superfund proximity candidates', () => {
         createMockContext(),
       );
       expect(sites.map((s) => s.siteId)).toEqual(['NEAR']);
-      expect(urls.every((url) => !url.includes('/primary_longitude_decimal_val/'))).toBe(true);
+      expect(urls.every((url) => url.includes('/primary_longitude_decimal_val/'))).toBe(
+        Math.abs(latitude) < 89.9,
+      );
       if (latitude === 0) {
         expect(urls.some((url) => url.includes('/beginsWith/0/'))).toBe(true);
         expect(urls.some((url) => url.includes('/beginsWith/-0/'))).toBe(true);
@@ -410,7 +547,7 @@ describe('DmapService Superfund proximity candidates', () => {
       createMockContext(),
     );
     expect(sites.map((s) => s.siteId)).toEqual(['S1']);
-    expect(urls).toHaveLength(2);
+    expect(urls).toHaveLength(4);
     for (const url of urls)
       expect(decodeURIComponent(url)).toContain(
         '/fk_ref_state_code/equals/MO/and/city_name/contains/St_ Louis/and/zip_code/equals/63101/and/npl_status_code/equals/NPL/and/primary_latitude_decimal_val/beginsWith/',
@@ -418,7 +555,7 @@ describe('DmapService Superfund proximity candidates', () => {
   });
 
   it.each([false, true])(
-    'discloses the combined raw candidate cap on both surfaces, nearby=%s',
+    'exhausts candidates and discloses only the caller result limit on both surfaces, nearby=%s',
     async (nearby) => {
       const rows = Array.from({ length: 600 }, (_, i) => ({
         site_id: `S${i}`,
@@ -428,7 +565,7 @@ describe('DmapService Superfund proximity candidates', () => {
       }));
       const urls = stubFakeDmap({ 'sems.envirofacts_site': rows });
       initDmapService({} as AppConfig, {} as StorageService);
-      const call = await runToolContract(searchSuperfundTool, {
+      const call = await runToolContract(superfundSearchSitesTool, {
         latitude: 9.99,
         longitude: 0,
         radius_miles: 5,
@@ -437,16 +574,22 @@ describe('DmapService Superfund proximity candidates', () => {
       expect(call.isError).toBeFalsy();
       const structured = call.structuredContent as {
         sites: unknown[];
-        notice: string;
+        notice?: string;
         message?: string;
       };
       expect(structured.sites).toHaveLength(nearby ? 2 : 0);
-      expect(structured.notice).toContain('500-candidate cap');
-      expect(structured.notice).toContain('More nearby sites may exist');
       const text = call.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n');
-      expect(text).toContain(structured.notice);
-      if (!nearby) expect(text).toContain('No Superfund sites found in the retrieved candidates');
-      expect(urls.map((url) => /\/(\d+:\d+)\/json$/.exec(url)![1])).toEqual(['1:500', '1:300']);
+      if (nearby) {
+        expect(structured.notice).toContain('nearest 2 of 600');
+        expect(text).toContain(structured.notice);
+      } else {
+        expect(structured).not.toHaveProperty('notice');
+        expect(text).toContain('No Superfund sites found near');
+      }
+      expect(urls.every((url) => url.includes('/sort/sems.envirofacts_site.site_id:asc/'))).toBe(
+        true,
+      );
+      expect(urls.every((url) => url.includes('/1:500/json'))).toBe(true);
     },
   );
 
@@ -462,7 +605,7 @@ describe('DmapService Superfund proximity candidates', () => {
       ],
     });
     initDmapService({} as AppConfig, {} as StorageService);
-    const call = await runToolContract(searchSuperfundTool, {
+    const call = await runToolContract(superfundSearchSitesTool, {
       latitude: 0,
       longitude: 0,
       radius_miles: 1,
@@ -595,7 +738,7 @@ describe('DmapService facility TRI cap and order', () => {
         ctx.enrich.notice('Existing punctuation-scan notice.');
         return original.call(this, params, ctx);
       });
-      const call = await runToolContract(getTriReleasesTool, {
+      const call = await runToolContract(triGetFacilityReleasesTool, {
         facility_id: 'FAC',
         ...(year !== undefined && { year }),
       });
@@ -622,7 +765,7 @@ describe('DmapService facility TRI cap and order', () => {
   it('omits cap fields below 500 and retains a successful empty result', async () => {
     stubFakeDmap({ 'tri.tri_reporting_form': [], 'tri.tri_release_qty': [] });
     initDmapService({} as AppConfig, {} as StorageService);
-    const call = await runToolContract(getTriReleasesTool, { facility_id: 'FAC' });
+    const call = await runToolContract(triGetFacilityReleasesTool, { facility_id: 'FAC' });
     expect(call.isError).toBeFalsy();
     expect(call.structuredContent).toMatchObject({ releases: [], facilityId: 'FAC' });
     for (const key of ['truncated', 'shown', 'cap', 'guidance'])
@@ -1534,7 +1677,7 @@ describe('DmapService.searchTriReleases against DMAP semantics', () => {
       ],
     });
 
-    const call = await runToolContract(searchTriReleasesTool, {
+    const call = await runToolContract(triSearchReleasesTool, {
       state: 'MN',
       county: 'Lake County',
       year: 2022,
@@ -2279,7 +2422,7 @@ describe('DmapService.searchTriReleases result order', () => {
     initDmapService({} as AppConfig, {} as StorageService);
     stubFakeDmap(AK_TABLES);
 
-    const call = await runToolContract(searchTriReleasesTool, { state: 'AK', limit: 2 });
+    const call = await runToolContract(triSearchReleasesTool, { state: 'AK', limit: 2 });
 
     expect(call.isError).toBeFalsy();
     const structured = call.structuredContent as { releases: Array<Record<string, unknown>> };
@@ -2395,11 +2538,11 @@ describe('DmapService TRI release breakdown under the request-line limit', () =>
     );
   });
 
-  it('epa_get_tri_releases returns a many-form facility with its breakdown on both surfaces', async () => {
+  it('epa_tri_get_facility_releases returns a many-form facility with its breakdown on both surfaces', async () => {
     initDmapService({} as AppConfig, {} as StorageService);
     stubFakeDmap(boeingTables());
 
-    const call = await runToolContract(getTriReleasesTool, { facility_id: BOEING });
+    const call = await runToolContract(triGetFacilityReleasesTool, { facility_id: BOEING });
 
     expect(call.isError).toBeFalsy();
     const structured = call.structuredContent as { releases: Array<Record<string, unknown>> };
@@ -2531,15 +2674,17 @@ describe('DmapService TRI release breakdown under the request-line limit', () =>
     });
   });
 
-  it('carries the narrowing Timeout on both surfaces of epa_get_tri_releases', async () => {
+  it('carries the narrowing Timeout on both surfaces of epa_tri_get_facility_releases', async () => {
     vi.useFakeTimers();
     initDmapService({} as AppConfig, {} as StorageService);
     stubFakeDmap({}, (_url, signal) => hang(signal));
 
     let call: Awaited<ReturnType<typeof runToolContract>> | undefined;
-    const pending = runToolContract(getTriReleasesTool, { facility_id: BOEING }).then((result) => {
-      call = result;
-    });
+    const pending = runToolContract(triGetFacilityReleasesTool, { facility_id: BOEING }).then(
+      (result) => {
+        call = result;
+      },
+    );
     await vi.advanceTimersByTimeAsync(55_000);
     await pending;
 
@@ -2572,7 +2717,7 @@ describe('DmapService TRI release breakdown under the request-line limit', () =>
       .spyOn(globalThis, 'fetch')
       .mockImplementation(async () => requestLineTooLarge(5313));
 
-    const call = await runToolContract(getTriReleasesTool, { facility_id: BOEING });
+    const call = await runToolContract(triGetFacilityReleasesTool, { facility_id: BOEING });
 
     expect(call.isError).toBe(true);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
@@ -2669,11 +2814,11 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
     expect(urls[0]).toContain('/county_name/contains/PRINCE%20GEORGE_S/');
   });
 
-  it('epa_search_tri_releases carries an apostrophe search on both surfaces', async () => {
+  it('epa_tri_search_releases carries an apostrophe search on both surfaces', async () => {
     initDmapService({} as AppConfig, {} as StorageService);
     stubFakeDmap(PUNCTUATED_TABLES);
 
-    const call = await runToolContract(searchTriReleasesTool, {
+    const call = await runToolContract(triSearchReleasesTool, {
       state: 'TX',
       chemical_name: "Michler's ketone",
     });
@@ -2759,7 +2904,7 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
     expect(getEnrichment(ctx)).not.toHaveProperty('notice');
   });
 
-  it('epa_search_tri_releases discloses a wildcard walk cut short, beside the records it found', async () => {
+  it('epa_tri_search_releases discloses a wildcard walk cut short, beside the records it found', async () => {
     initDmapService({} as AppConfig, {} as StorageService);
     // Live 2026-10-16: TX "C.I." reads three pages of C_I_ wildcard rows and keeps 3 records.
     const facilities = [triFacility('77001HSTNP100MA', 'HOUSTON PLANT', 'TX', 'HARRIS')];
@@ -2776,7 +2921,7 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
       'tri.tri_release_qty': [],
     });
 
-    const call = await runToolContract(searchTriReleasesTool, {
+    const call = await runToolContract(triSearchReleasesTool, {
       state: 'TX',
       chemical_name: 'C.I.',
     });
@@ -2794,14 +2939,14 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
     expect(text).toContain('### C.I. Food Red 15 — HOUSTON PLANT (77001HSTNP100MA) (2024)');
   });
 
-  it('epa_get_tri_releases discloses a wildcard walk cut short on both surfaces', async () => {
+  it('epa_tri_get_facility_releases discloses a wildcard walk cut short on both surfaces', async () => {
     initDmapService({} as AppConfig, {} as StorageService);
     const forms = Array.from({ length: 1500 }, (_, n) =>
       triForm(`1322230${String(n).padStart(6, '0')}`, BOEING, 'CHIC SOLVENT', 2023),
     );
     const urls = stubFakeDmap({ 'tri.tri_reporting_form': forms, 'tri.tri_release_qty': [] });
 
-    const call = await runToolContract(getTriReleasesTool, {
+    const call = await runToolContract(triGetFacilityReleasesTool, {
       facility_id: BOEING,
       chemical_name: 'C.I.',
     });
@@ -2821,7 +2966,7 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
     expect(text).toContain('No TRI releases found');
   });
 
-  it('epa_search_superfund discloses a wildcard walk cut short on both surfaces', async () => {
+  it('epa_superfund_search_sites discloses a wildcard walk cut short on both surfaces', async () => {
     initDmapService({} as AppConfig, {} as StorageService);
     const sites = [
       ...Array.from({ length: 300 }, (_, n) => semsSite(`V${n}`, 'COEUR D ALENE')),
@@ -2829,7 +2974,7 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
     ];
     stubFakeDmap({ 'sems.envirofacts_site': sites });
 
-    const call = await runToolContract(searchSuperfundTool, {
+    const call = await runToolContract(superfundSearchSitesTool, {
       state: 'ID',
       city: "Coeur d'Alene",
       limit: 5,
@@ -2921,7 +3066,7 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
     initDmapService({} as AppConfig, {} as StorageService);
     const urls = stubFakeDmap(PUNCTUATED_TABLES);
 
-    const call = await runToolContract(searchSuperfundTool, { zip_code: '98104,98101' });
+    const call = await runToolContract(superfundSearchSitesTool, { zip_code: '98104,98101' });
 
     expect(call.isError).toBe(true);
     expect(urls).toEqual([]);
@@ -3007,7 +3152,10 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
     const urls = stubFakeDmap({ 'sems.envirofacts_site': [semsSite('S1', 'SEATTLE', 'WA')] });
 
     // 4,029 letters at limit 1 make a 4,105-byte request line, which DMAP counts as 4,094.
-    const call = await runToolContract(searchSuperfundTool, { city: 'a'.repeat(4029), limit: 1 });
+    const call = await runToolContract(superfundSearchSitesTool, {
+      city: 'a'.repeat(4029),
+      limit: 1,
+    });
 
     expect(call.isError).toBeFalsy();
     expect(urls).toHaveLength(1);
@@ -3116,6 +3264,50 @@ describe('DmapService water-system and Superfund call deadline', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it('renders proximity deadline failure on both surfaces without partial sites', async () => {
+    vi.useFakeTimers();
+    const urls = stubFakeDmap({ 'sems.envirofacts_site': [] }, (_url, signal) => hang(signal));
+    initDmapService({} as AppConfig, {} as StorageService);
+    const pending = runToolContract(superfundSearchSitesTool, {
+      latitude: 40.7357,
+      longitude: -74.1724,
+      radius_miles: 5,
+    });
+    await vi.advanceTimersByTimeAsync(55_000);
+    const result = await pending;
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        code: JsonRpcErrorCode.Timeout,
+        data: { reason: 'retry_deadline_exceeded', deadlineMs: 50_000 },
+      },
+    });
+    expect(result.structuredContent).not.toHaveProperty('sites');
+    expect(result.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n')).toContain(
+      'DMAP did not finish the Superfund site search within 50 seconds',
+    );
+    expect(urls).toHaveLength(1);
+  });
+
+  it('renders cancellation on both surfaces and stops before the next prefix', async () => {
+    const controller = new AbortController();
+    const urls = stubFakeDmap({ 'sems.envirofacts_site': [] }, abortWhileInFlight(controller));
+    initDmapService({} as AppConfig, {} as StorageService);
+    const result = await runToolContract(
+      superfundSearchSitesTool,
+      { latitude: 0, longitude: 0, radius_miles: 5 },
+      { context: { signal: controller.signal } },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.RequestCancelled },
+    });
+    expect(result.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n')).toMatch(
+      /operation was aborted/,
+    );
+    expect(urls).toHaveLength(1);
   });
 
   const zipSystems = (count: number) =>

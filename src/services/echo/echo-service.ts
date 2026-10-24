@@ -177,7 +177,7 @@ function echoBodyError(message: string): McpError {
   return serviceUnavailable(detail);
 }
 
-/** The NotFound `epa_get_facility` and `epa://facility/{registry_id}` declare as `facility_not_found`. */
+/** The NotFound `epa_echo_get_facility` and `epa://facility/{registry_id}` declare as `facility_not_found`. */
 function facilityNotFound(registryId: string, cause?: unknown): McpError {
   return notFound(
     `No facility found for Registry ID "${registryId}".`,

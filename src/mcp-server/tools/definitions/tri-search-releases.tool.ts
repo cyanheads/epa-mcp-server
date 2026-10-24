@@ -1,6 +1,6 @@
 /**
  * @fileoverview Tool for searching TRI release data across facilities in a state or county.
- * @module mcp-server/tools/definitions/search-tri-releases.tool
+ * @module mcp-server/tools/definitions/tri-search-releases.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
@@ -18,10 +18,10 @@ export function bareCountyName(county: string): string {
   return (suffix ? name.slice(0, suffix.index).trimEnd() : name).toUpperCase();
 }
 
-export const searchTriReleasesTool = tool('epa_search_tri_releases', {
+export const triSearchReleasesTool = tool('epa_tri_search_releases', {
   title: 'Search TRI Releases by Region',
   description:
-    'Search Toxic Release Inventory data across facilities in a state or county, for one reporting year or, without year, every available year newest first. Returns facility name and county, TRI facility ID, chemical name, and the one-time / non-routine release quantity; set include_release_breakdown to add routine on-site releases by medium (air, water, land, and underground-injection), at the cost of a slower call. Quantities are in pounds; dioxin and dioxin-like compounds, which TRI has facilities report in grams, are converted and marked with reportedUnit. Use to identify top polluters in an area or build an environmental exposure profile. Use epa_get_tri_releases for detailed release records for a single facility. TRI data lags ~18 months from the current calendar year.',
+    'TRI: Search Toxic Release Inventory data across facilities in a state or county, for one reporting year or, without year, every available year newest first. Returns facility name and county, TRI facility ID, chemical name, and the one-time / non-routine release quantity; set include_release_breakdown to add routine on-site releases by medium (air, water, land, and underground-injection), at the cost of a slower call. Quantities are in pounds; dioxin and dioxin-like compounds, which TRI has facilities report in grams, are converted and marked with reportedUnit. Use to identify top polluters in an area or build an environmental exposure profile. Use epa_tri_get_facility_releases for detailed release records for a single facility. TRI data lags ~18 months from the current calendar year.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -151,7 +151,7 @@ export const searchTriReleasesTool = tool('epa_search_tri_releases', {
   },
 
   async handler(input, ctx) {
-    ctx.log.info('epa_search_tri_releases', {
+    ctx.log.info('epa_tri_search_releases', {
       state: input.state,
       year: input.year,
       county: input.county,
@@ -172,7 +172,7 @@ export const searchTriReleasesTool = tool('epa_search_tri_releases', {
       ctx,
     );
 
-    ctx.log.info('epa_search_tri_releases completed', { count: releases.length });
+    ctx.log.info('epa_tri_search_releases completed', { count: releases.length });
 
     if (releases.length === 0) {
       const yearNote = input.year ? ` for year ${input.year}` : '';

@@ -52,16 +52,16 @@ function rpcResult(reply: string): Record<string, unknown> {
   return message.result;
 }
 
-/** Tools served without AIRNOW_API_KEY: every keyless tool, never epa_get_air_quality. */
+/** Tools served without AIRNOW_API_KEY: every keyless tool, never epa_airnow_get_conditions. */
 const KEYLESS_TOOL_NAMES = [
-  'epa_get_ejscreen',
-  'epa_get_facility',
-  'epa_get_tri_releases',
-  'epa_search_facilities',
-  'epa_search_superfund',
-  'epa_search_tri_releases',
-  'epa_search_violations',
-  'epa_search_water_systems',
+  'epa_echo_get_facility',
+  'epa_echo_search_facilities',
+  'epa_echo_search_violations',
+  'epa_ejscreen_get_scores',
+  'epa_superfund_search_sites',
+  'epa_tri_get_facility_releases',
+  'epa_tri_search_releases',
+  'epa_water_search_systems',
 ];
 
 async function inspectSession(mode: string | undefined, expected: 'stateful' | 'stateless') {

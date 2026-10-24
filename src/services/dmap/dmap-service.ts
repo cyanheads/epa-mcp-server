@@ -359,22 +359,57 @@ function haversineDistanceMiles(lat1: number, lon1: number, lat2: number, lon2: 
 }
 
 /**
- * Conservative integer latitude prefixes intersecting a spherical radius. DMAP compares
+ * Conservative signed integer-degree coordinate prefixes intersecting an interval. DMAP compares
  * coordinates as text, so prefixes intentionally overfetch (9 also matches 90). Both signed
  * zero prefixes are needed at the equator; exact integer coordinates need no decimal suffix.
  */
-function latitudePrefixes(latitude: number, radiusMiles: number): string[] {
-  const degrees = (radiusMiles / 3958.8) * (180 / Math.PI);
-  const low = Math.max(-90, latitude - degrees);
-  const high = Math.min(90, latitude + degrees);
+function coordinatePrefixes(low: number, high: number, maximum: number): string[] {
   const prefixes: string[] = [];
-  for (let degree = -90; degree <= 90; degree++) {
+  for (let degree = -maximum; degree <= maximum; degree++) {
     const bottom = degree < 0 ? degree - 1 : degree;
     const top = degree < 0 ? degree : degree + 1;
     if (bottom <= high && top >= low) prefixes.push(String(degree));
   }
   if (low <= 0 && high >= -1) prefixes.push('-0');
   return prefixes;
+}
+
+/**
+ * Spherical radius bounds, expressed as text prefixes because DMAP compares coordinates as
+ * strings. A circle touching a pole covers every longitude; otherwise its longitudinal
+ * extremum is asin(sin(angular radius) / cos(latitude)), with date-line intervals wrapped.
+ */
+function proximityPrefixes(latitude: number, longitude: number, radiusMiles: number) {
+  const angularRadius = radiusMiles / 3958.8;
+  const degrees = angularRadius * (180 / Math.PI);
+  const low = Math.max(-90, latitude - degrees);
+  const high = Math.min(90, latitude + degrees);
+  const latitudes = coordinatePrefixes(low, high, 90);
+  if (low <= -90 || high >= 90) return { latitudes, longitudes: [undefined] };
+  const width =
+    Math.asin(Math.min(1, Math.sin(angularRadius) / Math.cos((latitude * Math.PI) / 180))) *
+    (180 / Math.PI);
+  const center = ((((longitude + 180) % 360) + 360) % 360) - 180;
+  const left = center - width;
+  const right = center + width;
+  const intervals: [number, number][] =
+    left <= -180
+      ? [
+          [left + 360, 180],
+          [-180, right],
+        ]
+      : right >= 180
+        ? [
+            [left, 180],
+            [-180, right - 360],
+          ]
+        : [[left, right]];
+  return {
+    latitudes,
+    longitudes: [
+      ...new Set(intervals.flatMap(([start, end]) => coordinatePrefixes(start, end, 180))),
+    ],
+  };
 }
 
 export class DmapService {
@@ -821,43 +856,66 @@ export class DmapService {
     );
     let rows: RawSemsSite[];
     if (proximity) {
-      rows = [];
-      let read = 0;
-      const prefixes = latitudePrefixes(latitude, radiusMiles);
-      for (const prefix of prefixes) {
-        const page = await this.fetchTable<RawSemsSite>(
-          this.buildTableUrl(
-            'sems',
-            'envirofacts_site',
-            [
-              ...filters,
-              { column: 'primary_latitude_decimal_val', operator: 'beginsWith', value: prefix },
-            ],
-            { first: 1, last: 500 - read },
-          ),
-          ctx,
-          budget,
-        );
-        read += page.length;
-        rows.push(
-          ...page.filter((row) =>
-            filters.every(
-              (f) =>
-                f.literal === undefined ||
-                String(row[f.column] ?? '')
-                  .toLowerCase()
-                  .includes(f.literal.toLowerCase()),
-            ),
-          ),
-        );
-        if (read >= 500) {
-          ctx.enrich.notice(
-            'The proximity search read its 500-candidate cap. More nearby sites may exist beyond the retrieved candidates, even if none were found. Narrow the radius or add city, zip_code, or npl_status filters.',
-          );
-          break;
+      const candidates = new Map<string, RawSemsSite>();
+      const prefixes = proximityPrefixes(latitude, longitude, radiusMiles);
+      for (const latPrefix of prefixes.latitudes) {
+        for (const lonPrefix of prefixes.longitudes) {
+          const seen = new Set<string>();
+          for (let first = 1; ; first += 500) {
+            const page = await this.fetchTable<RawSemsSite>(
+              this.buildTableUrl(
+                'sems',
+                'envirofacts_site',
+                [
+                  ...filters,
+                  {
+                    column: 'primary_latitude_decimal_val',
+                    operator: 'beginsWith',
+                    value: latPrefix,
+                  },
+                  ...(lonPrefix === undefined
+                    ? []
+                    : [
+                        {
+                          column: 'primary_longitude_decimal_val',
+                          operator: 'beginsWith' as const,
+                          value: lonPrefix,
+                        },
+                      ]),
+                ],
+                { first, last: first + 499 },
+                { sort: [{ column: 'sems.envirofacts_site.site_id', direction: 'asc' }] },
+              ),
+              ctx,
+              budget,
+            );
+            if (
+              page.length > 0 &&
+              page.every((row) => seen.has(row.site_id || JSON.stringify(row)))
+            ) {
+              throw serviceUnavailable(
+                'EPA DMAP repeated a Superfund candidate page. The proximity search could not be completed. Narrow the radius or add city, zip_code, or npl_status filters and retry.',
+              );
+            }
+            for (const row of page) seen.add(row.site_id || JSON.stringify(row));
+            for (const row of page) {
+              if (
+                filters.every(
+                  (f) =>
+                    f.literal === undefined ||
+                    String(row[f.column] ?? '')
+                      .toLowerCase()
+                      .includes(f.literal.toLowerCase()),
+                )
+              ) {
+                candidates.set(row.site_id || JSON.stringify(row), row);
+              }
+            }
+            if (page.length < 500) break;
+          }
         }
       }
-      rows = [...new Map(rows.map((row) => [row.site_id || JSON.stringify(row), row])).values()];
+      rows = [...candidates.values()];
     } else {
       rows = await this.fetchMatchingRows<RawSemsSite>(
         (range) => this.buildTableUrl('sems', 'envirofacts_site', filters, range),
@@ -870,12 +928,24 @@ export class DmapService {
     let sites = rows.map(normalizeSemsSite);
 
     if (proximity) {
-      sites = sites.filter((site) => {
-        if (site.latitude === undefined || site.longitude === undefined) return false;
-        return (
-          haversineDistanceMiles(latitude, longitude, site.latitude, site.longitude) <= radiusMiles
+      sites = sites
+        .flatMap((site) => {
+          if (site.latitude === undefined || site.longitude === undefined) return [];
+          const distance = haversineDistanceMiles(
+            latitude,
+            longitude,
+            site.latitude,
+            site.longitude,
+          );
+          return distance <= radiusMiles ? [{ site, distance }] : [];
+        })
+        .sort((a, b) => a.distance - b.distance || a.site.siteId.localeCompare(b.site.siteId))
+        .map(({ site }) => site);
+      if (sites.length > limit) {
+        ctx.enrich.notice(
+          `Showing the nearest ${limit} of ${sites.length} matching Superfund sites within the radius. ${limit < 200 ? 'Increase limit (maximum 200) or narrow the radius or other filters to retrieve more.' : 'Narrow the radius or add city, zip_code, or npl_status filters to retrieve a smaller set.'}`,
         );
-      });
+      }
     }
 
     return sites.slice(0, limit);

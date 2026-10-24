@@ -1,11 +1,11 @@
 /**
- * @fileoverview Tests for searchFacilitiesTool.
- * @module tests/mcp-server/tools/definitions/search-facilities.tool.test
+ * @fileoverview Tests for echoSearchFacilitiesTool.
+ * @module tests/mcp-server/tools/definitions/echo-search-facilities.tool.test
  */
 
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { searchFacilitiesTool } from '@/mcp-server/tools/definitions/search-facilities.tool.js';
+import { echoSearchFacilitiesTool } from '@/mcp-server/tools/definitions/echo-search-facilities.tool.js';
 
 const mockSearchFacilities = vi.fn();
 
@@ -35,34 +35,34 @@ const boeingFacility = {
   totalPenaltiesInDollars: 15000,
 };
 
-describe('searchFacilitiesTool', () => {
+describe('echoSearchFacilitiesTool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it('returns facilities for valid state filter', async () => {
     mockSearchFacilities.mockResolvedValue({ facilities: [boeingFacility], totalCount: 412 });
-    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
-    const input = searchFacilitiesTool.input.parse({ state: ' WA ' });
-    const result = await searchFacilitiesTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: echoSearchFacilitiesTool.errors });
+    const input = echoSearchFacilitiesTool.input.parse({ state: ' WA ' });
+    const result = await echoSearchFacilitiesTool.handler(input, ctx);
     expect(mockSearchFacilities).toHaveBeenCalledWith({ state: 'WA', limit: 50 }, ctx);
     expect(result).toEqual({ facilities: [boeingFacility], totalCount: 412 });
   });
 
   it('returns facilities for valid zip_code filter', async () => {
     mockSearchFacilities.mockResolvedValue({ facilities: [boeingFacility], totalCount: 1 });
-    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
-    const input = searchFacilitiesTool.input.parse({ zip_code: '98204' });
-    const result = await searchFacilitiesTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: echoSearchFacilitiesTool.errors });
+    const input = echoSearchFacilitiesTool.input.parse({ zip_code: '98204' });
+    const result = await echoSearchFacilitiesTool.handler(input, ctx);
     expect(mockSearchFacilities).toHaveBeenCalledWith({ zipCode: '98204', limit: 50 }, ctx);
     expect(result.facilities).toEqual([boeingFacility]);
   });
 
   it('returns facilities for city+state filter', async () => {
     mockSearchFacilities.mockResolvedValue({ facilities: [boeingFacility], totalCount: 1 });
-    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
-    const input = searchFacilitiesTool.input.parse({ city: 'EVERETT', state: 'WA' });
-    const result = await searchFacilitiesTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: echoSearchFacilitiesTool.errors });
+    const input = echoSearchFacilitiesTool.input.parse({ city: 'EVERETT', state: 'WA' });
+    const result = await echoSearchFacilitiesTool.handler(input, ctx);
     expect(mockSearchFacilities).toHaveBeenCalledWith(
       { state: 'WA', city: 'EVERETT', limit: 50 },
       ctx,
@@ -72,14 +72,14 @@ describe('searchFacilitiesTool', () => {
 
   it('regression #38: passes the one program and the violation and activity filters to the service', async () => {
     mockSearchFacilities.mockResolvedValue({ facilities: [boeingFacility], totalCount: 1 });
-    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
-    const input = searchFacilitiesTool.input.parse({
+    const ctx = createMockContext({ errors: echoSearchFacilitiesTool.errors });
+    const input = echoSearchFacilitiesTool.input.parse({
       state: 'WA',
       programs: ['TRI'],
       has_violation: true,
       active_only: true,
     });
-    await searchFacilitiesTool.handler(input, ctx);
+    await echoSearchFacilitiesTool.handler(input, ctx);
     expect(mockSearchFacilities).toHaveBeenCalledWith(
       { state: 'WA', program: 'TRI', hasViolation: true, activeOnly: true, limit: 50 },
       ctx,
@@ -88,59 +88,64 @@ describe('searchFacilitiesTool', () => {
 
   it('regression #38: rejects more than one program at the schema', () => {
     // ECHO's p_med takes one media code; a list ran the search unfiltered.
-    const parsed = searchFacilitiesTool.input.safeParse({ state: 'WA', programs: ['TRI', 'CAA'] });
+    const parsed = echoSearchFacilitiesTool.input.safeParse({
+      state: 'WA',
+      programs: ['TRI', 'CAA'],
+    });
     expect(parsed.success).toBe(false);
-    expect(searchFacilitiesTool.input.safeParse({ state: 'WA', programs: [] }).success).toBe(true);
+    expect(echoSearchFacilitiesTool.input.safeParse({ state: 'WA', programs: [] }).success).toBe(
+      true,
+    );
   });
 
   it('sends no program for an empty programs list', async () => {
     mockSearchFacilities.mockResolvedValue({ facilities: [boeingFacility], totalCount: 1 });
-    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
-    const input = searchFacilitiesTool.input.parse({ state: 'WA', programs: [] });
-    await searchFacilitiesTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: echoSearchFacilitiesTool.errors });
+    const input = echoSearchFacilitiesTool.input.parse({ state: 'WA', programs: [] });
+    await echoSearchFacilitiesTool.handler(input, ctx);
     expect(mockSearchFacilities).toHaveBeenCalledWith({ state: 'WA', limit: 50 }, ctx);
   });
 
   it('echoes active_only and the program in the no-match message', async () => {
     mockSearchFacilities.mockResolvedValue({ facilities: [], totalCount: 0 });
-    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
-    const input = searchFacilitiesTool.input.parse({
+    const ctx = createMockContext({ errors: echoSearchFacilitiesTool.errors });
+    const input = echoSearchFacilitiesTool.input.parse({
       zip_code: '98108',
       programs: ['SDWA'],
       active_only: true,
       has_violation: true,
     });
-    const result = await searchFacilitiesTool.handler(input, ctx);
+    const result = await echoSearchFacilitiesTool.handler(input, ctx);
     expect(result.message).toBe(
       'No facilities matched: zip_code="98108", active_only=true, programs=[SDWA], has_violation=true. Try broadening the geographic area or removing program/violation filters.',
     );
   });
 
   it('throws no_geographic_filter when no location provided', async () => {
-    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
-    const input = searchFacilitiesTool.input.parse({ active_only: true });
-    await expect(searchFacilitiesTool.handler(input, ctx)).rejects.toMatchObject({
+    const ctx = createMockContext({ errors: echoSearchFacilitiesTool.errors });
+    const input = echoSearchFacilitiesTool.input.parse({ active_only: true });
+    await expect(echoSearchFacilitiesTool.handler(input, ctx)).rejects.toMatchObject({
       data: { reason: 'no_geographic_filter' },
     });
   });
 
   it('throws no_geographic_filter when all location fields are blank strings', async () => {
-    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
-    const input = searchFacilitiesTool.input.parse({ state: '  ', city: '  ', zip_code: '  ' });
-    await expect(searchFacilitiesTool.handler(input, ctx)).rejects.toMatchObject({
+    const ctx = createMockContext({ errors: echoSearchFacilitiesTool.errors });
+    const input = echoSearchFacilitiesTool.input.parse({ state: '  ', city: '  ', zip_code: '  ' });
+    await expect(echoSearchFacilitiesTool.handler(input, ctx)).rejects.toMatchObject({
       data: { reason: 'no_geographic_filter' },
     });
   });
 
   it('returns facilities for a latitude+longitude+radius_miles proximity filter', async () => {
     mockSearchFacilities.mockResolvedValue({ facilities: [boeingFacility], totalCount: 1 });
-    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
-    const input = searchFacilitiesTool.input.parse({
+    const ctx = createMockContext({ errors: echoSearchFacilitiesTool.errors });
+    const input = echoSearchFacilitiesTool.input.parse({
       latitude: 47.917,
       longitude: -122.248,
       radius_miles: 10,
     });
-    const result = await searchFacilitiesTool.handler(input, ctx);
+    const result = await echoSearchFacilitiesTool.handler(input, ctx);
     expect(result.facilities).toHaveLength(1);
     expect(mockSearchFacilities).toHaveBeenCalledWith(
       expect.objectContaining({ latitude: 47.917, longitude: -122.248, radiusMiles: 10 }),
@@ -150,9 +155,13 @@ describe('searchFacilitiesTool', () => {
 
   it('accepts latitude/longitude of 0 (equator / prime meridian) as a complete triple', async () => {
     mockSearchFacilities.mockResolvedValue({ facilities: [], totalCount: 0 });
-    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
-    const input = searchFacilitiesTool.input.parse({ latitude: 0, longitude: 0, radius_miles: 25 });
-    await searchFacilitiesTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: echoSearchFacilitiesTool.errors });
+    const input = echoSearchFacilitiesTool.input.parse({
+      latitude: 0,
+      longitude: 0,
+      radius_miles: 25,
+    });
+    await echoSearchFacilitiesTool.handler(input, ctx);
     // 0 is a valid coordinate — the triple is complete and forwarded, not dropped by a truthy guard.
     expect(mockSearchFacilities).toHaveBeenCalledWith(
       expect.objectContaining({ latitude: 0, longitude: 0, radiusMiles: 25 }),
@@ -161,38 +170,38 @@ describe('searchFacilitiesTool', () => {
   });
 
   it('throws incomplete_proximity when only latitude is provided', async () => {
-    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
-    const input = searchFacilitiesTool.input.parse({ latitude: 47.6 });
-    await expect(searchFacilitiesTool.handler(input, ctx)).rejects.toMatchObject({
+    const ctx = createMockContext({ errors: echoSearchFacilitiesTool.errors });
+    const input = echoSearchFacilitiesTool.input.parse({ latitude: 47.6 });
+    await expect(echoSearchFacilitiesTool.handler(input, ctx)).rejects.toMatchObject({
       data: { reason: 'incomplete_proximity' },
     });
   });
 
   it('throws incomplete_proximity when latitude+longitude are given without radius_miles', async () => {
-    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
-    const input = searchFacilitiesTool.input.parse({ latitude: 47.6, longitude: -122.3 });
-    await expect(searchFacilitiesTool.handler(input, ctx)).rejects.toMatchObject({
+    const ctx = createMockContext({ errors: echoSearchFacilitiesTool.errors });
+    const input = echoSearchFacilitiesTool.input.parse({ latitude: 47.6, longitude: -122.3 });
+    await expect(echoSearchFacilitiesTool.handler(input, ctx)).rejects.toMatchObject({
       data: { reason: 'incomplete_proximity' },
     });
   });
 
   it('surfaces the proximity filter in the no-match message', async () => {
     mockSearchFacilities.mockResolvedValue({ facilities: [], totalCount: 0 });
-    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
-    const input = searchFacilitiesTool.input.parse({
+    const ctx = createMockContext({ errors: echoSearchFacilitiesTool.errors });
+    const input = echoSearchFacilitiesTool.input.parse({
       latitude: 47.6,
       longitude: -122.3,
       radius_miles: 5,
     });
-    const result = await searchFacilitiesTool.handler(input, ctx);
+    const result = await echoSearchFacilitiesTool.handler(input, ctx);
     expect(result.message).toContain('within 5 mi of (47.6, -122.3)');
   });
 
   it('returns message when no facilities found', async () => {
     mockSearchFacilities.mockResolvedValue({ facilities: [], totalCount: 0 });
-    const ctx = createMockContext({ errors: searchFacilitiesTool.errors });
-    const input = searchFacilitiesTool.input.parse({ state: 'WA', has_violation: true });
-    const result = await searchFacilitiesTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: echoSearchFacilitiesTool.errors });
+    const input = echoSearchFacilitiesTool.input.parse({ state: 'WA', has_violation: true });
+    const result = await echoSearchFacilitiesTool.handler(input, ctx);
     expect(result.facilities).toHaveLength(0);
     expect(result.totalCount).toBe(0);
     expect(result.message).toBe(
@@ -202,7 +211,7 @@ describe('searchFacilitiesTool', () => {
 
   it('formats results with registry IDs, programs, and penalty data', () => {
     const output = { facilities: [boeingFacility], totalCount: 412 };
-    const blocks = searchFacilitiesTool.format!(output);
+    const blocks = echoSearchFacilitiesTool.format!(output);
     expect(blocks).toHaveLength(1);
     const lines = (blocks[0] as { type: string; text: string }).text.split('\n');
     for (const line of [
@@ -225,7 +234,7 @@ describe('searchFacilitiesTool', () => {
 
   it('renders a sub-0.001 TRI releases+transfers total at full precision', () => {
     const text = (
-      searchFacilitiesTool.format!({
+      echoSearchFacilitiesTool.format!({
         facilities: [{ ...boeingFacility, triReleasesTransfersInLbs: 0.00062 }],
         totalCount: 1,
       })[0] as { text: string }
@@ -239,32 +248,32 @@ describe('searchFacilitiesTool', () => {
       totalCount: 0,
       message: 'No facilities matched: state="WA".',
     };
-    const blocks = searchFacilitiesTool.format!(output);
+    const blocks = echoSearchFacilitiesTool.format!(output);
     const lines = (blocks[0] as { type: string; text: string }).text.split('\n');
     expect(lines).toContain('**Total Found:** 0 | **Returned:** 0');
     expect(lines).toContain('> No facilities matched: state="WA".');
   });
 
   describe('registry-ID handoff wording', () => {
-    const facilityShape = searchFacilitiesTool.output.shape.facilities.element.shape;
+    const facilityShape = echoSearchFacilitiesTool.output.shape.facilities.element.shape;
 
-    it('description lists only epa_get_facility as a registry-ID consumer', () => {
-      expect(searchFacilitiesTool.description).toContain(
-        'Registry IDs returned here feed epa_get_facility',
+    it('description lists only epa_echo_get_facility as a registry-ID consumer', () => {
+      expect(echoSearchFacilitiesTool.description).toContain(
+        'Registry IDs returned here feed epa_echo_get_facility',
       );
-      expect(searchFacilitiesTool.description).not.toContain('epa_get_tri_releases');
+      expect(echoSearchFacilitiesTool.description).not.toContain('epa_tri_get_facility_releases');
     });
 
-    it('registryId .describe() names only epa_get_facility', () => {
+    it('registryId .describe() names only epa_echo_get_facility', () => {
       const text = facilityShape.registryId.description ?? '';
-      expect(text).toContain('epa_get_facility');
-      expect(text).not.toContain('epa_get_tri_releases');
+      expect(text).toContain('epa_echo_get_facility');
+      expect(text).not.toContain('epa_tri_get_facility_releases');
     });
 
-    it('triReleasesTransfersInLbs sources the TRI facility ID from epa_search_tri_releases', () => {
+    it('triReleasesTransfersInLbs sources the TRI facility ID from epa_tri_search_releases', () => {
       const text = facilityShape.triReleasesTransfersInLbs.description ?? '';
-      expect(text).toContain('epa_get_tri_releases');
-      expect(text).toContain('epa_search_tri_releases');
+      expect(text).toContain('epa_tri_get_facility_releases');
+      expect(text).toContain('epa_tri_search_releases');
     });
   });
 
@@ -279,7 +288,7 @@ describe('searchFacilitiesTool', () => {
       ],
       totalCount: 1,
     };
-    const blocks = searchFacilitiesTool.format!(sparse);
+    const blocks = echoSearchFacilitiesTool.format!(sparse);
     const text = (blocks[0] as { type: string; text: string }).text;
     // Absent fields render no lines at all — no Programs line when every flag is false.
     expect(text.slice(text.indexOf('### '))).toBe(
@@ -291,7 +300,7 @@ describe('searchFacilitiesTool', () => {
     type Extra = { latitude?: number; longitude?: number; county?: string; fipsCode?: string };
     const render = (extra: Extra) =>
       (
-        searchFacilitiesTool.format!({
+        echoSearchFacilitiesTool.format!({
           facilities: [
             {
               registryId: 'COORD001',

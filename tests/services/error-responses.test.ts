@@ -7,10 +7,10 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getEjscreenTool } from '@/mcp-server/tools/definitions/get-ejscreen.tool.js';
-import { getFacilityTool } from '@/mcp-server/tools/definitions/get-facility.tool.js';
-import { searchFacilitiesTool } from '@/mcp-server/tools/definitions/search-facilities.tool.js';
-import { searchWaterSystemsTool } from '@/mcp-server/tools/definitions/search-water-systems.tool.js';
+import { echoGetFacilityTool } from '@/mcp-server/tools/definitions/echo-get-facility.tool.js';
+import { echoSearchFacilitiesTool } from '@/mcp-server/tools/definitions/echo-search-facilities.tool.js';
+import { ejscreenGetScoresTool } from '@/mcp-server/tools/definitions/ejscreen-get-scores.tool.js';
+import { waterSearchSystemsTool } from '@/mcp-server/tools/definitions/water-search-systems.tool.js';
 import { initDmapService } from '@/services/dmap/dmap-service.js';
 import { initEchoService } from '@/services/echo/echo-service.js';
 import { initEjscreenService } from '@/services/ejscreen/ejscreen-service.js';
@@ -40,7 +40,7 @@ describe('service errors', () => {
   it.each([
     {
       name: 'ECHO HTTP',
-      call: () => runToolContract(searchFacilitiesTool, { state: 'WA' }),
+      call: () => runToolContract(echoSearchFacilitiesTool, { state: 'WA' }),
       base: 'https://example.com/private-echo/',
       status: 403,
       body: 'Forbidden',
@@ -49,7 +49,7 @@ describe('service errors', () => {
     },
     {
       name: 'ECHO HTML',
-      call: () => runToolContract(searchFacilitiesTool, { state: 'WA' }),
+      call: () => runToolContract(echoSearchFacilitiesTool, { state: 'WA' }),
       base: 'https://example.com/private-echo/',
       status: 200,
       body: '<html>Unavailable</html>',
@@ -58,7 +58,7 @@ describe('service errors', () => {
     },
     {
       name: 'ECHO error payload',
-      call: () => runToolContract(searchFacilitiesTool, { state: 'WA' }),
+      call: () => runToolContract(echoSearchFacilitiesTool, { state: 'WA' }),
       base: 'https://example.com/private-echo/',
       status: 200,
       body: '{"Results":{"Error":{"ErrorMessage":"Unavailable"}}}',
@@ -67,7 +67,7 @@ describe('service errors', () => {
     },
     {
       name: 'DMAP HTTP',
-      call: () => runToolContract(searchWaterSystemsTool, { state: 'WA' }),
+      call: () => runToolContract(waterSearchSystemsTool, { state: 'WA' }),
       base: 'https://example.com/private-dmap/',
       status: 403,
       body: 'Forbidden',
@@ -76,7 +76,7 @@ describe('service errors', () => {
     },
     {
       name: 'DMAP HTML',
-      call: () => runToolContract(searchWaterSystemsTool, { state: 'WA' }),
+      call: () => runToolContract(waterSearchSystemsTool, { state: 'WA' }),
       base: 'https://example.com/private-dmap/',
       status: 200,
       body: '<html>Unavailable</html>',
@@ -85,7 +85,7 @@ describe('service errors', () => {
     },
     {
       name: 'EJAM HTTP',
-      call: () => runToolContract(getEjscreenTool, { latitude: 40, longitude: -75 }),
+      call: () => runToolContract(ejscreenGetScoresTool, { latitude: 40, longitude: -75 }),
       base: 'https://example.com/private-ejam/',
       status: 403,
       body: 'Forbidden',
@@ -94,7 +94,7 @@ describe('service errors', () => {
     },
     {
       name: 'EJAM HTML',
-      call: () => runToolContract(getEjscreenTool, { latitude: 40, longitude: -75 }),
+      call: () => runToolContract(ejscreenGetScoresTool, { latitude: 40, longitude: -75 }),
       base: 'https://example.com/private-ejam/',
       status: 200,
       body: '<html>Unavailable</html>',
@@ -103,7 +103,7 @@ describe('service errors', () => {
     },
     {
       name: 'EJAM empty',
-      call: () => runToolContract(getEjscreenTool, { latitude: 40, longitude: -75 }),
+      call: () => runToolContract(ejscreenGetScoresTool, { latitude: 40, longitude: -75 }),
       base: 'https://example.com/private-ejam/',
       status: 200,
       body: '[]',
@@ -142,11 +142,12 @@ describe('service errors', () => {
         async () =>
           new Response('{"Results":{"Error":{"ErrorMessage":"ID 110000350509 is invalid."}}}'),
       );
-    const pending = runToolContract(getFacilityTool, { registry_id: '110000350509' });
+    const pending = runToolContract(echoGetFacilityTool, { registry_id: '110000350509' });
     await vi.runAllTimersAsync();
     const result = await pending;
 
-    const hint = 'Verify the Registry ID using epa_search_facilities and retry with a valid ID.';
+    const hint =
+      'Verify the Registry ID using epa_echo_search_facilities and retry with a valid ID.';
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(result.isError).toBe(true);
     expect(result.structuredContent).toMatchObject({
@@ -168,7 +169,7 @@ describe('service errors', () => {
       () => new Response('We could not process your query', { status: 500 }),
     ]) {
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => response());
-      const pending = runToolContract(searchFacilitiesTool, { state: 'WA' });
+      const pending = runToolContract(echoSearchFacilitiesTool, { state: 'WA' });
       await vi.runAllTimersAsync();
       const result = await pending;
 
@@ -198,7 +199,7 @@ describe('service errors', () => {
           }),
         ),
     );
-    const pending = runToolContract(searchFacilitiesTool, { state: 'WA', city: 'SEATTLE' });
+    const pending = runToolContract(echoSearchFacilitiesTool, { state: 'WA', city: 'SEATTLE' });
     await vi.runAllTimersAsync();
     const result = await pending;
 
@@ -217,7 +218,7 @@ describe('service errors', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response('{"error":["Invalid coordinates"]}', { status: 400 }),
     );
-    const result = await runToolContract(getEjscreenTool, { latitude: 40, longitude: -75 });
+    const result = await runToolContract(ejscreenGetScoresTool, { latitude: 40, longitude: -75 });
     expect(result.structuredContent).toMatchObject({
       error: {
         code: JsonRpcErrorCode.ValidationError,

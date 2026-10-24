@@ -1,6 +1,6 @@
 /**
  * @fileoverview Tool for searching Superfund (CERCLA/SEMS) sites by location or NPL status.
- * @module mcp-server/tools/definitions/search-superfund.tool
+ * @module mcp-server/tools/definitions/superfund-search-sites.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
@@ -8,10 +8,10 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { formatLocationLines } from '@/mcp-server/tools/format-location.js';
 import { getDmapService } from '@/services/dmap/dmap-service.js';
 
-export const searchSuperfundTool = tool('epa_search_superfund', {
+export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
   title: 'Search Superfund Sites',
   description:
-    'Search Superfund (CERCLA/SEMS) sites by location or NPL listing status. Returns site name, EPA site ID, NPL status (listed/not listed/proposed), cleanup status, coordinates, and county FIPS code. Accepts either state/city/ZIP or latitude+longitude+radius for proximity searches. Use for "are there Superfund sites near X" questions.',
+    'Superfund: Search Superfund (CERCLA/SEMS) sites by location or NPL listing status. Returns site name, EPA site ID, NPL status (listed/not listed/proposed), cleanup status, coordinates, and county FIPS code. Accepts either state/city/ZIP or latitude+longitude+radius for proximity searches, ordered nearest first. Proximity searches exhaust candidate pages within a shared 50-second deadline; narrow the radius or add filters if the search times out. Use for "are there Superfund sites near X" questions.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -93,7 +93,7 @@ export const searchSuperfundTool = tool('epa_search_superfund', {
       .string()
       .optional()
       .describe(
-        'Present when a proximity search reaches its combined 500-candidate cap or a punctuated city filter reaches its page limit. More matching sites may exist, including when no sites were returned.',
+        'Present when the result limit omits nearby sites or a non-proximity punctuated city filter reaches its page limit. Explains which matching sites were not returned.',
       ),
   },
 
@@ -131,7 +131,7 @@ export const searchSuperfundTool = tool('epa_search_superfund', {
       );
     }
 
-    ctx.log.info('epa_search_superfund', {
+    ctx.log.info('epa_superfund_search_sites', {
       state: input.state,
       lat: input.latitude,
       nplStatus: input.npl_status,
@@ -154,7 +154,7 @@ export const searchSuperfundTool = tool('epa_search_superfund', {
       ctx,
     );
 
-    ctx.log.info('epa_search_superfund completed', { count: sites.length });
+    ctx.log.info('epa_superfund_search_sites completed', { count: sites.length });
 
     if (sites.length === 0) {
       const location = hasLatLng
@@ -163,7 +163,7 @@ export const searchSuperfundTool = tool('epa_search_superfund', {
       return {
         sites: [],
         totalCount: 0,
-        message: `No Superfund sites found${hasLatLng ? ' in the retrieved candidates' : ''} near ${location} with npl_status="${input.npl_status}". Try expanding the area, removing NPL status filter, or using a different location.`,
+        message: `No Superfund sites found near ${location} with npl_status="${input.npl_status}". Try expanding the area, removing NPL status filter, or using a different location.`,
       };
     }
 

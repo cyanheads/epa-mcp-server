@@ -39,13 +39,13 @@ EPA environmental data — Envirofacts, ECHO (facility compliance), and AirNow (
 
 ## Tool ideas
 
-- `epa_search_facilities` — find facilities by location, industry, pollutant
-- `epa_get_facility` — detailed compliance profile
-- `epa_search_violations` — enforcement actions, penalties
-- `epa_get_tri_releases` — Toxic Release Inventory data by facility/chemical/year
-- `epa_get_air_quality` — real-time AQI by location (AirNow)
-- `epa_search_superfund` — Superfund site status and cleanup progress
-- `epa_get_water_quality` — drinking water violations by system
+- `epa_echo_search_facilities` — find facilities by location, industry, pollutant
+- `epa_echo_get_facility` — detailed compliance profile
+- `epa_echo_search_violations` — enforcement actions, penalties
+- `epa_tri_get_facility_releases` — Toxic Release Inventory data by facility/chemical/year
+- `epa_airnow_get_conditions` — real-time AQI by location (AirNow)
+- `epa_superfund_search_sites` — Superfund site status and cleanup progress
+- `epa_water_search_systems` — drinking water systems and open violations
 
 ## Licensing (audited 2026-05-25)
 

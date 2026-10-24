@@ -1,11 +1,11 @@
 /**
- * @fileoverview Tests for getTriReleasesTool.
- * @module tests/mcp-server/tools/definitions/get-tri-releases.tool.test
+ * @fileoverview Tests for triGetFacilityReleasesTool.
+ * @module tests/mcp-server/tools/definitions/tri-get-facility-releases.tool.test
  */
 
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { getTriReleasesTool } from '@/mcp-server/tools/definitions/get-tri-releases.tool.js';
+import { triGetFacilityReleasesTool } from '@/mcp-server/tools/definitions/tri-get-facility-releases.tool.js';
 
 const mockGetTriReleases = vi.fn();
 
@@ -36,29 +36,29 @@ const fullBreakdownRelease = {
   releasesToUndergroundInjectionInLbs: 90000,
 };
 
-describe('getTriReleasesTool', () => {
+describe('triGetFacilityReleasesTool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it('returns TRI releases for valid facility ID', async () => {
     mockGetTriReleases.mockResolvedValue([benzeneRelease]);
-    const ctx = createMockContext({ errors: getTriReleasesTool.errors });
-    const input = getTriReleasesTool.input.parse({ facility_id: 'WA0001234' });
-    const result = await getTriReleasesTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
+    const input = triGetFacilityReleasesTool.input.parse({ facility_id: 'WA0001234' });
+    const result = await triGetFacilityReleasesTool.handler(input, ctx);
     expect(result).toEqual({ releases: [benzeneRelease], facilityId: 'WA0001234' });
     expect(mockGetTriReleases).toHaveBeenCalledWith({ facilityId: 'WA0001234' }, ctx);
   });
 
   it('passes year and chemical_name filters to service', async () => {
     mockGetTriReleases.mockResolvedValue([benzeneRelease]);
-    const ctx = createMockContext({ errors: getTriReleasesTool.errors });
-    const input = getTriReleasesTool.input.parse({
+    const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
+    const input = triGetFacilityReleasesTool.input.parse({
       facility_id: 'WA0001234',
       year: 2022,
       chemical_name: 'BENZENE',
     });
-    await getTriReleasesTool.handler(input, ctx);
+    await triGetFacilityReleasesTool.handler(input, ctx);
     expect(mockGetTriReleases).toHaveBeenCalledWith(
       { facilityId: 'WA0001234', year: 2022, chemicalName: 'BENZENE' },
       expect.anything(),
@@ -67,9 +67,9 @@ describe('getTriReleasesTool', () => {
 
   it('returns message when no releases found', async () => {
     mockGetTriReleases.mockResolvedValue([]);
-    const ctx = createMockContext({ errors: getTriReleasesTool.errors });
-    const input = getTriReleasesTool.input.parse({ facility_id: 'NOFACILITY' });
-    const result = await getTriReleasesTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
+    const input = triGetFacilityReleasesTool.input.parse({ facility_id: 'NOFACILITY' });
+    const result = await triGetFacilityReleasesTool.handler(input, ctx);
     expect(result.releases).toEqual([]);
     expect(result.facilityId).toBe('NOFACILITY');
     expect(result.message).toMatch(
@@ -79,9 +79,9 @@ describe('getTriReleasesTool', () => {
 
   it('includes year in no-results message when year filter provided', async () => {
     mockGetTriReleases.mockResolvedValue([]);
-    const ctx = createMockContext({ errors: getTriReleasesTool.errors });
-    const input = getTriReleasesTool.input.parse({ facility_id: 'WA0001234', year: 2019 });
-    const result = await getTriReleasesTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
+    const input = triGetFacilityReleasesTool.input.parse({ facility_id: 'WA0001234', year: 2019 });
+    const result = await triGetFacilityReleasesTool.handler(input, ctx);
     expect(result.message).toMatch(
       /^No TRI releases found for facility "WA0001234" for year 2019\. /,
     );
@@ -89,12 +89,12 @@ describe('getTriReleasesTool', () => {
 
   it('includes chemical name in no-results message when filter provided', async () => {
     mockGetTriReleases.mockResolvedValue([]);
-    const ctx = createMockContext({ errors: getTriReleasesTool.errors });
-    const input = getTriReleasesTool.input.parse({
+    const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
+    const input = triGetFacilityReleasesTool.input.parse({
       facility_id: 'WA0001234',
       chemical_name: 'LEAD',
     });
-    const result = await getTriReleasesTool.handler(input, ctx);
+    const result = await triGetFacilityReleasesTool.handler(input, ctx);
     expect(result.message).toMatch(
       /^No TRI releases found for facility "WA0001234" matching chemical "LEAD"\. /,
     );
@@ -102,12 +102,12 @@ describe('getTriReleasesTool', () => {
 
   it('trims whitespace from facility_id and chemical_name', async () => {
     mockGetTriReleases.mockResolvedValue([benzeneRelease]);
-    const ctx = createMockContext({ errors: getTriReleasesTool.errors });
-    const input = getTriReleasesTool.input.parse({
+    const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
+    const input = triGetFacilityReleasesTool.input.parse({
       facility_id: '  WA0001234  ',
       chemical_name: '  benzene  ',
     });
-    await getTriReleasesTool.handler(input, ctx);
+    await triGetFacilityReleasesTool.handler(input, ctx);
     expect(mockGetTriReleases).toHaveBeenCalledWith(
       { facilityId: 'WA0001234', chemicalName: 'benzene' },
       expect.anything(),
@@ -116,7 +116,7 @@ describe('getTriReleasesTool', () => {
 
   it('formats output with chemical name, year, and release amounts', () => {
     const output = { releases: [benzeneRelease], facilityId: 'WA0001234' };
-    const blocks = getTriReleasesTool.format!(output);
+    const blocks = triGetFacilityReleasesTool.format!(output);
     expect(blocks).toEqual([
       {
         type: 'text',
@@ -138,7 +138,7 @@ describe('getTriReleasesTool', () => {
       facilityId: 'WA0001234',
       message: 'No TRI releases found.',
     };
-    const blocks = getTriReleasesTool.format!(output);
+    const blocks = triGetFacilityReleasesTool.format!(output);
     const text = (blocks[0] as { type: string; text: string }).text;
     expect(text).toBe(
       [
@@ -167,7 +167,8 @@ describe('getTriReleasesTool', () => {
       ],
       facilityId: '36701GLBMTOLDMO',
     };
-    const text = (getTriReleasesTool.format!(output)[0] as { type: string; text: string }).text;
+    const text = (triGetFacilityReleasesTool.format!(output)[0] as { type: string; text: string })
+      .text;
     expect(text).toContain('**One-Time / Non-Routine Release:** 0.00062 lbs');
     expect(text).toContain('**Air Releases:** 0.000908 lbs');
     expect(text).toContain('**Water Releases:** 0.0000001 lbs');
@@ -180,7 +181,7 @@ describe('getTriReleasesTool', () => {
       releases: [{ facilityId: 'WA9999', chemicalName: 'MERCURY', reportingYear: 2020 }],
       facilityId: 'WA9999',
     };
-    const blocks = getTriReleasesTool.format!(sparse);
+    const blocks = triGetFacilityReleasesTool.format!(sparse);
     const text = (blocks[0] as { type: string; text: string }).text;
     // Heading and per-record facility line only — no unit or quantity line.
     expect(text).toBe(
@@ -195,46 +196,49 @@ describe('getTriReleasesTool', () => {
   });
 
   describe('facility_id source pointers', () => {
-    it('description sources facility_id from epa_search_tri_releases, never epa_search_facilities', () => {
-      expect(getTriReleasesTool.description).toContain('epa_search_tri_releases');
-      expect(getTriReleasesTool.description).toContain('15-character TRI facility ID');
-      expect(getTriReleasesTool.description).not.toContain('epa_search_facilities');
+    it('description sources facility_id from epa_tri_search_releases, never epa_echo_search_facilities', () => {
+      expect(triGetFacilityReleasesTool.description).toContain('epa_tri_search_releases');
+      expect(triGetFacilityReleasesTool.description).toContain('15-character TRI facility ID');
+      expect(triGetFacilityReleasesTool.description).not.toContain('epa_echo_search_facilities');
     });
 
-    it('facility_id .describe() names the 15-character TRI ID from epa_search_tri_releases', () => {
-      const text = getTriReleasesTool.input.shape.facility_id.description ?? '';
+    it('facility_id .describe() names the 15-character TRI ID from epa_tri_search_releases', () => {
+      const text = triGetFacilityReleasesTool.input.shape.facility_id.description ?? '';
       expect(text).toContain('15-character TRI facility ID');
       expect(text).toContain('facilityId');
-      expect(text).toContain('epa_search_tri_releases');
-      expect(text).not.toContain('epa_search_facilities');
+      expect(text).toContain('epa_tri_search_releases');
+      expect(text).not.toContain('epa_echo_search_facilities');
       expect(text).not.toContain('RegistryID');
     });
 
-    it('empty-result message points at epa_search_tri_releases', async () => {
+    it('empty-result message points at epa_tri_search_releases', async () => {
       mockGetTriReleases.mockResolvedValue([]);
-      const ctx = createMockContext({ errors: getTriReleasesTool.errors });
-      const input = getTriReleasesTool.input.parse({ facility_id: '110070322017', year: 2022 });
-      const result = await getTriReleasesTool.handler(input, ctx);
-      expect(result.message).toContain('epa_search_tri_releases');
-      expect(result.message).not.toContain('epa_search_facilities');
-      const text = (getTriReleasesTool.format!(result)[0] as { text: string }).text;
-      expect(text).toContain('epa_search_tri_releases');
-      expect(text).not.toContain('epa_search_facilities');
+      const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
+      const input = triGetFacilityReleasesTool.input.parse({
+        facility_id: '110070322017',
+        year: 2022,
+      });
+      const result = await triGetFacilityReleasesTool.handler(input, ctx);
+      expect(result.message).toContain('epa_tri_search_releases');
+      expect(result.message).not.toContain('epa_echo_search_facilities');
+      const text = (triGetFacilityReleasesTool.format!(result)[0] as { text: string }).text;
+      expect(text).toContain('epa_tri_search_releases');
+      expect(text).not.toContain('epa_echo_search_facilities');
     });
 
-    it('regression #31: every source pointer also names epa_get_facility triFacilityIds', async () => {
+    it('regression #31: every source pointer also names epa_echo_get_facility triFacilityIds', async () => {
       mockGetTriReleases.mockResolvedValue([]);
-      const input = getTriReleasesTool.input.parse({ facility_id: '110070322017' });
-      const result = await getTriReleasesTool.handler(
+      const input = triGetFacilityReleasesTool.input.parse({ facility_id: '110070322017' });
+      const result = await triGetFacilityReleasesTool.handler(
         input,
-        createMockContext({ errors: getTriReleasesTool.errors }),
+        createMockContext({ errors: triGetFacilityReleasesTool.errors }),
       );
       for (const text of [
-        getTriReleasesTool.description,
-        getTriReleasesTool.input.shape.facility_id.description ?? '',
+        triGetFacilityReleasesTool.description,
+        triGetFacilityReleasesTool.input.shape.facility_id.description ?? '',
         result.message ?? '',
       ]) {
-        expect(text).toContain('epa_get_facility');
+        expect(text).toContain('epa_echo_get_facility');
         expect(text).toContain('triFacilityIds');
       }
     });
@@ -244,19 +248,20 @@ describe('getTriReleasesTool', () => {
     const longestChemical =
       '2-Propenoic acid, butyl ester, telomer with 2-[[(heptadecafluorooctyl)sulfonyl]methylamino]ethyl 2-propenoate, 2-[methyl[(nonafluorobutyl)sulfonyl]amino]ethyl 2-propenoate, α-(2-methyl-1-oxo-2-propenyl)-ω-hydroxypoly(oxy-1,4-butanediyl), α-(2-methyl-1-oxo-2-propenyl)-ω-[(2-methyl-1-oxo-2-propenyl)oxy]poly(oxy-1,4-butanediyl), 2-[methyl[(pentadecafluoroheptyl)sulfonyl]amino]ethyl 2-propenoate, 2-[methyl[(tridecafluorohexyl)sulfonyl]amino]ethyl 2-propenoate, 2-[methyl[(undecafluoropentyl)sulfonyl]amino]ethyl 2-propenoate and 1-octanethiol';
     const parse = (chemical_name: string) =>
-      getTriReleasesTool.input.safeParse({ facility_id: '98108THBNG7500E', chemical_name }).success;
+      triGetFacilityReleasesTool.input.safeParse({ facility_id: '98108THBNG7500E', chemical_name })
+        .success;
     expect(longestChemical).toHaveLength(542);
     expect(parse(longestChemical)).toBe(true);
     expect(parse('x'.repeat(4094))).toBe(true);
     expect(parse('x'.repeat(4095))).toBe(false);
-    expect(getTriReleasesTool.input.shape.chemical_name.description).toContain(
+    expect(triGetFacilityReleasesTool.input.shape.chemical_name.description).toContain(
       'matched as written',
     );
   });
 
   it('carries every per-medium field through the output schema to structuredContent', async () => {
     mockGetTriReleases.mockResolvedValue([fullBreakdownRelease]);
-    const call = await runToolContract(getTriReleasesTool, { facility_id: 'WA0005678' });
+    const call = await runToolContract(triGetFacilityReleasesTool, { facility_id: 'WA0005678' });
     expect(call.isError).toBeFalsy();
     expect(call.structuredContent).toEqual({
       releases: [fullBreakdownRelease],
@@ -266,7 +271,8 @@ describe('getTriReleasesTool', () => {
 
   it('formats all four media plus the distinct one-time release line', () => {
     const output = { releases: [fullBreakdownRelease], facilityId: 'WA0005678' };
-    const text = (getTriReleasesTool.format!(output)[0] as { type: string; text: string }).text;
+    const text = (triGetFacilityReleasesTool.format!(output)[0] as { type: string; text: string })
+      .text;
     // one_time_release_qty is a separate TRI category, rendered after the routine media.
     expect(text.split('\n').slice(3)).toEqual([
       '### TOLUENE (2021)',
@@ -291,7 +297,7 @@ describe('getTriReleasesTool', () => {
 
     it('carries reportedUnit and the converted pounds on both surfaces', async () => {
       mockGetTriReleases.mockResolvedValue([dioxin, benzeneRelease]);
-      const call = await runToolContract(getTriReleasesTool, {
+      const call = await runToolContract(triGetFacilityReleasesTool, {
         facility_id: '96020CLLNS500MA',
         year: 2022,
       });
@@ -310,7 +316,7 @@ describe('getTriReleasesTool', () => {
 
     it('formats a gram-reported record with no quantities without promising any', () => {
       const text = (
-        getTriReleasesTool.format!({
+        triGetFacilityReleasesTool.format!({
           releases: [
             {
               facilityId: '98421STMPS',
@@ -329,10 +335,10 @@ describe('getTriReleasesTool', () => {
     });
 
     it('describes reportedUnit as the dioxin grams marker and the quantities as pounds', () => {
-      const item = getTriReleasesTool.output.shape.releases.element.shape;
+      const item = triGetFacilityReleasesTool.output.shape.releases.element.shape;
       expect(item.reportedUnit.description).toMatch(/dioxin/i);
       expect(item.reportedUnit.description).toMatch(/converted to pounds/i);
-      expect(getTriReleasesTool.description).toMatch(/grams/);
+      expect(triGetFacilityReleasesTool.description).toMatch(/grams/);
     });
   });
 
@@ -348,7 +354,8 @@ describe('getTriReleasesTool', () => {
       ],
       facilityId: 'WA0009999',
     };
-    const text = (getTriReleasesTool.format!(airOnly)[0] as { type: string; text: string }).text;
+    const text = (triGetFacilityReleasesTool.format!(airOnly)[0] as { type: string; text: string })
+      .text;
     expect(text).toContain('**Air Releases:** 500 lbs');
     expect(text).not.toContain('Water Releases');
     expect(text).not.toContain('Land Releases');

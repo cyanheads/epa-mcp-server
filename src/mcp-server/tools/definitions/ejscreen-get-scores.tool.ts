@@ -1,7 +1,7 @@
 /**
  * @fileoverview Tool for retrieving EJScreen environmental-justice indicators for a
  * point + buffer, backed by the community-maintained EJAM API.
- * @module mcp-server/tools/definitions/get-ejscreen.tool
+ * @module mcp-server/tools/definitions/ejscreen-get-scores.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
@@ -13,10 +13,10 @@ const MILES_PER_KM = 0.621371;
 /** The EJAM API caps the buffer at 15 miles. */
 const MAX_BUFFER_MILES = 15;
 
-export const getEjscreenTool = tool('epa_get_ejscreen', {
+export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
   title: 'Get EJScreen Environmental Justice Indicators',
   description:
-    'Get EJScreen environmental-justice indicators for a point and surrounding buffer. Returns the 13 EJScreen environmental indicators (PM2.5, ozone, diesel particulate, NO2, lead paint, traffic proximity, Superfund/RMP/hazardous-waste/wastewater proximity, underground storage tanks, drinking-water non-compliance, and RSEI toxic air releases) and 6 demographic indicators (people of color, low income, limited English, less than high school, under 5, over 64), each with national and state percentiles plus EJ Index values, along with the Demographic Index and Supplemental Demographic Index. Data is EJScreen v2.2 (2022) served via the community-maintained EJAM API (api.ejanalysis.com, Public Environmental Data Partners), which rehosts EJScreen after EPA discontinued public access in 2025 — not a live EPA endpoint. Provide latitude, longitude, and a buffer distance (default 1 mile, max 15 miles). Points outside US coverage return a coverage note instead of indicators.',
+    'EJScreen: Get EJScreen environmental-justice indicators for a point and surrounding buffer. Returns the 13 EJScreen environmental indicators (PM2.5, ozone, diesel particulate, NO2, lead paint, traffic proximity, Superfund/RMP/hazardous-waste/wastewater proximity, underground storage tanks, drinking-water non-compliance, and RSEI toxic air releases) and 6 demographic indicators (people of color, low income, limited English, less than high school, under 5, over 64), each with national and state percentiles plus EJ Index values, along with the Demographic Index and Supplemental Demographic Index. Data is EJScreen v2.2 (2022) served via the community-maintained EJAM API (api.ejanalysis.com, Public Environmental Data Partners), which rehosts EJScreen after EPA discontinued public access in 2025 — not a live EPA endpoint. Provide latitude, longitude, and a buffer distance (default 1 mile, max 15 miles). Points outside US coverage return a coverage note instead of indicators.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -224,7 +224,7 @@ export const getEjscreenTool = tool('epa_get_ejscreen', {
       );
     }
 
-    ctx.log.info('epa_get_ejscreen', {
+    ctx.log.info('epa_ejscreen_get_scores', {
       lat: input.latitude,
       lon: input.longitude,
       bufferMiles,
@@ -235,7 +235,7 @@ export const getEjscreenTool = tool('epa_get_ejscreen', {
       ctx,
     );
 
-    ctx.log.info('epa_get_ejscreen completed', {
+    ctx.log.info('epa_ejscreen_get_scores completed', {
       valid: result.coverage.valid,
       environmental: result.environmental.length,
       demographic: result.demographic.length,

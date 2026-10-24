@@ -1,11 +1,11 @@
 /**
- * @fileoverview Tests for searchSuperfundTool.
- * @module tests/mcp-server/tools/definitions/search-superfund.tool.test
+ * @fileoverview Tests for superfundSearchSitesTool.
+ * @module tests/mcp-server/tools/definitions/superfund-search-sites.tool.test
  */
 
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { searchSuperfundTool } from '@/mcp-server/tools/definitions/search-superfund.tool.js';
+import { superfundSearchSitesTool } from '@/mcp-server/tools/definitions/superfund-search-sites.tool.js';
 
 const mockSearchSuperfund = vi.fn();
 
@@ -33,16 +33,16 @@ const hanfordSite = {
   longitude: -119.49,
 };
 
-describe('searchSuperfundTool', () => {
+describe('superfundSearchSitesTool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it('returns sites for valid state filter', async () => {
     mockSearchSuperfund.mockResolvedValue([hanfordSite]);
-    const ctx = createMockContext({ errors: searchSuperfundTool.errors });
-    const input = searchSuperfundTool.input.parse({ state: ' WA ' });
-    const result = await searchSuperfundTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: superfundSearchSitesTool.errors });
+    const input = superfundSearchSitesTool.input.parse({ state: ' WA ' });
+    const result = await superfundSearchSitesTool.handler(input, ctx);
     // npl_status defaults to "all", which sends no NPL filter.
     expect(mockSearchSuperfund).toHaveBeenCalledWith({ state: 'WA', limit: 50 }, ctx);
     expect(result).toEqual({ sites: [hanfordSite], totalCount: 1 });
@@ -50,13 +50,13 @@ describe('searchSuperfundTool', () => {
 
   it('returns sites for city filter', async () => {
     mockSearchSuperfund.mockResolvedValue([hanfordSite]);
-    const ctx = createMockContext({ errors: searchSuperfundTool.errors });
-    const input = searchSuperfundTool.input.parse({
+    const ctx = createMockContext({ errors: superfundSearchSitesTool.errors });
+    const input = superfundSearchSitesTool.input.parse({
       city: 'RICHLAND',
       state: 'WA',
       npl_status: 'listed',
     });
-    const result = await searchSuperfundTool.handler(input, ctx);
+    const result = await superfundSearchSitesTool.handler(input, ctx);
     expect(mockSearchSuperfund).toHaveBeenCalledWith(
       { state: 'WA', city: 'RICHLAND', nplStatus: 'listed', limit: 50 },
       ctx,
@@ -66,13 +66,13 @@ describe('searchSuperfundTool', () => {
 
   it('returns sites for lat/lng + radius proximity search', async () => {
     mockSearchSuperfund.mockResolvedValue([hanfordSite]);
-    const ctx = createMockContext({ errors: searchSuperfundTool.errors });
-    const input = searchSuperfundTool.input.parse({
+    const ctx = createMockContext({ errors: superfundSearchSitesTool.errors });
+    const input = superfundSearchSitesTool.input.parse({
       latitude: 46.652,
       longitude: -119.49,
       radius_miles: 50,
     });
-    const result = await searchSuperfundTool.handler(input, ctx);
+    const result = await superfundSearchSitesTool.handler(input, ctx);
     expect(mockSearchSuperfund).toHaveBeenCalledWith(
       { latitude: 46.652, longitude: -119.49, radiusMiles: 50, limit: 50 },
       ctx,
@@ -81,37 +81,37 @@ describe('searchSuperfundTool', () => {
   });
 
   it('throws no_location_filter when no location provided', async () => {
-    const ctx = createMockContext({ errors: searchSuperfundTool.errors });
-    const input = searchSuperfundTool.input.parse({ npl_status: 'listed' });
-    await expect(searchSuperfundTool.handler(input, ctx)).rejects.toMatchObject({
+    const ctx = createMockContext({ errors: superfundSearchSitesTool.errors });
+    const input = superfundSearchSitesTool.input.parse({ npl_status: 'listed' });
+    await expect(superfundSearchSitesTool.handler(input, ctx)).rejects.toMatchObject({
       data: { reason: 'no_location_filter' },
     });
   });
 
   it('throws no_location_filter when location fields are blank strings', async () => {
-    const ctx = createMockContext({ errors: searchSuperfundTool.errors });
-    const input = searchSuperfundTool.input.parse({ state: '  ', city: '  ', zip_code: '  ' });
-    await expect(searchSuperfundTool.handler(input, ctx)).rejects.toMatchObject({
+    const ctx = createMockContext({ errors: superfundSearchSitesTool.errors });
+    const input = superfundSearchSitesTool.input.parse({ state: '  ', city: '  ', zip_code: '  ' });
+    await expect(superfundSearchSitesTool.handler(input, ctx)).rejects.toMatchObject({
       data: { reason: 'no_location_filter' },
     });
   });
 
   it('throws radius_required when lat/lng provided without radius_miles', async () => {
-    const ctx = createMockContext({ errors: searchSuperfundTool.errors });
-    const input = searchSuperfundTool.input.parse({
+    const ctx = createMockContext({ errors: superfundSearchSitesTool.errors });
+    const input = superfundSearchSitesTool.input.parse({
       latitude: 46.652,
       longitude: -119.49,
     });
-    await expect(searchSuperfundTool.handler(input, ctx)).rejects.toMatchObject({
+    await expect(superfundSearchSitesTool.handler(input, ctx)).rejects.toMatchObject({
       data: { reason: 'radius_required' },
     });
   });
 
   it('returns message when no sites found', async () => {
     mockSearchSuperfund.mockResolvedValue([]);
-    const ctx = createMockContext({ errors: searchSuperfundTool.errors });
-    const input = searchSuperfundTool.input.parse({ state: 'HI', npl_status: 'listed' });
-    const result = await searchSuperfundTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: superfundSearchSitesTool.errors });
+    const input = superfundSearchSitesTool.input.parse({ state: 'HI', npl_status: 'listed' });
+    const result = await superfundSearchSitesTool.handler(input, ctx);
     expect(result.sites).toHaveLength(0);
     expect(result.totalCount).toBe(0);
     expect(result.message).toBe(
@@ -120,17 +120,17 @@ describe('searchSuperfundTool', () => {
   });
 
   it("bounds city at 4,094 characters, DMAP's whole request-line limit", () => {
-    const parse = (city: string) => searchSuperfundTool.input.safeParse({ city }).success;
+    const parse = (city: string) => superfundSearchSitesTool.input.safeParse({ city }).success;
     // The longest sems.envirofacts_site city_name (live 2026-10-16), 57 characters.
     expect(parse('WAPPINGERS FALLS, TOWN OF WAPPINGER, TOWN OF POUGHKEEPSIE')).toBe(true);
     expect(parse('x'.repeat(4094))).toBe(true);
     expect(parse('x'.repeat(4095))).toBe(false);
-    expect(searchSuperfundTool.input.shape.city.description).toContain('matched as written');
+    expect(superfundSearchSitesTool.input.shape.city.description).toContain('matched as written');
   });
 
   it('formats output with site ID, NPL status, and coordinates', () => {
     const output = { sites: [hanfordSite], totalCount: 1 };
-    const blocks = searchSuperfundTool.format!(output);
+    const blocks = superfundSearchSitesTool.format!(output);
     expect(blocks).toHaveLength(1);
     const lines = (blocks[0] as { type: string; text: string }).text.split('\n');
     for (const line of [
@@ -154,7 +154,7 @@ describe('searchSuperfundTool', () => {
       totalCount: 0,
       message: 'No Superfund sites found near WA.',
     };
-    const blocks = searchSuperfundTool.format!(output);
+    const blocks = superfundSearchSitesTool.format!(output);
     const lines = (blocks[0] as { type: string; text: string }).text.split('\n');
     expect(lines).toContain('**Found:** 0');
     expect(lines).toContain('> No Superfund sites found near WA.');
@@ -165,7 +165,7 @@ describe('searchSuperfundTool', () => {
       sites: [{ siteId: 'TX1234', name: 'SPARSE SITE' }],
       totalCount: 1,
     };
-    const blocks = searchSuperfundTool.format!(sparse);
+    const blocks = superfundSearchSitesTool.format!(sparse);
     const text = (blocks[0] as { type: string; text: string }).text;
     expect(text.slice(text.indexOf('### '))).toBe('### SPARSE SITE\n**Site ID:** TX1234');
   });
@@ -174,7 +174,7 @@ describe('searchSuperfundTool', () => {
     type Extra = { latitude?: number; longitude?: number; county?: string; fipsCode?: string };
     const render = (extra: Extra) =>
       (
-        searchSuperfundTool.format!({
+        superfundSearchSitesTool.format!({
           sites: [{ siteId: 'COORD001', name: 'COORD SITE', ...extra }],
           totalCount: 1,
         })[0] as { text: string }

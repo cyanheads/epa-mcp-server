@@ -1,6 +1,6 @@
 /**
  * @fileoverview Tool for searching EPA enforcement cases by location, program, or date range.
- * @module mcp-server/tools/definitions/search-violations.tool
+ * @module mcp-server/tools/definitions/echo-search-violations.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
@@ -26,10 +26,10 @@ const isCalendarDate = (iso: string): boolean => {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(iso);
 };
 
-export const searchViolationsTool = tool('epa_search_violations', {
+export const echoSearchViolationsTool = tool('epa_echo_search_violations', {
   title: 'Search EPA Enforcement Cases',
   description:
-    "Search EPA civil and criminal enforcement cases by state, ZIP code, regulatory program, case type, or filing-date range. Returns case identifier, programs involved, penalty assessed, settlement and filing dates, and case type. Designed for area-level violation discovery — for a single known facility's enforcement history use epa_get_facility instead. At least one of state or zip_code is required.",
+    "ECHO: Search EPA civil and criminal enforcement cases by state, ZIP code, regulatory program, case type, or filing-date range. Returns case identifier, programs involved, penalty assessed, settlement and filing dates, and case type. Designed for area-level violation discovery — for a single known facility's enforcement history use epa_echo_get_facility instead. At least one of state or zip_code is required.",
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -85,13 +85,13 @@ export const searchViolationsTool = tool('epa_search_violations', {
               .string()
               .optional()
               .describe(
-                'Regulated facility name — not available in ECHO enforcement case records; use epa_get_facility with a Registry ID for facility details',
+                'Regulated facility name — not available in ECHO enforcement case records; use epa_echo_get_facility with a Registry ID for facility details',
               ),
             registryId: z
               .string()
               .optional()
               .describe(
-                'EPA Registry ID — not returned in enforcement case search results; obtain via epa_search_facilities',
+                'EPA Registry ID — not returned in enforcement case search results; obtain via epa_echo_search_facilities',
               ),
             programsViolated: z
               .string()
@@ -203,7 +203,7 @@ export const searchViolationsTool = tool('epa_search_violations', {
       );
     }
 
-    ctx.log.info('epa_search_violations', {
+    ctx.log.info('epa_echo_search_violations', {
       state: input.state,
       program: input.program,
       caseType: input.case_type,
@@ -226,7 +226,7 @@ export const searchViolationsTool = tool('epa_search_violations', {
       ctx,
     );
 
-    ctx.log.info('epa_search_violations completed', { count: cases.length, totalCount });
+    ctx.log.info('epa_echo_search_violations completed', { count: cases.length, totalCount });
     if (dated && input.case_type === 'all') {
       ctx.enrich.notice(
         'Criminal cases are excluded: ECHO records filing dates for civil cases only, so a filing-date range returns civil cases. Search case_type "criminal" without dates for criminal cases.',

@@ -23,13 +23,13 @@
       "environmentVariables": [
         {
           "name": "AIRNOW_API_KEY",
-          "description": "Optional AirNow API key for real-time and forecast air quality data. When unset, the epa_get_air_quality tool is not registered and the other tools run without it. Free registration at docs.airnowapi.org.",
+          "description": "Optional AirNow API key for real-time and forecast air quality data. When unset, the epa_airnow_get_conditions tool is not registered and the other tools run without it. Free registration at docs.airnowapi.org.",
           "format": "string",
           "isRequired": false
         },
         {
           "name": "EJSCREEN_API_BASE_URL",
-          "description": "Optional override for the EJScreen (EJAM) API base URL used by epa_get_ejscreen. Defaults to https://api.ejanalysis.com — the community-maintained EJScreen rehost by Public Environmental Data Partners.",
+          "description": "Optional override for the EJScreen (EJAM) API base URL used by epa_ejscreen_get_scores. Defaults to https://api.ejanalysis.com — the community-maintained EJScreen rehost by Public Environmental Data Partners.",
           "format": "string",
           "isRequired": false,
           "default": "https://api.ejanalysis.com"
@@ -61,13 +61,13 @@
         },
         {
           "name": "AIRNOW_API_KEY",
-          "description": "Optional AirNow API key for real-time and forecast air quality data. When unset, the epa_get_air_quality tool is not registered and the other tools run without it. Free registration at docs.airnowapi.org.",
+          "description": "Optional AirNow API key for real-time and forecast air quality data. When unset, the epa_airnow_get_conditions tool is not registered and the other tools run without it. Free registration at docs.airnowapi.org.",
           "format": "string",
           "isRequired": false
         },
         {
           "name": "EJSCREEN_API_BASE_URL",
-          "description": "Optional override for the EJScreen (EJAM) API base URL used by epa_get_ejscreen. Defaults to https://api.ejanalysis.com — the community-maintained EJScreen rehost by Public Environmental Data Partners.",
+          "description": "Optional override for the EJScreen (EJAM) API base URL used by epa_ejscreen_get_scores. Defaults to https://api.ejanalysis.com — the community-maintained EJScreen rehost by Public Environmental Data Partners.",
           "format": "string",
           "isRequired": false,
           "default": "https://api.ejanalysis.com"

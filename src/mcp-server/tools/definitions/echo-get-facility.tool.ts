@@ -1,6 +1,6 @@
 /**
  * @fileoverview Tool for retrieving a full compliance profile for a single EPA-regulated facility.
- * @module mcp-server/tools/definitions/get-facility.tool
+ * @module mcp-server/tools/definitions/echo-get-facility.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
@@ -9,10 +9,10 @@ import { formatLbs } from '@/mcp-server/tools/format-lbs.js';
 import { formatLocationLines } from '@/mcp-server/tools/format-location.js';
 import { getEchoService } from '@/services/echo/echo-service.js';
 
-export const getFacilityTool = tool('epa_get_facility', {
+export const echoGetFacilityTool = tool('epa_echo_get_facility', {
   title: 'Get EPA Facility Compliance Profile',
   description:
-    "Retrieve a full compliance profile for a single EPA-regulated facility by EPA Registry ID. Returns facility metadata, ECHO's facility-level compliance status, a per-statute (CAA, CWA, RCRA, SDWA, and others ECHO tracks) compliance summary, the newest 100 inspections and other compliance monitoring records from the last five years, five years of formal enforcement actions with penalties, the latest TRI release total, and the facility's TRI facility IDs for epa_get_tri_releases. Use epa_search_facilities to discover Registry IDs. For area-level enforcement discovery use epa_search_violations instead.",
+    "ECHO: Retrieve a full compliance profile for a single EPA-regulated facility by EPA Registry ID. Returns facility metadata, ECHO's facility-level compliance status, a per-statute (CAA, CWA, RCRA, SDWA, and others ECHO tracks) compliance summary, the newest 100 inspections and other compliance monitoring records from the last five years, five years of formal enforcement actions with penalties, the latest TRI release total, and the facility's TRI facility IDs for epa_tri_get_facility_releases. Use epa_echo_search_facilities to discover Registry IDs. For area-level enforcement discovery use epa_echo_search_violations instead.",
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -20,7 +20,7 @@ export const getFacilityTool = tool('epa_get_facility', {
       .string()
       .trim()
       .min(1)
-      .describe('EPA FRS Registry ID for the facility (obtained from epa_search_facilities)'),
+      .describe('EPA FRS Registry ID for the facility (obtained from epa_echo_search_facilities)'),
   }),
 
   output: z.object({
@@ -38,7 +38,7 @@ export const getFacilityTool = tool('epa_get_facility', {
       .string()
       .optional()
       .describe(
-        'ECHO\'s facility-level compliance status, the same value epa_search_facilities returns (e.g. "Significant Violation"). Absent when ECHO assigns none, as for TRI-only facilities, or when ECHO\'s facility search request fails (the notice field then says so).',
+        'ECHO\'s facility-level compliance status, the same value epa_echo_search_facilities returns (e.g. "Significant Violation"). Absent when ECHO assigns none, as for TRI-only facilities, or when ECHO\'s facility search request fails (the notice field then says so).',
       ),
     programs: z
       .object({
@@ -64,7 +64,7 @@ export const getFacilityTool = tool('epa_get_facility', {
     triFacilityIds: z
       .array(z.string())
       .describe(
-        '15-character TRI facility IDs recorded for this facility, most recently reported first — pass one as facility_id to epa_get_tri_releases for per-chemical releases. A site can carry several from successive operators. Empty when the facility has no TRI record.',
+        '15-character TRI facility IDs recorded for this facility, most recently reported first — pass one as facility_id to epa_tri_get_facility_releases for per-chemical releases. A site can carry several from successive operators. Empty when the facility has no TRI record.',
       ),
     triReleasesTransfersInLbs: z
       .number()
@@ -279,17 +279,18 @@ export const getFacilityTool = tool('epa_get_facility', {
       reason: 'facility_not_found',
       code: JsonRpcErrorCode.NotFound,
       when: 'ECHO has no facility for the given Registry ID.',
-      recovery: 'Verify the Registry ID using epa_search_facilities and retry with a valid ID.',
+      recovery:
+        'Verify the Registry ID using epa_echo_search_facilities and retry with a valid ID.',
       thrownBy: 'service',
     },
   ],
 
   async handler(input, ctx) {
-    ctx.log.info('epa_get_facility', { registryId: input.registry_id });
+    ctx.log.info('epa_echo_get_facility', { registryId: input.registry_id });
 
     const profile = await getEchoService().getFacility(input.registry_id, ctx);
 
-    ctx.log.info('epa_get_facility completed', {
+    ctx.log.info('epa_echo_get_facility completed', {
       registryId: profile.registryId,
       inspections: profile.inspections.length,
       formalActions: profile.formalActions.length,
@@ -314,7 +315,7 @@ export const getFacilityTool = tool('epa_get_facility', {
 
     if (result.triFacilityIds.length > 0) {
       lines.push(
-        `**TRI Facility IDs:** ${result.triFacilityIds.join(', ')} (most recent first; for epa_get_tri_releases)`,
+        `**TRI Facility IDs:** ${result.triFacilityIds.join(', ')} (most recent first; for epa_tri_get_facility_releases)`,
       );
     }
     if (result.triReleasesTransfersInLbs !== undefined) {

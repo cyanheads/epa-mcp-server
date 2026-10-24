@@ -1,6 +1,6 @@
 /**
  * @fileoverview AirNow service wire output, caching, and credential isolation, exercised
- * through `epa_get_air_quality` against the 2026 web services with fetch stubbed at the
+ * through `epa_airnow_get_conditions` against the 2026 web services with fetch stubbed at the
  * HTTP boundary.
  * @module tests/services/airnow/airnow-service.test
  */
@@ -13,7 +13,7 @@ import {
   runToolContract,
 } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getAirQualityTool } from '@/mcp-server/tools/definitions/get-air-quality.tool.js';
+import { airnowGetConditionsTool } from '@/mcp-server/tools/definitions/airnow-get-conditions.tool.js';
 import { AirNowService, initAirNowService } from '@/services/airnow/airnow-service.js';
 import {
   FORECAST_60601_CATEGORY_ONLY,
@@ -40,9 +40,9 @@ const serve = (body: string, status = 200) =>
 const sentUrl = (index = 0) => new URL(http.calls[index]!.request.url);
 const textOf = (result: { content: { type: string; text?: string }[] }) =>
   result.content.flatMap((block) => (block.type === 'text' ? [block.text ?? ''] : [])).join('\n');
-const parse = (raw: Record<string, unknown>) => getAirQualityTool.input.parse(raw);
+const parse = (raw: Record<string, unknown>) => airnowGetConditionsTool.input.parse(raw);
 const toolCtx = (tenantId?: string) =>
-  createMockContext({ errors: getAirQualityTool.errors, ...(tenantId && { tenantId }) });
+  createMockContext({ errors: airnowGetConditionsTool.errors, ...(tenantId && { tenantId }) });
 
 const SEATTLE_DISCUSSION =
   'For Oct 7-12 (Wed-Mon): Expect GOOD to MODERATE air quality through early next week.';
@@ -61,7 +61,7 @@ afterEach(() => {
 describe('AirNow service', () => {
   it('preserves nested readings on both surfaces and reuses tenant storage', async () => {
     serve(OBSERVATION_98101);
-    const result = await runToolContract(getAirQualityTool, { zip_code: '98101' });
+    const result = await runToolContract(airnowGetConditionsTool, { zip_code: '98101' });
     expect(result.isError).not.toBe(true);
     expect(result.structuredContent).toMatchObject({
       observations: [{ readings: [{ aqi: 62 }, { aqi: 0 }, { aqi: 12 }] }],
@@ -108,7 +108,7 @@ describe('AirNow service', () => {
     async ({ zip, status, body, code, calls }) => {
       vi.useFakeTimers();
       serve(body, status);
-      const pending = runToolContract(getAirQualityTool, { zip_code: zip });
+      const pending = runToolContract(airnowGetConditionsTool, { zip_code: zip });
       await vi.runAllTimersAsync();
       const result = await pending;
       expect(result.isError).toBe(true);
@@ -133,8 +133,8 @@ describe('AirNow service', () => {
       { latitude: 47.6, longitude: -122.33, mode: 'forecast', forecast_date: '2026-10-09' },
     ];
     for (const raw of calls) {
-      await getAirQualityTool.handler(parse(raw), ctx);
-      await getAirQualityTool.handler(parse(raw), ctx);
+      await airnowGetConditionsTool.handler(parse(raw), ctx);
+      await airnowGetConditionsTool.handler(parse(raw), ctx);
     }
     expect(http.calls).toHaveLength(4);
     const keys = (await ctx.state.list('airnow/')).items.map((item) => item.key).sort();
@@ -199,11 +199,11 @@ describe('AirNow service', () => {
   it('never narrows the cached forecast: filtered, then unfiltered, from one fetch', async () => {
     serve(FORECAST_98101);
     const ctx = toolCtx('filter-then-all');
-    const filtered = await getAirQualityTool.handler(
+    const filtered = await airnowGetConditionsTool.handler(
       parse({ zip_code: '98101', mode: 'forecast', forecast_date: '2026-10-11' }),
       ctx,
     );
-    const all = await getAirQualityTool.handler(
+    const all = await airnowGetConditionsTool.handler(
       parse({ zip_code: '98101', mode: 'forecast' }),
       ctx,
     );
@@ -225,19 +225,19 @@ describe('AirNow characterization', () => {
     serve('[]');
     const ctx = toolCtx('ttl');
     const input = parse({ zip_code: '98101' });
-    await getAirQualityTool.handler(input, ctx);
+    await airnowGetConditionsTool.handler(input, ctx);
     vi.setSystemTime(new Date('2026-10-08T12:59:59Z'));
-    await getAirQualityTool.handler(input, ctx);
+    await airnowGetConditionsTool.handler(input, ctx);
     expect(http.calls).toHaveLength(1);
     vi.setSystemTime(new Date('2026-10-08T13:00:01Z'));
-    await getAirQualityTool.handler(input, ctx);
+    await airnowGetConditionsTool.handler(input, ctx);
     expect(http.calls).toHaveLength(2);
   });
 
   it('falls back to latitude/longitude when a form client sends a blank zip_code', async () => {
     serve('[]');
     const input = parse({ zip_code: '', latitude: 47.6, longitude: -122.33 });
-    await getAirQualityTool.handler(input, toolCtx());
+    await airnowGetConditionsTool.handler(input, toolCtx());
     const sent = sentUrl().searchParams;
     expect(sent.get('latitude')).toBe('47.6');
     expect(sent.get('longitude')).toBe('-122.33');
@@ -285,7 +285,7 @@ describe('AirNow 2026 observations (observation/current/ziplatlong/)', () => {
 
   it('maps a ZIP lookup onto the replacement endpoint and the multi-site reading shape', async () => {
     serve(OBSERVATION_98101);
-    const result = await runToolContract(getAirQualityTool, { zip_code: '98101' });
+    const result = await runToolContract(airnowGetConditionsTool, { zip_code: '98101' });
     expect(result.isError).not.toBe(true);
 
     const url = sentUrl();
@@ -323,7 +323,10 @@ describe('AirNow 2026 observations (observation/current/ziplatlong/)', () => {
 
   it('sends latitude and longitude, never distance', async () => {
     serve(OBSERVATION_98101);
-    const result = await runToolContract(getAirQualityTool, { latitude: 47.6, longitude: -122.33 });
+    const result = await runToolContract(airnowGetConditionsTool, {
+      latitude: 47.6,
+      longitude: -122.33,
+    });
     expect(result.isError).not.toBe(true);
     const url = sentUrl();
     expect(url.pathname).toBe('/aq/observation/current/ziplatlong/');
@@ -369,7 +372,7 @@ describe('AirNow 2026 observations (observation/current/ziplatlong/)', () => {
         { reportingAreaName: 'Chicago', nowcastAQI: 5 },
       ]),
     );
-    const result = await runToolContract(getAirQualityTool, { zip_code: '60601' });
+    const result = await runToolContract(airnowGetConditionsTool, { zip_code: '60601' });
     expect(result.isError).not.toBe(true);
     expect((result.structuredContent as { observations: unknown }).observations).toEqual([
       {
@@ -406,7 +409,10 @@ describe('AirNow 2026 observations (observation/current/ziplatlong/)', () => {
 
   it('relays an HTTP 200 WebServiceError as an empty result on both surfaces', async () => {
     serve(OBSERVATION_NO_COVERAGE);
-    const result = await runToolContract(getAirQualityTool, { latitude: 30, longitude: -150 });
+    const result = await runToolContract(airnowGetConditionsTool, {
+      latitude: 30,
+      longitude: -150,
+    });
     expect(result.isError).not.toBe(true);
     const upstream =
       'There are no observations available for the requested latitude/longitude: No observations were found for all monitors within 50 miles.';
@@ -422,7 +428,7 @@ describe('AirNow 2026 observations (observation/current/ziplatlong/)', () => {
     { name: 'a WebServiceError without a message', body: '{"WebServiceError":[{}]}' },
   ])('throws on $name instead of reporting an empty result', async ({ body }) => {
     serve(body);
-    const result = await runToolContract(getAirQualityTool, { zip_code: '98101' });
+    const result = await runToolContract(airnowGetConditionsTool, { zip_code: '98101' });
     expect(result.isError).toBe(true);
     expect(result.structuredContent).toMatchObject({
       error: { code: JsonRpcErrorCode.SerializationError },
@@ -432,9 +438,11 @@ describe('AirNow 2026 observations (observation/current/ziplatlong/)', () => {
 
   it('rejects an invalid ZIP with the declared reason and names the ZIP', async () => {
     serve(INVALID_ZIP_400, 400);
-    const result = await runToolContract(getAirQualityTool, { zip_code: '00000' });
+    const result = await runToolContract(airnowGetConditionsTool, { zip_code: '00000' });
     expect(result.isError).toBe(true);
-    const hint = getAirQualityTool.errors?.find((e) => e.reason === 'invalid_zip_code')?.recovery;
+    const hint = airnowGetConditionsTool.errors?.find(
+      (e) => e.reason === 'invalid_zip_code',
+    )?.recovery;
     expect(hint).toBeDefined();
     expect(result.structuredContent).toMatchObject({
       error: {
@@ -464,7 +472,7 @@ describe('AirNow 2026 forecasts (forecast/current/)', () => {
 
   it('returns every issued day with the discussion once per area', async () => {
     serve(FORECAST_98101);
-    const result = await runToolContract(getAirQualityTool, {
+    const result = await runToolContract(airnowGetConditionsTool, {
       zip_code: '98101',
       mode: 'forecast',
     });
@@ -514,7 +522,7 @@ describe('AirNow 2026 forecasts (forecast/current/)', () => {
 
   it('filters to the requested forecast_date without sending it upstream', async () => {
     serve(FORECAST_98101);
-    const result = await runToolContract(getAirQualityTool, {
+    const result = await runToolContract(airnowGetConditionsTool, {
       zip_code: '98101',
       mode: 'forecast',
       forecast_date: '2026-10-11',
@@ -534,7 +542,7 @@ describe('AirNow 2026 forecasts (forecast/current/)', () => {
 
   it('returns an empty result listing the issued dates when forecast_date matches none', async () => {
     serve(FORECAST_98101);
-    const result = await runToolContract(getAirQualityTool, {
+    const result = await runToolContract(airnowGetConditionsTool, {
       zip_code: '98101',
       mode: 'forecast',
       forecast_date: '2026-10-20',
@@ -551,11 +559,11 @@ describe('AirNow 2026 forecasts (forecast/current/)', () => {
   it('serves different forecast_date values from one cached fetch', async () => {
     serve(FORECAST_98101);
     const ctx = toolCtx('forecast-cache');
-    const first = await getAirQualityTool.handler(
+    const first = await airnowGetConditionsTool.handler(
       parse({ zip_code: '98101', mode: 'forecast', forecast_date: '2026-10-08' }),
       ctx,
     );
-    const second = await getAirQualityTool.handler(
+    const second = await airnowGetConditionsTool.handler(
       parse({ zip_code: '98101', mode: 'forecast', forecast_date: '2026-10-12' }),
       ctx,
     );
@@ -566,7 +574,7 @@ describe('AirNow 2026 forecasts (forecast/current/)', () => {
 
   it('renders a category-only forecast without an AQI value', async () => {
     serve(FORECAST_60601_CATEGORY_ONLY);
-    const result = await runToolContract(getAirQualityTool, {
+    const result = await runToolContract(airnowGetConditionsTool, {
       zip_code: '60601',
       mode: 'forecast',
     });
@@ -628,7 +636,7 @@ describe('AirNow 2026 forecasts (forecast/current/)', () => {
         },
       ]),
     );
-    const result = await runToolContract(getAirQualityTool, {
+    const result = await runToolContract(airnowGetConditionsTool, {
       zip_code: '12345',
       mode: 'forecast',
     });
@@ -671,7 +679,7 @@ describe('AirNow 2026 forecasts (forecast/current/)', () => {
     },
   ])('relays the upstream WebServiceError: $name', async ({ body, input, upstream }) => {
     serve(body);
-    const result = await runToolContract(getAirQualityTool, input);
+    const result = await runToolContract(airnowGetConditionsTool, input);
     expect(result.isError).not.toBe(true);
     const structured = result.structuredContent as { observations: unknown[]; message: string };
     expect(structured.observations).toEqual([]);
@@ -695,7 +703,7 @@ describe('regression #42: one deadline per AirNow call', () => {
     vi.useFakeTimers();
     serveHung();
     let result: Awaited<ReturnType<typeof runToolContract>> | undefined;
-    void runToolContract(getAirQualityTool, { zip_code: '98101' }).then((r) => {
+    void runToolContract(airnowGetConditionsTool, { zip_code: '98101' }).then((r) => {
       result = r;
     });
 
@@ -725,7 +733,7 @@ describe('regression #42: one deadline per AirNow call', () => {
           });
         }),
     });
-    const pending = runToolContract(getAirQualityTool, { zip_code: '98101' });
+    const pending = runToolContract(airnowGetConditionsTool, { zip_code: '98101' });
     await vi.advanceTimersByTimeAsync(55_000);
     const result = await pending;
 

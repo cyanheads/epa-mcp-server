@@ -1,14 +1,14 @@
 /**
- * @fileoverview Tests for getAirQualityTool: input contract, location routing,
+ * @fileoverview Tests for airnowGetConditionsTool: input contract, location routing,
  * forecast_date filtering, and format(). Upstream normalization is covered against
  * captured AirNow bodies in tests/services/airnow/airnow-service.test.ts.
- * @module tests/mcp-server/tools/definitions/get-air-quality.tool.test
+ * @module tests/mcp-server/tools/definitions/airnow-get-conditions.tool.test
  */
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { getAirQualityTool } from '@/mcp-server/tools/definitions/get-air-quality.tool.js';
+import { airnowGetConditionsTool } from '@/mcp-server/tools/definitions/airnow-get-conditions.tool.js';
 
 const mockGetCurrent = vi.fn();
 const mockGetForecast = vi.fn();
@@ -72,11 +72,12 @@ const forecastAreas = [
   },
 ];
 
-const ctx = () => createMockContext({ errors: getAirQualityTool.errors, tenantId: 'test-tenant' });
+const ctx = () =>
+  createMockContext({ errors: airnowGetConditionsTool.errors, tenantId: 'test-tenant' });
 const textOf = (blocks: { type: string; text?: string }[]) =>
   blocks.map((block) => block.text ?? '').join('\n');
 
-describe('getAirQualityTool', () => {
+describe('airnowGetConditionsTool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -84,8 +85,8 @@ describe('getAirQualityTool', () => {
   it('routes a ZIP to current observations', async () => {
     mockGetCurrent.mockResolvedValue({ areas: [seattleObservation] });
     const context = ctx();
-    const result = await getAirQualityTool.handler(
-      getAirQualityTool.input.parse({ zip_code: '98101' }),
+    const result = await airnowGetConditionsTool.handler(
+      airnowGetConditionsTool.input.parse({ zip_code: '98101' }),
       context,
     );
     expect(mockGetCurrent).toHaveBeenCalledWith({ kind: 'zip', zipCode: '98101' }, context);
@@ -101,8 +102,8 @@ describe('getAirQualityTool', () => {
 
   it('routes latitude/longitude to current observations', async () => {
     mockGetCurrent.mockResolvedValue({ areas: [seattleObservation] });
-    await getAirQualityTool.handler(
-      getAirQualityTool.input.parse({ latitude: 47.6, longitude: -122.33 }),
+    await airnowGetConditionsTool.handler(
+      airnowGetConditionsTool.input.parse({ latitude: 47.6, longitude: -122.33 }),
       ctx(),
     );
     expect(mockGetCurrent).toHaveBeenCalledWith(
@@ -113,7 +114,10 @@ describe('getAirQualityTool', () => {
 
   it('trims a padded zip_code before it reaches the service', async () => {
     mockGetCurrent.mockResolvedValue({ areas: [seattleObservation] });
-    await getAirQualityTool.handler(getAirQualityTool.input.parse({ zip_code: ' 98101 ' }), ctx());
+    await airnowGetConditionsTool.handler(
+      airnowGetConditionsTool.input.parse({ zip_code: ' 98101 ' }),
+      ctx(),
+    );
     expect(mockGetCurrent).toHaveBeenCalledWith(
       { kind: 'zip', zipCode: '98101' },
       expect.anything(),
@@ -122,8 +126,8 @@ describe('getAirQualityTool', () => {
 
   it('falls through to latitude/longitude when zip_code is whitespace only', async () => {
     mockGetCurrent.mockResolvedValue({ areas: [seattleObservation] });
-    await getAirQualityTool.handler(
-      getAirQualityTool.input.parse({ zip_code: '   ', latitude: 47.6, longitude: -122.33 }),
+    await airnowGetConditionsTool.handler(
+      airnowGetConditionsTool.input.parse({ zip_code: '   ', latitude: 47.6, longitude: -122.33 }),
       ctx(),
     );
     expect(mockGetCurrent).toHaveBeenCalledWith(
@@ -135,8 +139,8 @@ describe('getAirQualityTool', () => {
   it('returns the whole forecast outlook when forecast_date is omitted or blank', async () => {
     mockGetForecast.mockResolvedValue({ areas: forecastAreas });
     for (const raw of [{}, { forecast_date: '  ' }]) {
-      const result = await getAirQualityTool.handler(
-        getAirQualityTool.input.parse({ zip_code: '98101', mode: 'forecast', ...raw }),
+      const result = await airnowGetConditionsTool.handler(
+        airnowGetConditionsTool.input.parse({ zip_code: '98101', mode: 'forecast', ...raw }),
         ctx(),
       );
       expect(result.mode).toBe('forecast');
@@ -150,8 +154,8 @@ describe('getAirQualityTool', () => {
 
   it('filters readings across every area and drops areas with no match', async () => {
     mockGetForecast.mockResolvedValue({ areas: forecastAreas });
-    const result = await getAirQualityTool.handler(
-      getAirQualityTool.input.parse({
+    const result = await airnowGetConditionsTool.handler(
+      airnowGetConditionsTool.input.parse({
         latitude: 47.4,
         longitude: -122.4,
         mode: 'forecast',
@@ -166,8 +170,8 @@ describe('getAirQualityTool', () => {
     expect(result.attribution).toContain('Puget Sound Clean Air Agency');
     expect(result.attribution).toContain('Tacoma Agency');
 
-    const onlyFirst = await getAirQualityTool.handler(
-      getAirQualityTool.input.parse({
+    const onlyFirst = await airnowGetConditionsTool.handler(
+      airnowGetConditionsTool.input.parse({
         zip_code: '98101',
         mode: 'forecast',
         forecast_date: '2026-10-08',
@@ -183,8 +187,8 @@ describe('getAirQualityTool', () => {
 
   it('lists the issued dates when forecast_date matches nothing', async () => {
     mockGetForecast.mockResolvedValue({ areas: forecastAreas });
-    const result = await getAirQualityTool.handler(
-      getAirQualityTool.input.parse({
+    const result = await airnowGetConditionsTool.handler(
+      airnowGetConditionsTool.input.parse({
         zip_code: '98101',
         mode: 'forecast',
         forecast_date: '2027-01-01',
@@ -203,8 +207,8 @@ describe('getAirQualityTool', () => {
       areas: [],
       noDataMessage: 'Error - There is no reporting area at your searched location',
     });
-    const result = await getAirQualityTool.handler(
-      getAirQualityTool.input.parse({
+    const result = await airnowGetConditionsTool.handler(
+      airnowGetConditionsTool.input.parse({
         latitude: 30,
         longitude: -150,
         mode: 'forecast',
@@ -220,8 +224,8 @@ describe('getAirQualityTool', () => {
 
   it('explains an empty upstream array', async () => {
     mockGetCurrent.mockResolvedValue({ areas: [] });
-    const result = await getAirQualityTool.handler(
-      getAirQualityTool.input.parse({ zip_code: '00001' }),
+    const result = await airnowGetConditionsTool.handler(
+      airnowGetConditionsTool.input.parse({ zip_code: '00001' }),
       ctx(),
     );
     expect(result.observations).toHaveLength(0);
@@ -234,20 +238,26 @@ describe('getAirQualityTool', () => {
 
   it('throws no_location when neither zip_code nor lat/lng provided', async () => {
     await expect(
-      getAirQualityTool.handler(getAirQualityTool.input.parse({ mode: 'current' }), ctx()),
+      airnowGetConditionsTool.handler(
+        airnowGetConditionsTool.input.parse({ mode: 'current' }),
+        ctx(),
+      ),
     ).rejects.toMatchObject({ data: { reason: 'no_location' } });
   });
 
   it('throws no_location when zip_code is blank string', async () => {
     await expect(
-      getAirQualityTool.handler(getAirQualityTool.input.parse({ zip_code: '   ' }), ctx()),
+      airnowGetConditionsTool.handler(
+        airnowGetConditionsTool.input.parse({ zip_code: '   ' }),
+        ctx(),
+      ),
     ).rejects.toMatchObject({ data: { reason: 'no_location' } });
   });
 
   it('rejects a stale distance_miles argument by name', async () => {
     // A pre-removal caller's arguments; the cast bypasses the compile-time check only.
     const stale = { zip_code: '98101', distance_miles: 25 } as { zip_code: string };
-    const result = await runToolContract(getAirQualityTool, stale);
+    const result = await runToolContract(airnowGetConditionsTool, stale);
     expect(result.isError).toBe(true);
     expect(result.structuredContent).toMatchObject({
       error: { code: JsonRpcErrorCode.InvalidParams, data: { reason: 'invalid_arguments' } },
@@ -258,8 +268,8 @@ describe('getAirQualityTool', () => {
 
   it('rejects forecast_date in current mode instead of ignoring it', async () => {
     await expect(
-      getAirQualityTool.handler(
-        getAirQualityTool.input.parse({ zip_code: '98101', forecast_date: '2026-10-09' }),
+      airnowGetConditionsTool.handler(
+        airnowGetConditionsTool.input.parse({ zip_code: '98101', forecast_date: '2026-10-09' }),
         ctx(),
       ),
     ).rejects.toMatchObject({ data: { reason: 'forecast_date_needs_forecast_mode' } });
@@ -268,21 +278,21 @@ describe('getAirQualityTool', () => {
 
   it('accepts a blank forecast_date in current mode', async () => {
     mockGetCurrent.mockResolvedValue({ areas: [seattleObservation] });
-    const result = await getAirQualityTool.handler(
-      getAirQualityTool.input.parse({ zip_code: '98101', forecast_date: '  ' }),
+    const result = await airnowGetConditionsTool.handler(
+      airnowGetConditionsTool.input.parse({ zip_code: '98101', forecast_date: '  ' }),
       ctx(),
     );
     expect(result.observations).toEqual([seattleObservation]);
   });
 
   it('declares invalid_zip_code and no longer declares forecast_date_required', () => {
-    const reasons = getAirQualityTool.errors?.map((entry) => entry.reason);
+    const reasons = airnowGetConditionsTool.errors?.map((entry) => entry.reason);
     expect(reasons).toEqual([
       'no_location',
       'forecast_date_needs_forecast_mode',
       'invalid_zip_code',
     ]);
-    expect(getAirQualityTool.errors?.[1]).toMatchObject({
+    expect(airnowGetConditionsTool.errors?.[1]).toMatchObject({
       code: JsonRpcErrorCode.ValidationError,
     });
   });
@@ -295,7 +305,7 @@ describe('getAirQualityTool', () => {
         'Data courtesy of Washington Department of Ecology and the U.S. EPA AirNow program.',
     };
     const lines = textOf(
-      getAirQualityTool.format!(output) as { type: string; text?: string }[],
+      airnowGetConditionsTool.format!(output) as { type: string; text?: string }[],
     ).split('\n');
     for (const line of [
       '## Air Quality Index — Current Observations (mode: current)',
@@ -323,7 +333,9 @@ describe('getAirQualityTool', () => {
       mode: 'forecast',
       attribution: 'Forecasts issued by Puget Sound Clean Air Agency.',
     };
-    const text = textOf(getAirQualityTool.format!(output) as { type: string; text?: string }[]);
+    const text = textOf(
+      airnowGetConditionsTool.format!(output) as { type: string; text?: string }[],
+    );
     const lines = text.split('\n');
     for (const line of [
       '## Air Quality Index — Forecast (mode: forecast)',
@@ -341,7 +353,7 @@ describe('getAirQualityTool', () => {
 
   it('formats an empty result with its message', () => {
     const lines = textOf(
-      getAirQualityTool.format!({
+      airnowGetConditionsTool.format!({
         observations: [],
         mode: 'current',
         message: 'No AQI data found for zip_code="99999".',
@@ -354,7 +366,7 @@ describe('getAirQualityTool', () => {
 
   it('formats a sparse observation (minimal fields)', () => {
     const lines = textOf(
-      getAirQualityTool.format!({
+      airnowGetConditionsTool.format!({
         observations: [{ readings: [{ parameterName: 'PM2.5', aqi: 55 }] }],
         mode: 'current',
         attribution: 'Data courtesy of the U.S. EPA AirNow program.',

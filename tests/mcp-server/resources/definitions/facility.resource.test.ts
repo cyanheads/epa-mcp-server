@@ -97,7 +97,7 @@ describe('facilityResource', () => {
     expect(facilityResource.errors?.find((contract) => contract.reason === reason)).toMatchObject({
       code: JsonRpcErrorCode.NotFound,
       recovery:
-        'Use epa_search_facilities to discover valid Registry IDs, then read this resource again.',
+        'Use epa_echo_search_facilities to discover valid Registry IDs, then read this resource again.',
     });
   });
 

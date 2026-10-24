@@ -12,7 +12,7 @@ const ServerConfigSchema = z.object({
     .min(1)
     .optional()
     .describe(
-      'AirNow API key (free registration at docs.airnowapi.org). Optional — when unset, epa_get_air_quality is not registered and the other tools run without it.',
+      'AirNow API key (free registration at docs.airnowapi.org). Optional — when unset, epa_airnow_get_conditions is not registered and the other tools run without it.',
     ),
   echoBaseUrl: z
     .string()

@@ -1,16 +1,16 @@
 /**
  * @fileoverview Tool for querying TRI annual chemical release data for a specific facility.
- * @module mcp-server/tools/definitions/get-tri-releases.tool
+ * @module mcp-server/tools/definitions/tri-get-facility-releases.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { formatTriReleaseLines } from '@/mcp-server/tools/format-tri-release.js';
 import { getDmapService } from '@/services/dmap/dmap-service.js';
 
-export const getTriReleasesTool = tool('epa_get_tri_releases', {
+export const triGetFacilityReleasesTool = tool('epa_tri_get_facility_releases', {
   title: 'Get TRI Chemical Releases for Facility',
   description:
-    'Query Toxic Release Inventory annual chemical release data for a specific facility. Returns per-chemical release records with chemical name, reporting year, routine on-site releases by medium (air, water, land, underground injection), and the one-time / non-routine release quantity. Quantities are in pounds; dioxin and dioxin-like compounds, which TRI has facilities report in grams, are converted and marked with reportedUnit. TRI data lags ~18 months — the most recent available year is typically 2 years prior to the current calendar year. facility_id is the 15-character TRI facility ID: take it from the facilityId field of epa_search_tri_releases, which also identifies top emitters across a region, or from the triFacilityIds of epa_get_facility for a facility you already hold a Registry ID for. A 12-digit EPA Registry ID is a different identifier and matches no TRI records.',
+    'TRI: Query Toxic Release Inventory annual chemical release data for a specific facility. Returns per-chemical release records with chemical name, reporting year, routine on-site releases by medium (air, water, land, underground injection), and the one-time / non-routine release quantity. Quantities are in pounds; dioxin and dioxin-like compounds, which TRI has facilities report in grams, are converted and marked with reportedUnit. TRI data lags ~18 months — the most recent available year is typically 2 years prior to the current calendar year. facility_id is the 15-character TRI facility ID: take it from the facilityId field of epa_tri_search_releases, which also identifies top emitters across a region, or from the triFacilityIds of epa_echo_get_facility for a facility you already hold a Registry ID for. A 12-digit EPA Registry ID is a different identifier and matches no TRI records.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -18,7 +18,7 @@ export const getTriReleasesTool = tool('epa_get_tri_releases', {
       .string()
       .min(1)
       .describe(
-        '15-character TRI facility ID (e.g. "9867WSNRWD1981S") — the facilityId field returned by epa_search_tri_releases, or an entry of epa_get_facility triFacilityIds. A 12-digit EPA Registry ID matches no TRI records.',
+        '15-character TRI facility ID (e.g. "9867WSNRWD1981S") — the facilityId field returned by epa_tri_search_releases, or an entry of epa_echo_get_facility triFacilityIds. A 12-digit EPA Registry ID matches no TRI records.',
       ),
     year: z
       .number()
@@ -115,7 +115,10 @@ export const getTriReleasesTool = tool('epa_get_tri_releases', {
   },
 
   async handler(input, ctx) {
-    ctx.log.info('epa_get_tri_releases', { facilityId: input.facility_id, year: input.year });
+    ctx.log.info('epa_tri_get_facility_releases', {
+      facilityId: input.facility_id,
+      year: input.year,
+    });
 
     const chemicalName = input.chemical_name?.trim();
     const releases = await getDmapService().getTriReleases(
@@ -127,7 +130,7 @@ export const getTriReleasesTool = tool('epa_get_tri_releases', {
       ctx,
     );
 
-    ctx.log.info('epa_get_tri_releases completed', { count: releases.length });
+    ctx.log.info('epa_tri_get_facility_releases completed', { count: releases.length });
 
     if (releases.length === 0) {
       const yearNote = input.year ? ` for year ${input.year}` : '';
@@ -146,7 +149,7 @@ export const getTriReleasesTool = tool('epa_get_tri_releases', {
       }
       if (chemicalName) hints.push('Remove chemical_name to include other chemicals.');
       hints.push(
-        "Verify the facility ID with epa_search_tri_releases — facility_id is its 15-character facilityId, not a 12-digit EPA Registry ID; epa_get_facility returns a Registry ID's TRI IDs as triFacilityIds.",
+        "Verify the facility ID with epa_tri_search_releases — facility_id is its 15-character facilityId, not a 12-digit EPA Registry ID; epa_echo_get_facility returns a Registry ID's TRI IDs as triFacilityIds.",
       );
       return {
         releases: [],

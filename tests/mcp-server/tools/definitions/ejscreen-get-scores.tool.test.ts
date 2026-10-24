@@ -1,13 +1,13 @@
 /**
- * @fileoverview Tests for getEjscreenTool — happy path, km→miles conversion, the
+ * @fileoverview Tests for ejscreenGetScoresTool — happy path, km→miles conversion, the
  * buffer-too-large error contract, out-of-coverage handling, and format() rendering.
  * The service is mocked so the handler is exercised in isolation.
- * @module tests/mcp-server/tools/definitions/get-ejscreen.tool.test
+ * @module tests/mcp-server/tools/definitions/ejscreen-get-scores.tool.test
  */
 
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { getEjscreenTool } from '@/mcp-server/tools/definitions/get-ejscreen.tool.js';
+import { ejscreenGetScoresTool } from '@/mcp-server/tools/definitions/ejscreen-get-scores.tool.js';
 import type { EjscreenResult } from '@/services/ejscreen/types.js';
 
 const mockGetIndicators = vi.fn();
@@ -63,16 +63,16 @@ const oceanResult: EjscreenResult = {
   dataSource: 'EJScreen v2.2 (2022 data) via the community-maintained EJAM API.',
 };
 
-describe('getEjscreenTool', () => {
+describe('ejscreenGetScoresTool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it('returns indicators for a valid point and passes miles through unchanged', async () => {
     mockGetIndicators.mockResolvedValue(validResult);
-    const ctx = createMockContext({ errors: getEjscreenTool.errors });
-    const input = getEjscreenTool.input.parse({ latitude: 39.2904, longitude: -76.6122 });
-    const result = await getEjscreenTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: ejscreenGetScoresTool.errors });
+    const input = ejscreenGetScoresTool.input.parse({ latitude: 39.2904, longitude: -76.6122 });
+    const result = await ejscreenGetScoresTool.handler(input, ctx);
 
     expect(mockGetIndicators).toHaveBeenCalledWith(
       { latitude: 39.2904, longitude: -76.6122, bufferMiles: 1 },
@@ -85,15 +85,15 @@ describe('getEjscreenTool', () => {
 
   it('converts kilometers to miles before calling the service', async () => {
     mockGetIndicators.mockResolvedValue(validResult);
-    const ctx = createMockContext({ errors: getEjscreenTool.errors });
+    const ctx = createMockContext({ errors: ejscreenGetScoresTool.errors });
     // 20 km is over 15 as a raw number but ≈ 12.43 miles, inside the cap once converted.
-    const input = getEjscreenTool.input.parse({
+    const input = ejscreenGetScoresTool.input.parse({
       latitude: 39.2904,
       longitude: -76.6122,
       distance: 20,
       unit: 'kilometers',
     });
-    await getEjscreenTool.handler(input, ctx);
+    await ejscreenGetScoresTool.handler(input, ctx);
 
     expect(mockGetIndicators).toHaveBeenCalledWith(
       { latitude: 39.2904, longitude: -76.6122, bufferMiles: expect.closeTo(12.42742, 5) },
@@ -102,14 +102,14 @@ describe('getEjscreenTool', () => {
   });
 
   it('throws buffer_too_large before calling the service when miles exceed 15', async () => {
-    const ctx = createMockContext({ errors: getEjscreenTool.errors });
-    const input = getEjscreenTool.input.parse({
+    const ctx = createMockContext({ errors: ejscreenGetScoresTool.errors });
+    const input = ejscreenGetScoresTool.input.parse({
       latitude: 39.2904,
       longitude: -76.6122,
       distance: 15.01,
     });
 
-    await expect(getEjscreenTool.handler(input, ctx)).rejects.toMatchObject({
+    await expect(ejscreenGetScoresTool.handler(input, ctx)).rejects.toMatchObject({
       message: 'Buffer of 15.01 miles exceeds the EJAM API limit of 15 miles.',
       data: { reason: 'buffer_too_large' },
     });
@@ -117,12 +117,12 @@ describe('getEjscreenTool', () => {
 
     // Exactly 15 miles is the cap itself, not over it.
     mockGetIndicators.mockResolvedValue(validResult);
-    const atCap = getEjscreenTool.input.parse({
+    const atCap = ejscreenGetScoresTool.input.parse({
       latitude: 39.2904,
       longitude: -76.6122,
       distance: 15,
     });
-    await getEjscreenTool.handler(atCap, ctx);
+    await ejscreenGetScoresTool.handler(atCap, ctx);
     expect(mockGetIndicators).toHaveBeenCalledWith(
       expect.objectContaining({ bufferMiles: 15 }),
       ctx,
@@ -130,16 +130,16 @@ describe('getEjscreenTool', () => {
   });
 
   it('throws buffer_too_large when a kilometers distance converts above 15 miles', async () => {
-    const ctx = createMockContext({ errors: getEjscreenTool.errors });
+    const ctx = createMockContext({ errors: ejscreenGetScoresTool.errors });
     // 30 km ≈ 18.64 miles.
-    const input = getEjscreenTool.input.parse({
+    const input = ejscreenGetScoresTool.input.parse({
       latitude: 39.2904,
       longitude: -76.6122,
       distance: 30,
       unit: 'kilometers',
     });
 
-    await expect(getEjscreenTool.handler(input, ctx)).rejects.toMatchObject({
+    await expect(ejscreenGetScoresTool.handler(input, ctx)).rejects.toMatchObject({
       message: 'Buffer of 18.64 miles exceeds the EJAM API limit of 15 miles.',
       data: { reason: 'buffer_too_large' },
     });
@@ -148,9 +148,9 @@ describe('getEjscreenTool', () => {
 
   it('surfaces a coverage notice when the point is out of coverage', async () => {
     mockGetIndicators.mockResolvedValue(oceanResult);
-    const ctx = createMockContext({ errors: getEjscreenTool.errors });
-    const input = getEjscreenTool.input.parse({ latitude: 0, longitude: 0 });
-    const result = await getEjscreenTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: ejscreenGetScoresTool.errors });
+    const input = ejscreenGetScoresTool.input.parse({ latitude: 0, longitude: 0 });
+    const result = await ejscreenGetScoresTool.handler(input, ctx);
 
     expect(result.coverage.valid).toBe(false);
     expect(result.environmental).toEqual([]);
@@ -160,7 +160,7 @@ describe('getEjscreenTool', () => {
   });
 
   it('formats a valid result with location, indicators, indices, and source', () => {
-    const blocks = getEjscreenTool.format!(validResult);
+    const blocks = ejscreenGetScoresTool.format!(validResult);
     const lines = (blocks[0] as { type: string; text: string }).text.split('\n');
     for (const line of [
       '## EJScreen Environmental Justice — 39.2904, -76.6122 (Maryland)',
@@ -181,7 +181,7 @@ describe('getEjscreenTool', () => {
   });
 
   it('formats an out-of-coverage result with the coverage note and no fabricated indicators', () => {
-    const blocks = getEjscreenTool.format!(oceanResult);
+    const blocks = ejscreenGetScoresTool.format!(oceanResult);
     const text = (blocks[0] as { type: string; text: string }).text;
     expect(text).toContain('Coverage valid:** no');
     expect(text).toContain('not located within the United States');

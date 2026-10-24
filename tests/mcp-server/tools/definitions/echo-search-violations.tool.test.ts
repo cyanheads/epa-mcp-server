@@ -1,12 +1,12 @@
 /**
- * @fileoverview Tests for searchViolationsTool.
- * @module tests/mcp-server/tools/definitions/search-violations.tool.test
+ * @fileoverview Tests for echoSearchViolationsTool.
+ * @module tests/mcp-server/tools/definitions/echo-search-violations.tool.test
  */
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { searchViolationsTool } from '@/mcp-server/tools/definitions/search-violations.tool.js';
+import { echoSearchViolationsTool } from '@/mcp-server/tools/definitions/echo-search-violations.tool.js';
 
 const mockSearchViolations = vi.fn();
 
@@ -39,16 +39,16 @@ const waCase = {
 const CRIMINAL_EXCLUSION_NOTICE =
   'Criminal cases are excluded: ECHO records filing dates for civil cases only, so a filing-date range returns civil cases. Search case_type "criminal" without dates for criminal cases.';
 
-describe('searchViolationsTool', () => {
+describe('echoSearchViolationsTool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it('returns cases for valid state filter', async () => {
     mockSearchViolations.mockResolvedValue({ cases: [waCase], totalCount: 7 });
-    const ctx = createMockContext({ errors: searchViolationsTool.errors });
-    const input = searchViolationsTool.input.parse({ state: ' WA ' });
-    const result = await searchViolationsTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: echoSearchViolationsTool.errors });
+    const input = echoSearchViolationsTool.input.parse({ state: ' WA ' });
+    const result = await echoSearchViolationsTool.handler(input, ctx);
     expect(mockSearchViolations).toHaveBeenCalledWith(
       { state: 'WA', caseType: 'all', limit: 50 },
       ctx,
@@ -58,9 +58,9 @@ describe('searchViolationsTool', () => {
 
   it('returns cases for valid zip_code filter', async () => {
     mockSearchViolations.mockResolvedValue({ cases: [waCase], totalCount: 1 });
-    const ctx = createMockContext({ errors: searchViolationsTool.errors });
-    const input = searchViolationsTool.input.parse({ zip_code: '98101' });
-    const result = await searchViolationsTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: echoSearchViolationsTool.errors });
+    const input = echoSearchViolationsTool.input.parse({ zip_code: '98101' });
+    const result = await echoSearchViolationsTool.handler(input, ctx);
     expect(mockSearchViolations).toHaveBeenCalledWith(
       { zipCode: '98101', caseType: 'all', limit: 50 },
       ctx,
@@ -70,13 +70,13 @@ describe('searchViolationsTool', () => {
 
   it('passes program and case_type filters to service', async () => {
     mockSearchViolations.mockResolvedValue({ cases: [waCase], totalCount: 1 });
-    const ctx = createMockContext({ errors: searchViolationsTool.errors });
-    const input = searchViolationsTool.input.parse({
+    const ctx = createMockContext({ errors: echoSearchViolationsTool.errors });
+    const input = echoSearchViolationsTool.input.parse({
       state: 'WA',
       program: 'CAA',
       case_type: 'civil',
     });
-    await searchViolationsTool.handler(input, ctx);
+    await echoSearchViolationsTool.handler(input, ctx);
     expect(mockSearchViolations).toHaveBeenCalledWith(
       expect.objectContaining({ program: 'CAA', caseType: 'civil' }),
       expect.anything(),
@@ -85,13 +85,13 @@ describe('searchViolationsTool', () => {
 
   it('passes date range filters to service', async () => {
     mockSearchViolations.mockResolvedValue({ cases: [waCase], totalCount: 1 });
-    const ctx = createMockContext({ errors: searchViolationsTool.errors });
-    const input = searchViolationsTool.input.parse({
+    const ctx = createMockContext({ errors: echoSearchViolationsTool.errors });
+    const input = echoSearchViolationsTool.input.parse({
       state: 'WA',
       date_filed_start: '2023-01-01',
       date_filed_end: '2023-12-31',
     });
-    await searchViolationsTool.handler(input, ctx);
+    await echoSearchViolationsTool.handler(input, ctx);
     expect(mockSearchViolations).toHaveBeenCalledWith(
       expect.objectContaining({
         dateFiledStart: '2023-01-01',
@@ -106,13 +106,13 @@ describe('searchViolationsTool', () => {
     ['whitespace-only', ' \t '],
   ])('treats %s date strings as no bound', async (_label, blank) => {
     mockSearchViolations.mockResolvedValue({ cases: [waCase], totalCount: 1 });
-    const ctx = createMockContext({ errors: searchViolationsTool.errors });
-    const input = searchViolationsTool.input.parse({
+    const ctx = createMockContext({ errors: echoSearchViolationsTool.errors });
+    const input = echoSearchViolationsTool.input.parse({
       state: 'WA',
       date_filed_start: blank,
       date_filed_end: blank,
     });
-    await searchViolationsTool.handler(input, ctx);
+    await echoSearchViolationsTool.handler(input, ctx);
     expect(mockSearchViolations).toHaveBeenCalledWith(
       { state: 'WA', caseType: 'all', limit: 50 },
       ctx,
@@ -122,12 +122,12 @@ describe('searchViolationsTool', () => {
 
   it('trims padding around a filing date', async () => {
     mockSearchViolations.mockResolvedValue({ cases: [waCase], totalCount: 1 });
-    const ctx = createMockContext({ errors: searchViolationsTool.errors });
-    const input = searchViolationsTool.input.parse({
+    const ctx = createMockContext({ errors: echoSearchViolationsTool.errors });
+    const input = echoSearchViolationsTool.input.parse({
       state: 'WA',
       date_filed_start: ' 2024-01-01 ',
     });
-    await searchViolationsTool.handler(input, ctx);
+    await echoSearchViolationsTool.handler(input, ctx);
     expect(mockSearchViolations).toHaveBeenCalledWith(
       { state: 'WA', caseType: 'all', dateFiledStart: '2024-01-01', limit: 50 },
       ctx,
@@ -138,10 +138,10 @@ describe('searchViolationsTool', () => {
     'regression #28: rejects the non-ISO date %s at the schema',
     (date) => {
       expect(
-        searchViolationsTool.input.safeParse({ state: 'WA', date_filed_start: date }).success,
+        echoSearchViolationsTool.input.safeParse({ state: 'WA', date_filed_start: date }).success,
       ).toBe(false);
       expect(
-        searchViolationsTool.input.safeParse({ state: 'WA', date_filed_end: date }).success,
+        echoSearchViolationsTool.input.safeParse({ state: 'WA', date_filed_end: date }).success,
       ).toBe(false);
     },
   );
@@ -151,9 +151,9 @@ describe('searchViolationsTool', () => {
     ['date_filed_end', '2023-13-01'],
     ['date_filed_end', '2023-02-29'],
   ])('regression #28: rejects %s %s as invalid_date before any request', async (field, date) => {
-    const ctx = createMockContext({ errors: searchViolationsTool.errors });
-    const input = searchViolationsTool.input.parse({ state: 'WA', [field]: date });
-    await expect(searchViolationsTool.handler(input, ctx)).rejects.toMatchObject({
+    const ctx = createMockContext({ errors: echoSearchViolationsTool.errors });
+    const input = echoSearchViolationsTool.input.parse({ state: 'WA', [field]: date });
+    await expect(echoSearchViolationsTool.handler(input, ctx)).rejects.toMatchObject({
       code: JsonRpcErrorCode.ValidationError,
       message: `${field} "${date}" is not a calendar date.`,
       data: { reason: 'invalid_date', field },
@@ -178,7 +178,7 @@ describe('searchViolationsTool', () => {
       'Drop date_filed_start and date_filed_end to search criminal cases, or set case_type to civil.',
     ],
   ])('carries the %s recovery hint on both surfaces', async (reason, filters, hint) => {
-    const result = await runToolContract(searchViolationsTool, { state: 'WA', ...filters });
+    const result = await runToolContract(echoSearchViolationsTool, { state: 'WA', ...filters });
     expect(result.isError).toBe(true);
     expect(result.structuredContent).toMatchObject({
       error: { code: JsonRpcErrorCode.ValidationError, data: { reason, recovery: { hint } } },
@@ -189,9 +189,12 @@ describe('searchViolationsTool', () => {
 
   it('accepts a leap day', async () => {
     mockSearchViolations.mockResolvedValue({ cases: [waCase], totalCount: 1 });
-    const ctx = createMockContext({ errors: searchViolationsTool.errors });
-    const input = searchViolationsTool.input.parse({ state: 'WA', date_filed_start: '2024-02-29' });
-    await searchViolationsTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: echoSearchViolationsTool.errors });
+    const input = echoSearchViolationsTool.input.parse({
+      state: 'WA',
+      date_filed_start: '2024-02-29',
+    });
+    await echoSearchViolationsTool.handler(input, ctx);
     expect(mockSearchViolations).toHaveBeenCalledWith(
       expect.objectContaining({ dateFiledStart: '2024-02-29' }),
       ctx,
@@ -199,13 +202,13 @@ describe('searchViolationsTool', () => {
   });
 
   it('regression #28: rejects a start date after the end date before any request', async () => {
-    const ctx = createMockContext({ errors: searchViolationsTool.errors });
-    const input = searchViolationsTool.input.parse({
+    const ctx = createMockContext({ errors: echoSearchViolationsTool.errors });
+    const input = echoSearchViolationsTool.input.parse({
       state: 'WA',
       date_filed_start: '2024-12-31',
       date_filed_end: '2024-01-01',
     });
-    await expect(searchViolationsTool.handler(input, ctx)).rejects.toMatchObject({
+    await expect(echoSearchViolationsTool.handler(input, ctx)).rejects.toMatchObject({
       code: JsonRpcErrorCode.ValidationError,
       data: { reason: 'date_range_inverted' },
     });
@@ -214,13 +217,13 @@ describe('searchViolationsTool', () => {
 
   it('accepts a one-day range', async () => {
     mockSearchViolations.mockResolvedValue({ cases: [waCase], totalCount: 1 });
-    const ctx = createMockContext({ errors: searchViolationsTool.errors });
-    const input = searchViolationsTool.input.parse({
+    const ctx = createMockContext({ errors: echoSearchViolationsTool.errors });
+    const input = echoSearchViolationsTool.input.parse({
       state: 'WA',
       date_filed_start: '2024-05-01',
       date_filed_end: '2024-05-01',
     });
-    await searchViolationsTool.handler(input, ctx);
+    await echoSearchViolationsTool.handler(input, ctx);
     expect(mockSearchViolations).toHaveBeenCalledWith(
       expect.objectContaining({ dateFiledStart: '2024-05-01', dateFiledEnd: '2024-05-01' }),
       ctx,
@@ -230,13 +233,13 @@ describe('searchViolationsTool', () => {
   it.each([{ date_filed_start: '2024-01-01' }, { date_filed_end: '2024-12-31' }])(
     'regression #28: rejects case_type criminal with a date bound (%o)',
     async (dates) => {
-      const ctx = createMockContext({ errors: searchViolationsTool.errors });
-      const input = searchViolationsTool.input.parse({
+      const ctx = createMockContext({ errors: echoSearchViolationsTool.errors });
+      const input = echoSearchViolationsTool.input.parse({
         state: 'WA',
         case_type: 'criminal',
         ...dates,
       });
-      await expect(searchViolationsTool.handler(input, ctx)).rejects.toMatchObject({
+      await expect(echoSearchViolationsTool.handler(input, ctx)).rejects.toMatchObject({
         code: JsonRpcErrorCode.ValidationError,
         data: { reason: 'criminal_date_filter' },
       });
@@ -246,20 +249,20 @@ describe('searchViolationsTool', () => {
 
   it('regression #28: discloses that a date-bounded "all" search excludes criminal cases', async () => {
     mockSearchViolations.mockResolvedValue({ cases: [waCase], totalCount: 87 });
-    const ctx = createMockContext({ errors: searchViolationsTool.errors });
-    const input = searchViolationsTool.input.parse({
+    const ctx = createMockContext({ errors: echoSearchViolationsTool.errors });
+    const input = echoSearchViolationsTool.input.parse({
       state: 'WA',
       date_filed_start: '2024-01-01',
       date_filed_end: '2024-12-31',
     });
-    const result = await searchViolationsTool.handler(input, ctx);
+    const result = await echoSearchViolationsTool.handler(input, ctx);
     expect(result.totalCount).toBe(87);
     expect(getEnrichment(ctx)).toEqual({ notice: CRIMINAL_EXCLUSION_NOTICE });
   });
 
   it('renders the criminal-exclusion notice on both surfaces', async () => {
     mockSearchViolations.mockResolvedValue({ cases: [waCase], totalCount: 87 });
-    const result = await runToolContract(searchViolationsTool, {
+    const result = await runToolContract(echoSearchViolationsTool, {
       state: 'WA',
       date_filed_start: '2024-01-01',
     });
@@ -280,47 +283,47 @@ describe('searchViolationsTool', () => {
     ['criminal without dates', { case_type: 'criminal' }],
   ])('adds no criminal-exclusion notice for %s', async (_label, filters) => {
     mockSearchViolations.mockResolvedValue({ cases: [waCase], totalCount: 1 });
-    const ctx = createMockContext({ errors: searchViolationsTool.errors });
-    const input = searchViolationsTool.input.parse({ state: 'WA', ...filters });
-    await searchViolationsTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: echoSearchViolationsTool.errors });
+    const input = echoSearchViolationsTool.input.parse({ state: 'WA', ...filters });
+    await echoSearchViolationsTool.handler(input, ctx);
     expect(getEnrichment(ctx)).not.toHaveProperty('notice');
   });
 
   it('echoes the date filters in the no-match message', async () => {
     mockSearchViolations.mockResolvedValue({ cases: [], totalCount: 0 });
-    const ctx = createMockContext({ errors: searchViolationsTool.errors });
-    const input = searchViolationsTool.input.parse({
+    const ctx = createMockContext({ errors: echoSearchViolationsTool.errors });
+    const input = echoSearchViolationsTool.input.parse({
       zip_code: '98108',
       case_type: 'civil',
       date_filed_start: '2026-10-01',
     });
-    const result = await searchViolationsTool.handler(input, ctx);
+    const result = await echoSearchViolationsTool.handler(input, ctx);
     expect(result.message).toBe(
       'No enforcement cases matched: zip_code="98108", case_type="civil", date_filed_start="2026-10-01". Try removing program or date filters, or expanding the geographic area.',
     );
   });
 
   it('throws no_geographic_filter when neither state nor zip_code provided', async () => {
-    const ctx = createMockContext({ errors: searchViolationsTool.errors });
-    const input = searchViolationsTool.input.parse({ program: 'CAA' });
-    await expect(searchViolationsTool.handler(input, ctx)).rejects.toMatchObject({
+    const ctx = createMockContext({ errors: echoSearchViolationsTool.errors });
+    const input = echoSearchViolationsTool.input.parse({ program: 'CAA' });
+    await expect(echoSearchViolationsTool.handler(input, ctx)).rejects.toMatchObject({
       data: { reason: 'no_geographic_filter' },
     });
   });
 
   it('throws no_geographic_filter when state and zip_code are blank strings', async () => {
-    const ctx = createMockContext({ errors: searchViolationsTool.errors });
-    const input = searchViolationsTool.input.parse({ state: '  ', zip_code: '  ' });
-    await expect(searchViolationsTool.handler(input, ctx)).rejects.toMatchObject({
+    const ctx = createMockContext({ errors: echoSearchViolationsTool.errors });
+    const input = echoSearchViolationsTool.input.parse({ state: '  ', zip_code: '  ' });
+    await expect(echoSearchViolationsTool.handler(input, ctx)).rejects.toMatchObject({
       data: { reason: 'no_geographic_filter' },
     });
   });
 
   it('returns message when no cases found', async () => {
     mockSearchViolations.mockResolvedValue({ cases: [], totalCount: 0 });
-    const ctx = createMockContext({ errors: searchViolationsTool.errors });
-    const input = searchViolationsTool.input.parse({ state: 'WA', program: 'TSCA' });
-    const result = await searchViolationsTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: echoSearchViolationsTool.errors });
+    const input = echoSearchViolationsTool.input.parse({ state: 'WA', program: 'TSCA' });
+    const result = await echoSearchViolationsTool.handler(input, ctx);
     expect(result.cases).toHaveLength(0);
     expect(result.totalCount).toBe(0);
     expect(result.message).toBe(
@@ -330,7 +333,7 @@ describe('searchViolationsTool', () => {
 
   it('formats output with case ID, program, penalty, and dates (real get_qid fields)', () => {
     const output = { cases: [waCase], totalCount: 1 };
-    const blocks = searchViolationsTool.format!(output);
+    const blocks = echoSearchViolationsTool.format!(output);
     expect(blocks).toHaveLength(1);
     const lines = (blocks[0] as { type: string; text: string }).text.split('\n');
     // facilityName, registryId, and state are absent from get_qid — no lines for them
@@ -355,7 +358,7 @@ describe('searchViolationsTool', () => {
       totalCount: 0,
       message: 'No enforcement cases matched: state="WA".',
     };
-    const blocks = searchViolationsTool.format!(output);
+    const blocks = echoSearchViolationsTool.format!(output);
     const lines = (blocks[0] as { type: string; text: string }).text.split('\n');
     expect(lines).toContain('**Total Found:** 0 | **Returned:** 0');
     expect(lines).toContain('> No enforcement cases matched: state="WA".');
@@ -366,7 +369,7 @@ describe('searchViolationsTool', () => {
       cases: [{ caseId: 'CWA-04-2022-9999' }],
       totalCount: 1,
     };
-    const blocks = searchViolationsTool.format!(sparse);
+    const blocks = echoSearchViolationsTool.format!(sparse);
     const lines = (blocks[0] as { type: string; text: string }).text.split('\n');
     expect(lines).toContain('### CWA-04-2022-9999');
     expect(lines).toContain('**Case ID:** CWA-04-2022-9999');
@@ -377,7 +380,7 @@ describe('searchViolationsTool', () => {
       cases: [{ facilityName: 'MYSTERY CO', state: 'TX' }],
       totalCount: 1,
     };
-    const blocks = searchViolationsTool.format!(sparse);
+    const blocks = echoSearchViolationsTool.format!(sparse);
     const lines = (blocks[0] as { type: string; text: string }).text.split('\n');
     expect(lines).toContain('### Unnamed Case');
     expect(lines).toContain('**Facility:** MYSTERY CO');

@@ -1,11 +1,11 @@
 /**
- * @fileoverview Tests for searchWaterSystemsTool.
- * @module tests/mcp-server/tools/definitions/search-water-systems.tool.test
+ * @fileoverview Tests for waterSearchSystemsTool.
+ * @module tests/mcp-server/tools/definitions/water-search-systems.tool.test
  */
 
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { searchWaterSystemsTool } from '@/mcp-server/tools/definitions/search-water-systems.tool.js';
+import { waterSearchSystemsTool } from '@/mcp-server/tools/definitions/water-search-systems.tool.js';
 
 const mockSearchWaterSystems = vi.fn();
 
@@ -31,38 +31,38 @@ const seattleWaterSystem = {
   isActive: true,
 };
 
-describe('searchWaterSystemsTool', () => {
+describe('waterSearchSystemsTool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it('returns water systems for valid state', async () => {
     mockSearchWaterSystems.mockResolvedValue([seattleWaterSystem]);
-    const ctx = createMockContext({ errors: searchWaterSystemsTool.errors });
-    const input = searchWaterSystemsTool.input.parse({ state: ' WA ' });
-    const result = await searchWaterSystemsTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: waterSearchSystemsTool.errors });
+    const input = waterSearchSystemsTool.input.parse({ state: ' WA ' });
+    const result = await waterSearchSystemsTool.handler(input, ctx);
     expect(result).toEqual({ systems: [seattleWaterSystem], totalCount: 1 });
     expect(mockSearchWaterSystems).toHaveBeenCalledWith({ state: 'WA', limit: 50 }, ctx);
   });
 
   it('returns water systems for valid zip_code', async () => {
     mockSearchWaterSystems.mockResolvedValue([seattleWaterSystem]);
-    const ctx = createMockContext({ errors: searchWaterSystemsTool.errors });
-    const input = searchWaterSystemsTool.input.parse({ zip_code: ' 98104 ' });
-    const result = await searchWaterSystemsTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: waterSearchSystemsTool.errors });
+    const input = waterSearchSystemsTool.input.parse({ zip_code: ' 98104 ' });
+    const result = await waterSearchSystemsTool.handler(input, ctx);
     expect(result).toEqual({ systems: [seattleWaterSystem], totalCount: 1 });
     expect(mockSearchWaterSystems).toHaveBeenCalledWith({ zipCode: '98104', limit: 50 }, ctx);
   });
 
   it('passes has_violation and pws_type filters to service', async () => {
     mockSearchWaterSystems.mockResolvedValue([seattleWaterSystem]);
-    const ctx = createMockContext({ errors: searchWaterSystemsTool.errors });
-    const input = searchWaterSystemsTool.input.parse({
+    const ctx = createMockContext({ errors: waterSearchSystemsTool.errors });
+    const input = waterSearchSystemsTool.input.parse({
       state: 'WA',
       has_violation: true,
       pws_type: 'community',
     });
-    await searchWaterSystemsTool.handler(input, ctx);
+    await waterSearchSystemsTool.handler(input, ctx);
     expect(mockSearchWaterSystems).toHaveBeenCalledWith(
       { state: 'WA', hasViolation: true, pwsType: 'community', limit: 50 },
       expect.anything(),
@@ -70,26 +70,26 @@ describe('searchWaterSystemsTool', () => {
   });
 
   it('throws no_geographic_filter when neither state nor zip_code provided', async () => {
-    const ctx = createMockContext({ errors: searchWaterSystemsTool.errors });
-    const input = searchWaterSystemsTool.input.parse({ has_violation: true });
-    await expect(searchWaterSystemsTool.handler(input, ctx)).rejects.toMatchObject({
+    const ctx = createMockContext({ errors: waterSearchSystemsTool.errors });
+    const input = waterSearchSystemsTool.input.parse({ has_violation: true });
+    await expect(waterSearchSystemsTool.handler(input, ctx)).rejects.toMatchObject({
       data: { reason: 'no_geographic_filter' },
     });
   });
 
   it('throws no_geographic_filter when state and zip_code are blank strings', async () => {
-    const ctx = createMockContext({ errors: searchWaterSystemsTool.errors });
-    const input = searchWaterSystemsTool.input.parse({ state: '  ', zip_code: '  ' });
-    await expect(searchWaterSystemsTool.handler(input, ctx)).rejects.toMatchObject({
+    const ctx = createMockContext({ errors: waterSearchSystemsTool.errors });
+    const input = waterSearchSystemsTool.input.parse({ state: '  ', zip_code: '  ' });
+    await expect(waterSearchSystemsTool.handler(input, ctx)).rejects.toMatchObject({
       data: { reason: 'no_geographic_filter' },
     });
   });
 
   it('returns message when no systems found', async () => {
     mockSearchWaterSystems.mockResolvedValue([]);
-    const ctx = createMockContext({ errors: searchWaterSystemsTool.errors });
-    const input = searchWaterSystemsTool.input.parse({ state: 'WY', has_violation: true });
-    const result = await searchWaterSystemsTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: waterSearchSystemsTool.errors });
+    const input = waterSearchSystemsTool.input.parse({ state: 'WY', has_violation: true });
+    const result = await waterSearchSystemsTool.handler(input, ctx);
     expect(result).toEqual({
       systems: [],
       totalCount: 0,
@@ -100,7 +100,7 @@ describe('searchWaterSystemsTool', () => {
 
   it('formats output with PWSID, population, source, and violation flag', () => {
     const output = { systems: [seattleWaterSystem], totalCount: 1 };
-    const blocks = searchWaterSystemsTool.format!(output);
+    const blocks = waterSearchSystemsTool.format!(output);
     expect(blocks).toEqual([
       {
         type: 'text',
@@ -124,15 +124,15 @@ describe('searchWaterSystemsTool', () => {
   it('shows violation warning flag in heading when hasViolation is true', () => {
     const systemWithViolation = { ...seattleWaterSystem, hasViolation: true };
     const output = { systems: [systemWithViolation], totalCount: 1 };
-    const blocks = searchWaterSystemsTool.format!(output);
+    const blocks = waterSearchSystemsTool.format!(output);
     const text = (blocks[0] as { type: string; text: string }).text;
     expect(text).toContain('\n### SEATTLE PUBLIC UTILITIES ⚠️ VIOLATION\n');
     expect(text).toContain('**Open Violation:** Yes');
   });
 
   describe('violation wording matches the open-only filter', () => {
-    const shape = searchWaterSystemsTool.input.shape;
-    const systemShape = searchWaterSystemsTool.output.shape.systems.element.shape;
+    const shape = waterSearchSystemsTool.input.shape;
+    const systemShape = waterSearchSystemsTool.output.shape.systems.element.shape;
 
     it('describes has_violation as open violations, never "active"', () => {
       const text = shape.has_violation.description ?? '';
@@ -148,9 +148,9 @@ describe('searchWaterSystemsTool', () => {
     });
 
     it('tool description promises open violation status and ZIP support', () => {
-      expect(searchWaterSystemsTool.description).toMatch(/open violation/i);
-      expect(searchWaterSystemsTool.description).not.toMatch(/active violation/i);
-      expect(searchWaterSystemsTool.description).toContain('by state or ZIP code');
+      expect(waterSearchSystemsTool.description).toMatch(/open violation/i);
+      expect(waterSearchSystemsTool.description).not.toMatch(/active violation/i);
+      expect(waterSearchSystemsTool.description).toContain('by state or ZIP code');
     });
   });
 
@@ -160,7 +160,7 @@ describe('searchWaterSystemsTool', () => {
       totalCount: 0,
       message: 'No water systems found matching: state="WY".',
     };
-    const blocks = searchWaterSystemsTool.format!(output);
+    const blocks = waterSearchSystemsTool.format!(output);
     const text = (blocks[0] as { type: string; text: string }).text;
     expect(text).toBe(
       [
@@ -181,7 +181,7 @@ describe('searchWaterSystemsTool', () => {
         ctx.enrich.notice(scanNotice);
         return Promise.resolve([{ ...seattleWaterSystem, hasViolation: true }]);
       });
-      const call = await runToolContract(searchWaterSystemsTool, {
+      const call = await runToolContract(waterSearchSystemsTool, {
         state: 'WA',
         has_violation: true,
       });
@@ -199,7 +199,7 @@ describe('searchWaterSystemsTool', () => {
         ctx.enrich.notice(scanNotice);
         return Promise.resolve([]);
       });
-      const call = await runToolContract(searchWaterSystemsTool, {
+      const call = await runToolContract(waterSearchSystemsTool, {
         state: 'WA',
         has_violation: true,
         pws_type: 'transient',
@@ -216,7 +216,7 @@ describe('searchWaterSystemsTool', () => {
         ctx.enrich.notice(zipNotice);
         return Promise.resolve([{ ...seattleWaterSystem, hasViolation: true }]);
       });
-      const call = await runToolContract(searchWaterSystemsTool, {
+      const call = await runToolContract(waterSearchSystemsTool, {
         zip_code: '98104',
         has_violation: true,
       });
@@ -237,7 +237,7 @@ describe('searchWaterSystemsTool', () => {
 
     it('adds no notice when the service reports none', async () => {
       mockSearchWaterSystems.mockResolvedValue([seattleWaterSystem]);
-      const call = await runToolContract(searchWaterSystemsTool, { state: 'WA' });
+      const call = await runToolContract(waterSearchSystemsTool, { state: 'WA' });
       expect(call.structuredContent).not.toHaveProperty('notice');
     });
   });
@@ -247,7 +247,7 @@ describe('searchWaterSystemsTool', () => {
       systems: [{ pwsid: 'OR0000001', name: 'SPARSE UTILITY' }],
       totalCount: 1,
     };
-    const blocks = searchWaterSystemsTool.format!(sparse);
+    const blocks = waterSearchSystemsTool.format!(sparse);
     const text = (blocks[0] as { type: string; text: string }).text;
     // Absent optional fields render no line at all, and no violation flag or status.
     expect(text).toBe(

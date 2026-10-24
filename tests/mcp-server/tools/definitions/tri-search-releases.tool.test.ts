@@ -1,6 +1,6 @@
 /**
- * @fileoverview Tests for searchTriReleasesTool.
- * @module tests/mcp-server/tools/definitions/search-tri-releases.tool.test
+ * @fileoverview Tests for triSearchReleasesTool.
+ * @module tests/mcp-server/tools/definitions/tri-search-releases.tool.test
  */
 
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
@@ -10,8 +10,8 @@ import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   bareCountyName,
-  searchTriReleasesTool,
-} from '@/mcp-server/tools/definitions/search-tri-releases.tool.js';
+  triSearchReleasesTool,
+} from '@/mcp-server/tools/definitions/tri-search-releases.tool.js';
 import { DmapService } from '@/services/dmap/dmap-service.js';
 
 const mockSearchTriReleases = vi.fn();
@@ -38,24 +38,24 @@ const waRelease = {
   totalReleasesInLbs: 580,
 };
 
-describe('searchTriReleasesTool', () => {
+describe('triSearchReleasesTool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it('returns releases for valid state', async () => {
     mockSearchTriReleases.mockResolvedValue([waRelease]);
-    const ctx = createMockContext({ errors: searchTriReleasesTool.errors });
-    const input = searchTriReleasesTool.input.parse({ state: 'WA' });
-    const result = await searchTriReleasesTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: triSearchReleasesTool.errors });
+    const input = triSearchReleasesTool.input.parse({ state: 'WA' });
+    const result = await triSearchReleasesTool.handler(input, ctx);
     expect(result).toEqual({ releases: [waRelease], state: 'WA' });
   });
 
   it('uppercases state before calling service', async () => {
     mockSearchTriReleases.mockResolvedValue([waRelease]);
-    const ctx = createMockContext({ errors: searchTriReleasesTool.errors });
-    const input = searchTriReleasesTool.input.parse({ state: 'wa' });
-    await searchTriReleasesTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: triSearchReleasesTool.errors });
+    const input = triSearchReleasesTool.input.parse({ state: 'wa' });
+    await triSearchReleasesTool.handler(input, ctx);
     expect(mockSearchTriReleases).toHaveBeenCalledWith(
       { state: 'WA', limit: 50, includeReleaseBreakdown: false },
       expect.anything(),
@@ -64,13 +64,13 @@ describe('searchTriReleasesTool', () => {
 
   it('passes county and year filters to service', async () => {
     mockSearchTriReleases.mockResolvedValue([waRelease]);
-    const ctx = createMockContext({ errors: searchTriReleasesTool.errors });
-    const input = searchTriReleasesTool.input.parse({
+    const ctx = createMockContext({ errors: triSearchReleasesTool.errors });
+    const input = triSearchReleasesTool.input.parse({
       state: 'WA',
       county: 'KING',
       year: 2022,
     });
-    await searchTriReleasesTool.handler(input, ctx);
+    await triSearchReleasesTool.handler(input, ctx);
     expect(mockSearchTriReleases).toHaveBeenCalledWith(
       { state: 'WA', county: 'KING', year: 2022, limit: 50, includeReleaseBreakdown: false },
       expect.anything(),
@@ -87,9 +87,9 @@ describe('searchTriReleasesTool', () => {
     ['Grays Harbor', 'GRAYS HARBOR'],
   ])('normalizes county %j to the bare uppercase name %j', async (county, expected) => {
     mockSearchTriReleases.mockResolvedValue([waRelease]);
-    const ctx = createMockContext({ errors: searchTriReleasesTool.errors });
-    const input = searchTriReleasesTool.input.parse({ state: 'WA', county });
-    await searchTriReleasesTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: triSearchReleasesTool.errors });
+    const input = triSearchReleasesTool.input.parse({ state: 'WA', county });
+    await triSearchReleasesTool.handler(input, ctx);
     expect(mockSearchTriReleases).toHaveBeenCalledWith(
       expect.objectContaining({ county: expected }),
       expect.anything(),
@@ -98,21 +98,21 @@ describe('searchTriReleasesTool', () => {
 
   it('omits the county filter when county is blank', async () => {
     mockSearchTriReleases.mockResolvedValue([waRelease]);
-    const ctx = createMockContext({ errors: searchTriReleasesTool.errors });
-    const input = searchTriReleasesTool.input.parse({ state: 'WA', county: '   ' });
-    await searchTriReleasesTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: triSearchReleasesTool.errors });
+    const input = triSearchReleasesTool.input.parse({ state: 'WA', county: '   ' });
+    await triSearchReleasesTool.handler(input, ctx);
     expect(mockSearchTriReleases.mock.calls[0]![0]).not.toHaveProperty('county');
   });
 
   it('names the normalized county in the no-results message', async () => {
     mockSearchTriReleases.mockResolvedValue([]);
-    const ctx = createMockContext({ errors: searchTriReleasesTool.errors });
-    const input = searchTriReleasesTool.input.parse({
+    const ctx = createMockContext({ errors: triSearchReleasesTool.errors });
+    const input = triSearchReleasesTool.input.parse({
       state: 'WA',
       county: 'Nowhere County',
       year: 2023,
     });
-    const result = await searchTriReleasesTool.handler(input, ctx);
+    const result = await triSearchReleasesTool.handler(input, ctx);
     expect(result.releases).toEqual([]);
     expect(result.message).toContain('No TRI releases found in WA in NOWHERE county for year 2023');
     expect(result.message).not.toMatch(/county county/i);
@@ -120,9 +120,9 @@ describe('searchTriReleasesTool', () => {
 
   it('passes chemical_name filter trimmed', async () => {
     mockSearchTriReleases.mockResolvedValue([waRelease]);
-    const ctx = createMockContext({ errors: searchTriReleasesTool.errors });
-    const input = searchTriReleasesTool.input.parse({ state: 'WA', chemical_name: '  BENZENE  ' });
-    await searchTriReleasesTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: triSearchReleasesTool.errors });
+    const input = triSearchReleasesTool.input.parse({ state: 'WA', chemical_name: '  BENZENE  ' });
+    await triSearchReleasesTool.handler(input, ctx);
     expect(mockSearchTriReleases).toHaveBeenCalledWith(
       expect.objectContaining({ chemicalName: 'BENZENE' }),
       expect.anything(),
@@ -131,16 +131,16 @@ describe('searchTriReleasesTool', () => {
 
   it('returns message when no releases found', async () => {
     mockSearchTriReleases.mockResolvedValue([]);
-    const ctx = createMockContext({ errors: searchTriReleasesTool.errors });
-    const input = searchTriReleasesTool.input.parse({ state: 'WY', year: 2010 });
-    const result = await searchTriReleasesTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: triSearchReleasesTool.errors });
+    const input = triSearchReleasesTool.input.parse({ state: 'WY', year: 2010 });
+    const result = await triSearchReleasesTool.handler(input, ctx);
     expect(result.releases).toEqual([]);
     expect(result.message).toMatch(/^No TRI releases found in WY for year 2010\. TRI data lags/);
   });
 
   it('formats output with chemical name, facility ID, and release amounts', () => {
     const output = { releases: [waRelease], state: 'WA' };
-    const blocks = searchTriReleasesTool.format!(output);
+    const blocks = triSearchReleasesTool.format!(output);
     expect(blocks).toEqual([
       {
         type: 'text',
@@ -157,7 +157,7 @@ describe('searchTriReleasesTool', () => {
 
   it('formats empty result with message', () => {
     const output = { releases: [], state: 'WY', message: 'No TRI releases found in WY.' };
-    const blocks = searchTriReleasesTool.format!(output);
+    const blocks = triSearchReleasesTool.format!(output);
     const text = (blocks[0] as { type: string; text: string }).text;
     expect(text).toBe(
       ['## TRI Releases — WY', '**Records:** 0', '', '> No TRI releases found in WY.'].join('\n'),
@@ -169,7 +169,7 @@ describe('searchTriReleasesTool', () => {
       releases: [{ facilityId: 'TX9999', chemicalName: 'TOLUENE', reportingYear: 2021 }],
       state: 'TX',
     };
-    const blocks = searchTriReleasesTool.format!(sparse);
+    const blocks = triSearchReleasesTool.format!(sparse);
     const text = (blocks[0] as { type: string; text: string }).text;
     // No facility name: the heading carries the bare ID, and no county or quantity line follows.
     expect(text).toBe(
@@ -198,32 +198,32 @@ describe('searchTriReleasesTool', () => {
     };
 
     it('describes the one-time quantity and the per-medium fields', () => {
-      const item = searchTriReleasesTool.output.shape.releases.element.shape;
+      const item = triSearchReleasesTool.output.shape.releases.element.shape;
       expect(item.totalReleasesInLbs.description).toContain('one-time / non-routine');
       expect(item.totalReleasesInLbs.description).toContain('NOT the sum');
       expect(item.releasesToAirInLbs.description).toContain('air');
       expect(item.releasesToUndergroundInjectionInLbs.description).toContain('injection');
-      expect(searchTriReleasesTool.description).toContain(
+      expect(triSearchReleasesTool.description).toContain(
         'air, water, land, and underground-injection',
       );
-      expect(searchTriReleasesTool.description).not.toMatch(/and release quantity/);
+      expect(triSearchReleasesTool.description).not.toMatch(/and release quantity/);
     });
 
     it('states that omitting year returns the newest reporting years first', () => {
-      expect(searchTriReleasesTool.input.shape.year.description).toContain(
+      expect(triSearchReleasesTool.input.shape.year.description).toContain(
         'newest reporting year first',
       );
-      expect(searchTriReleasesTool.description).toContain('without year');
-      expect(searchTriReleasesTool.description).toContain('newest first');
-      expect(searchTriReleasesTool.description).not.toContain('for a given reporting year');
+      expect(triSearchReleasesTool.description).toContain('without year');
+      expect(triSearchReleasesTool.description).toContain('newest first');
+      expect(triSearchReleasesTool.description).not.toContain('for a given reporting year');
     });
 
     it('makes the breakdown opt-in and states its cost', () => {
-      const flag = searchTriReleasesTool.input.shape.include_release_breakdown;
+      const flag = triSearchReleasesTool.input.shape.include_release_breakdown;
       expect(flag.parse(undefined)).toBe(false);
       expect(flag.description).toContain('20 seconds');
-      expect(searchTriReleasesTool.description).toContain('include_release_breakdown');
-      const item = searchTriReleasesTool.output.shape.releases.element.shape;
+      expect(triSearchReleasesTool.description).toContain('include_release_breakdown');
+      const item = triSearchReleasesTool.output.shape.releases.element.shape;
       expect(item.releasesToAirInLbs.description).toContain('include_release_breakdown');
     });
 
@@ -233,9 +233,9 @@ describe('searchTriReleasesTool', () => {
       [{ include_release_breakdown: true }, true],
     ])('passes %j to the service as includeReleaseBreakdown=%s', async (flag, expected) => {
       mockSearchTriReleases.mockResolvedValue([waRelease]);
-      const ctx = createMockContext({ errors: searchTriReleasesTool.errors });
-      const input = searchTriReleasesTool.input.parse({ state: 'WA', ...flag });
-      await searchTriReleasesTool.handler(input, ctx);
+      const ctx = createMockContext({ errors: triSearchReleasesTool.errors });
+      const input = triSearchReleasesTool.input.parse({ state: 'WA', ...flag });
+      await triSearchReleasesTool.handler(input, ctx);
       expect(mockSearchTriReleases.mock.calls[0]![0]).toMatchObject({
         includeReleaseBreakdown: expected,
       });
@@ -243,7 +243,7 @@ describe('searchTriReleasesTool', () => {
 
     it('carries the media on both structuredContent and content', async () => {
       mockSearchTriReleases.mockResolvedValue([fullBreakdown, airOnly]);
-      const call = await runToolContract(searchTriReleasesTool, {
+      const call = await runToolContract(triSearchReleasesTool, {
         state: 'WA',
         year: 2022,
         limit: 2,
@@ -269,7 +269,7 @@ describe('searchTriReleasesTool', () => {
 
     it('formats a record with no breakdown without any medium line', () => {
       const text = (
-        searchTriReleasesTool.format!({
+        triSearchReleasesTool.format!({
           releases: [{ facilityId: 'OR0001', chemicalName: 'Zinc', reportingYear: 2022 }],
           state: 'OR',
         })[0] as { text: string }
@@ -280,7 +280,7 @@ describe('searchTriReleasesTool', () => {
 
     it('renders sub-0.001 quantities and medium sums at full precision', () => {
       const text = (
-        searchTriReleasesTool.format!({
+        triSearchReleasesTool.format!({
           releases: [
             {
               facilityId: '96020CLLNS500MA',
@@ -314,7 +314,7 @@ describe('searchTriReleasesTool', () => {
         totalReleasesInLbs: 0.0044092452437,
       };
       mockSearchTriReleases.mockResolvedValue([dioxin, waRelease]);
-      const call = await runToolContract(searchTriReleasesTool, { state: 'CA', year: 2022 });
+      const call = await runToolContract(triSearchReleasesTool, { state: 'CA', year: 2022 });
       expect(call.isError).toBeFalsy();
       const structured = call.structuredContent as { releases: Array<Record<string, unknown>> };
       expect(structured.releases).toEqual([dioxin, waRelease]);
@@ -324,14 +324,14 @@ describe('searchTriReleasesTool', () => {
       );
       expect(text).toContain('**One-Time / Non-Routine Release:** 0.0044092452437 lbs');
       expect(text.match(/Reported Unit/g)).toHaveLength(1);
-      const item = searchTriReleasesTool.output.shape.releases.element.shape;
+      const item = triSearchReleasesTool.output.shape.releases.element.shape;
       expect(item.reportedUnit.description).toMatch(/dioxin/i);
-      expect(searchTriReleasesTool.description).toMatch(/grams/);
+      expect(triSearchReleasesTool.description).toMatch(/grams/);
     });
 
     it('formats a gram-reported record with no quantities without promising any', () => {
       const text = (
-        searchTriReleasesTool.format!({
+        triSearchReleasesTool.format!({
           releases: [
             {
               facilityId: '98421STMPS',
@@ -354,7 +354,7 @@ describe('searchTriReleasesTool', () => {
 
     it('formats a sparse record with only the media it has', () => {
       const text = (
-        searchTriReleasesTool.format!({ releases: [airOnly], state: 'WA' })[0] as { text: string }
+        triSearchReleasesTool.format!({ releases: [airOnly], state: 'WA' })[0] as { text: string }
       ).text;
       expect(text).toContain('**Air Releases:** 4 lbs');
       expect(text).not.toMatch(/Water Releases|Land Releases|Underground Injection/);
@@ -364,7 +364,7 @@ describe('searchTriReleasesTool', () => {
   describe('result envelope below the limit', () => {
     it('returns records without truncation fields when fewer than limit come back', async () => {
       mockSearchTriReleases.mockResolvedValue([waRelease]);
-      const call = await runToolContract(searchTriReleasesTool, { state: 'WA', limit: 5 });
+      const call = await runToolContract(triSearchReleasesTool, { state: 'WA', limit: 5 });
       expect(call.isError).toBeFalsy();
       expect(mockSearchTriReleases.mock.calls[0]![0]).toMatchObject({
         includeReleaseBreakdown: false,
@@ -380,7 +380,7 @@ describe('searchTriReleasesTool', () => {
 
     it('returns the no-results message, not an error, for a county with no facilities', async () => {
       mockSearchTriReleases.mockResolvedValue([]);
-      const call = await runToolContract(searchTriReleasesTool, {
+      const call = await runToolContract(triSearchReleasesTool, {
         state: 'WA',
         county: 'Nowhere County',
         year: 2022,
@@ -401,7 +401,7 @@ describe('searchTriReleasesTool', () => {
 
     it("accepts text up to DMAP's 4,094-byte request line and rejects longer text", () => {
       const parse = (args: Record<string, unknown>) =>
-        searchTriReleasesTool.input.safeParse({ state: 'TX', ...args }).success;
+        triSearchReleasesTool.input.safeParse({ state: 'TX', ...args }).success;
       expect(longestChemical).toHaveLength(542);
       expect(parse({ chemical_name: longestChemical })).toBe(true);
       expect(parse({ chemical_name: 'x'.repeat(4094) })).toBe(true);
@@ -431,10 +431,10 @@ describe('searchTriReleasesTool', () => {
     });
 
     it('says punctuation in the text filters is matched as written', () => {
-      expect(searchTriReleasesTool.input.shape.chemical_name.description).toContain(
+      expect(triSearchReleasesTool.input.shape.chemical_name.description).toContain(
         'matched as written',
       );
-      expect(searchTriReleasesTool.input.shape.county.description).toContain('matched as written');
+      expect(triSearchReleasesTool.input.shape.county.description).toContain('matched as written');
     });
   });
 
@@ -485,7 +485,7 @@ describe('searchTriReleasesTool', () => {
     it('answers a state search with one request and carries the cap on both surfaces', async () => {
       const urls = stubJoin(joinedRows);
 
-      const call = await runToolContract(searchTriReleasesTool, {
+      const call = await runToolContract(triSearchReleasesTool, {
         state: 'tx',
         year: 2022,
         limit: 2,
@@ -525,7 +525,7 @@ describe('searchTriReleasesTool', () => {
     it('returns every record below the limit without truncation fields', async () => {
       stubJoin(joinedRows);
 
-      const call = await runToolContract(searchTriReleasesTool, { state: 'TX', year: 2022 });
+      const call = await runToolContract(triSearchReleasesTool, { state: 'TX', year: 2022 });
 
       expect(call.isError).toBeFalsy();
       const structured = call.structuredContent as Record<string, unknown>;
@@ -538,7 +538,7 @@ describe('searchTriReleasesTool', () => {
     it('returns the no-results message on both surfaces when the join matches nothing', async () => {
       const urls = stubJoin([]);
 
-      const call = await runToolContract(searchTriReleasesTool, {
+      const call = await runToolContract(triSearchReleasesTool, {
         state: 'TX',
         year: 1990,
         chemical_name: 'Benzene',
@@ -566,7 +566,7 @@ describe('searchTriReleasesTool', () => {
       );
 
       const call = await runToolContract(
-        searchTriReleasesTool,
+        triSearchReleasesTool,
         { state: 'TX', year: 2022, limit: 200 },
         { context: { signal: controller.signal } },
       );

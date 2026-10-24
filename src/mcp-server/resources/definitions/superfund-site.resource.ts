@@ -13,7 +13,9 @@ export const superfundSiteResource = resource('epa://superfund/{site_id}', {
     'Superfund site record from EPA SEMS by site ID. Returns NPL status, cleanup status, location, and coordinates.',
   mimeType: 'application/json',
   params: z.object({
-    site_id: z.string().describe('EPA SEMS Superfund site ID (obtained from epa_search_superfund)'),
+    site_id: z
+      .string()
+      .describe('EPA SEMS Superfund site ID (obtained from epa_superfund_search_sites)'),
   }),
 
   async handler(params, ctx) {
@@ -25,7 +27,7 @@ export const superfundSiteResource = resource('epa://superfund/{site_id}', {
 
     if (!site) {
       throw notFound(
-        `No Superfund site found with site ID "${params.site_id}". Use epa_search_superfund to discover valid site IDs.`,
+        `No Superfund site found with site ID "${params.site_id}". Use epa_superfund_search_sites to discover valid site IDs.`,
         { siteId: params.site_id },
       );
     }

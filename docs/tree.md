@@ -1,6 +1,6 @@
 # epa-mcp-server - Directory Structure
 
-Generated on: 2026-10-18 22:45:10
+Generated on: 2026-10-24 11:20:35
 
 ```text
 epa-mcp-server/
@@ -151,16 +151,16 @@ epa-mcp-server/
 │   │   │       └── superfund-site.resource.ts
 │   │   └── tools/
 │   │       ├── definitions/
-│   │       │   ├── get-air-quality.tool.ts
-│   │       │   ├── get-ejscreen.tool.ts
-│   │       │   ├── get-facility.tool.ts
-│   │       │   ├── get-tri-releases.tool.ts
+│   │       │   ├── airnow-get-conditions.tool.ts
+│   │       │   ├── echo-get-facility.tool.ts
+│   │       │   ├── echo-search-facilities.tool.ts
+│   │       │   ├── echo-search-violations.tool.ts
+│   │       │   ├── ejscreen-get-scores.tool.ts
 │   │       │   ├── index.ts
-│   │       │   ├── search-facilities.tool.ts
-│   │       │   ├── search-superfund.tool.ts
-│   │       │   ├── search-tri-releases.tool.ts
-│   │       │   ├── search-violations.tool.ts
-│   │       │   └── search-water-systems.tool.ts
+│   │       │   ├── superfund-search-sites.tool.ts
+│   │       │   ├── tri-get-facility-releases.tool.ts
+│   │       │   ├── tri-search-releases.tool.ts
+│   │       │   └── water-search-systems.tool.ts
 │   │       ├── format-lbs.ts
 │   │       ├── format-location.ts
 │   │       └── format-tri-release.ts
@@ -189,16 +189,16 @@ epa-mcp-server/
 │   │   │       └── superfund-site.resource.test.ts
 │   │   └── tools/
 │   │       └── definitions/
-│   │           ├── get-air-quality.tool.test.ts
-│   │           ├── get-ejscreen.tool.test.ts
-│   │           ├── get-facility.tool.test.ts
-│   │           ├── get-tri-releases.tool.test.ts
-│   │           ├── search-facilities.tool.test.ts
-│   │           ├── search-superfund.tool.test.ts
-│   │           ├── search-tri-releases.tool.test.ts
-│   │           ├── search-violations.tool.test.ts
-│   │           ├── search-water-systems.tool.test.ts
-│   │           └── tool-definitions.test.ts
+│   │           ├── airnow-get-conditions.tool.test.ts
+│   │           ├── echo-get-facility.tool.test.ts
+│   │           ├── echo-search-facilities.tool.test.ts
+│   │           ├── echo-search-violations.tool.test.ts
+│   │           ├── ejscreen-get-scores.tool.test.ts
+│   │           ├── superfund-search-sites.tool.test.ts
+│   │           ├── tool-definitions.test.ts
+│   │           ├── tri-get-facility-releases.tool.test.ts
+│   │           ├── tri-search-releases.tool.test.ts
+│   │           └── water-search-systems.tool.test.ts
 │   ├── prompts/
 │   ├── resources/
 │   ├── services/
@@ -206,6 +206,9 @@ epa-mcp-server/
 │   │   │   ├── airnow-fixtures.ts
 │   │   │   └── airnow-service.test.ts
 │   │   ├── dmap/
+│   │   │   ├── fixtures/
+│   │   │   │   ├── newark-superfund-coordinates.json
+│   │   │   │   └── seattle-superfund-coordinates.json
 │   │   │   └── dmap-service.test.ts
 │   │   ├── echo/
 │   │   │   ├── echo-fixtures.ts

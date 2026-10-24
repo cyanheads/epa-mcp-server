@@ -1,16 +1,16 @@
 /**
  * @fileoverview Tool for searching drinking water systems (SDWIS) by state or ZIP code.
- * @module mcp-server/tools/definitions/search-water-systems.tool
+ * @module mcp-server/tools/definitions/water-search-systems.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getDmapService } from '@/services/dmap/dmap-service.js';
 
-export const searchWaterSystemsTool = tool('epa_search_water_systems', {
+export const waterSearchSystemsTool = tool('epa_water_search_systems', {
   title: 'Search Drinking Water Systems',
   description:
-    'Search drinking water systems (SDWIS) by state or ZIP code. Returns system name, PWSID, population served, primary water source, and activity status. With has_violation, returns only systems with an open violation — one SDWIS has not marked returned to compliance or closed out when the system was deactivated. At least one of state or zip_code is required.',
+    'Drinking water (SDWIS): Search drinking water systems (SDWIS) by state or ZIP code. Returns system name, PWSID, population served, primary water source, and activity status. With has_violation, returns only systems with an open violation — one SDWIS has not marked returned to compliance or closed out when the system was deactivated. At least one of state or zip_code is required.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -125,7 +125,7 @@ export const searchWaterSystemsTool = tool('epa_search_water_systems', {
       throw ctx.fail('no_geographic_filter', 'At least one of state or zip_code is required.');
     }
 
-    ctx.log.info('epa_search_water_systems', {
+    ctx.log.info('epa_water_search_systems', {
       state: input.state,
       zip: input.zip_code,
       hasViolation: input.has_violation,
@@ -145,7 +145,7 @@ export const searchWaterSystemsTool = tool('epa_search_water_systems', {
       ctx,
     );
 
-    ctx.log.info('epa_search_water_systems completed', { count: systems.length });
+    ctx.log.info('epa_water_search_systems completed', { count: systems.length });
 
     if (systems.length === 0) {
       const parts: string[] = [];

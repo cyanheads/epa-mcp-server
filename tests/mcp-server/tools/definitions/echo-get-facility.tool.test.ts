@@ -1,12 +1,12 @@
 /**
- * @fileoverview Tests for getFacilityTool.
- * @module tests/mcp-server/tools/definitions/get-facility.tool.test
+ * @fileoverview Tests for echoGetFacilityTool.
+ * @module tests/mcp-server/tools/definitions/echo-get-facility.tool.test
  */
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { getFacilityTool } from '@/mcp-server/tools/definitions/get-facility.tool.js';
+import { echoGetFacilityTool } from '@/mcp-server/tools/definitions/echo-get-facility.tool.js';
 
 const mockGetFacility = vi.fn();
 
@@ -126,25 +126,25 @@ const fullProfile = {
   waterCompliance: { status: 'Violation Identified', permitId: 'WA0031305' },
 };
 
-describe('getFacilityTool', () => {
+describe('echoGetFacilityTool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it('returns facility profile for valid registry ID', async () => {
     mockGetFacility.mockResolvedValue(fullProfile);
-    const ctx = createMockContext({ errors: getFacilityTool.errors });
-    const input = getFacilityTool.input.parse({ registry_id: '110000350509' });
-    const result = await getFacilityTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: echoGetFacilityTool.errors });
+    const input = echoGetFacilityTool.input.parse({ registry_id: '110000350509' });
+    const result = await echoGetFacilityTool.handler(input, ctx);
     expect(mockGetFacility).toHaveBeenCalledWith('110000350509', ctx);
     expect(result).toEqual(fullProfile);
   });
 
   it('trims whitespace from registry_id before calling service', async () => {
     mockGetFacility.mockResolvedValue(fullProfile);
-    const ctx = createMockContext({ errors: getFacilityTool.errors });
-    const input = getFacilityTool.input.parse({ registry_id: '  110000350509  ' });
-    await getFacilityTool.handler(input, ctx);
+    const ctx = createMockContext({ errors: echoGetFacilityTool.errors });
+    const input = echoGetFacilityTool.input.parse({ registry_id: '  110000350509  ' });
+    await echoGetFacilityTool.handler(input, ctx);
     expect(mockGetFacility).toHaveBeenCalledWith('110000350509', expect.anything());
   });
 
@@ -157,7 +157,7 @@ describe('getFacilityTool', () => {
       return Promise.resolve(withoutStatus);
     });
 
-    const result = await runToolContract(getFacilityTool, { registry_id: '110015969941' });
+    const result = await runToolContract(echoGetFacilityTool, { registry_id: '110015969941' });
 
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toEqual({ ...withoutStatus, notice });
@@ -166,12 +166,12 @@ describe('getFacilityTool', () => {
 
   it('carries every profile field to structuredContent', async () => {
     mockGetFacility.mockResolvedValue(fullProfile);
-    const result = await runToolContract(getFacilityTool, { registry_id: '110015969941' });
+    const result = await runToolContract(echoGetFacilityTool, { registry_id: '110015969941' });
     expect(result.structuredContent).toEqual(fullProfile);
   });
 
   it('formats full profile including all sections', () => {
-    const blocks = getFacilityTool.format!(fullProfile);
+    const blocks = echoGetFacilityTool.format!(fullProfile);
     expect(blocks).toHaveLength(1);
     expect((blocks[0] as { type: string; text: string }).text.split('\n')).toEqual([
       '## NUCOR STEEL SEATTLE INC',
@@ -181,7 +181,7 @@ describe('getFacilityTool', () => {
       '**Coordinates:** 47.569331, -122.367332',
       '**Compliance Status:** Violation Identified',
       '**Programs:** AIR, WATER, RCRA, TRI',
-      '**TRI Facility IDs:** 98106SLMNB2424S, 98106HCKTT2424S, 98106STTLS2414S (most recent first; for epa_get_tri_releases)',
+      '**TRI Facility IDs:** 98106SLMNB2424S, 98106HCKTT2424S, 98106STTLS2414S (most recent first; for epa_tri_get_facility_releases)',
       '**TRI Releases+Transfers (2024):** 5,830,668 lbs',
       '',
       '### Compliance Summary',
@@ -213,7 +213,10 @@ describe('getFacilityTool', () => {
 
   it('renders zero quarters in violation as a reading, not an absence', () => {
     const text = (
-      getFacilityTool.format!({ ...fullProfile, compliance: { quartersInViolation: 0 } })[0] as {
+      echoGetFacilityTool.format!({
+        ...fullProfile,
+        compliance: { quartersInViolation: 0 },
+      })[0] as {
         text: string;
       }
     ).text;
@@ -222,7 +225,7 @@ describe('getFacilityTool', () => {
 
   it('renders a sub-0.001 TRI releases+transfers total at full precision', () => {
     const text = (
-      getFacilityTool.format!({ ...fullProfile, triReleasesTransfersInLbs: 0.00062 })[0] as {
+      echoGetFacilityTool.format!({ ...fullProfile, triReleasesTransfersInLbs: 0.00062 })[0] as {
         text: string;
       }
     ).text;
@@ -233,7 +236,7 @@ describe('getFacilityTool', () => {
     type Extra = { latitude?: number; longitude?: number; county?: string; fipsCode?: string };
     const render = (extra: Extra) =>
       (
-        getFacilityTool.format!({
+        echoGetFacilityTool.format!({
           registryId: 'COORD001',
           name: 'COORD FACILITY',
           programs: { air: false, water: false, rcra: false, tri: false, sdwa: false },
@@ -291,7 +294,7 @@ describe('getFacilityTool', () => {
       inspectionsTotal: 0,
       formalActions: [],
     };
-    const blocks = getFacilityTool.format!(sparse);
+    const blocks = echoGetFacilityTool.format!(sparse);
     const text = (blocks[0] as { type: string; text: string }).text;
     // Header lines only: no empty sections, no Programs line when every flag is false.
     expect(text).toBe('## SPARSE FACILITY\n**Registry ID:** ABC123');
@@ -299,7 +302,7 @@ describe('getFacilityTool', () => {
 
   it('formats a get_dfr-shaped profile: TRI year, sourced inspections, and joined actions', () => {
     const text = (
-      getFacilityTool.format!({
+      echoGetFacilityTool.format!({
         registryId: '110005318012',
         name: 'RCRA FACILITY',
         complianceStatus: 'Significant Violation',
@@ -337,7 +340,7 @@ describe('getFacilityTool', () => {
 
     expect(lines).toContain('**TRI Releases+Transfers (2024):** 75,223 lbs');
     expect(lines).toContain(
-      '**TRI Facility IDs:** 9867WSNRWD1981S (most recent first; for epa_get_tri_releases)',
+      '**TRI Facility IDs:** 9867WSNRWD1981S (most recent first; for epa_tri_get_facility_releases)',
     );
     expect(lines).toContain('- **RCRA:** Significant Noncomplier | Formal actions: 2');
     expect(lines).toContain(
@@ -351,7 +354,7 @@ describe('getFacilityTool', () => {
 
   it('names the shown and total counts when the inspection list is capped', () => {
     const text = (
-      getFacilityTool.format!({
+      echoGetFacilityTool.format!({
         registryId: '110041990913',
         name: 'REFINERY',
         programs: { air: true, water: false, rcra: false, tri: false, sdwa: false },

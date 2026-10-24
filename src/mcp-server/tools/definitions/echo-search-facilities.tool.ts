@@ -1,6 +1,6 @@
 /**
  * @fileoverview Tool for searching EPA-regulated facilities by location, industry, or compliance status.
- * @module mcp-server/tools/definitions/search-facilities.tool
+ * @module mcp-server/tools/definitions/echo-search-facilities.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
@@ -9,10 +9,10 @@ import { formatLbs } from '@/mcp-server/tools/format-lbs.js';
 import { formatLocationLines } from '@/mcp-server/tools/format-location.js';
 import { getEchoService } from '@/services/echo/echo-service.js';
 
-export const searchFacilitiesTool = tool('epa_search_facilities', {
+export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
   title: 'Search EPA Facilities',
   description:
-    'Search EPA-regulated facilities by location, environmental program, or compliance status across CAA, CWA, RCRA, TRI, and SDWA. Returns facility name, EPA Registry ID, coordinates, county FIPS code, per-program registration flags, five-year inspection and penalty totals, and TRI release totals. Registry IDs returned here feed epa_get_facility. Supports proximity search via latitude + longitude + radius_miles. At least one geographic filter (zip_code, state, city, or a complete latitude+longitude+radius_miles triple) is required — unscoped searches time out.',
+    'ECHO: Search EPA-regulated facilities by location, environmental program, or compliance status across CAA, CWA, RCRA, TRI, and SDWA. Returns facility name, EPA Registry ID, coordinates, county FIPS code, per-program registration flags, five-year inspection and penalty totals, and TRI release totals. Registry IDs returned here feed epa_echo_get_facility. Supports proximity search via latitude + longitude + radius_miles. At least one geographic filter (zip_code, state, city, or a complete latitude+longitude+radius_miles triple) is required — unscoped searches time out.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -81,7 +81,7 @@ export const searchFacilitiesTool = tool('epa_search_facilities', {
           .object({
             registryId: z
               .string()
-              .describe('EPA FRS Registry ID — use as input to epa_get_facility'),
+              .describe('EPA FRS Registry ID — use as input to epa_echo_get_facility'),
             name: z.string().describe('Facility name'),
             street: z.string().optional().describe('Street address'),
             city: z.string().optional().describe('City'),
@@ -123,7 +123,7 @@ export const searchFacilitiesTool = tool('epa_search_facilities', {
               .number()
               .optional()
               .describe(
-                "Total TRI on/off-site releases and transfers in pounds for ECHO's latest TRI year (summary). For the per-chemical breakdown, call epa_get_tri_releases with the TRI facility ID that epa_search_tri_releases returns as facilityId — the Registry ID is not a TRI facility ID.",
+                "Total TRI on/off-site releases and transfers in pounds for ECHO's latest TRI year (summary). For the per-chemical breakdown, call epa_tri_get_facility_releases with the TRI facility ID that epa_tri_search_releases returns as facilityId — the Registry ID is not a TRI facility ID.",
               ),
             inspectionCount: z
               .number()
@@ -194,7 +194,7 @@ export const searchFacilitiesTool = tool('epa_search_facilities', {
       );
     }
 
-    ctx.log.info('epa_search_facilities', {
+    ctx.log.info('epa_echo_search_facilities', {
       zip: input.zip_code,
       state: input.state,
       city: input.city,
@@ -217,7 +217,7 @@ export const searchFacilitiesTool = tool('epa_search_facilities', {
       ctx,
     );
 
-    ctx.log.info('epa_search_facilities completed', { count: facilities.length, totalCount });
+    ctx.log.info('epa_echo_search_facilities completed', { count: facilities.length, totalCount });
 
     if (facilities.length === 0) {
       const parts: string[] = [];
