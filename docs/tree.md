@@ -1,6 +1,6 @@
 # epa-mcp-server - Directory Structure
 
-Generated on: 2026-10-24 11:20:35
+Generated on: 2026-10-24 11:38:02
 
 ```text
 epa-mcp-server/
@@ -29,6 +29,7 @@ epa-mcp-server/
 │   ├── 0.3.x/
 │   ├── 0.4.x/
 │   ├── 0.5.x/
+│   ├── 0.6.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
