@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.8.0](changelog/0.8.x/0.8.0.md) — 2026-11-01 · ⚠️ Breaking
+
+New epa_echo_get_case tool, offset paging on every list, shared state/ZIP/date checks, deterministic result order, and corrected TRI, drinking-water, and EJScreen data.
+
 ## [0.7.0](changelog/0.7.x/0.7.0.md) — 2026-10-31 · ⚠️ Breaking
 
 Superfund site detail with contaminant associations and complete proximity searches.

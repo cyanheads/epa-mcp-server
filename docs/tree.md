@@ -1,6 +1,6 @@
 # epa-mcp-server - Directory Structure
 
-Generated on: 2026-11-01 05:31:53
+Generated on: 2026-11-01 10:43:42
 
 ```text
 epa-mcp-server/
@@ -31,6 +31,7 @@ epa-mcp-server/
 │   ├── 0.5.x/
 │   ├── 0.6.x/
 │   ├── 0.7.x/
+│   ├── 0.8.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -159,6 +160,7 @@ epa-mcp-server/
 │   │   ├── tools/
 │   │   │   ├── definitions/
 │   │   │   │   ├── airnow-get-conditions.tool.ts
+│   │   │   │   ├── echo-get-case.tool.ts
 │   │   │   │   ├── echo-get-facility.tool.ts
 │   │   │   │   ├── echo-search-facilities.tool.ts
 │   │   │   │   ├── echo-search-violations.tool.ts
@@ -169,12 +171,16 @@ epa-mcp-server/
 │   │   │   │   ├── tri-get-facility-releases.tool.ts
 │   │   │   │   ├── tri-search-releases.tool.ts
 │   │   │   │   └── water-search-systems.tool.ts
+│   │   │   ├── effective-query.ts
+│   │   │   ├── format-dollars.ts
 │   │   │   ├── format-heading.ts
 │   │   │   ├── format-lbs.ts
 │   │   │   ├── format-location.ts
 │   │   │   ├── format-notice.ts
 │   │   │   ├── format-superfund-site.ts
-│   │   │   └── format-tri-release.ts
+│   │   │   ├── format-tri-release.ts
+│   │   │   ├── input-formats.ts
+│   │   │   └── paging.ts
 │   │   ├── superfund-contaminants-schema.ts
 │   │   └── superfund-site-schema.ts
 │   ├── services/
@@ -190,7 +196,9 @@ epa-mcp-server/
 │   │   ├── ejscreen/
 │   │   │   ├── ejscreen-service.ts
 │   │   │   └── types.ts
-│   │   └── call-budget.ts
+│   │   ├── call-budget.ts
+│   │   ├── county-name.ts
+│   │   └── page.ts
 │   └── index.ts
 ├── tests/
 │   ├── config/
@@ -203,6 +211,7 @@ epa-mcp-server/
 │   │   └── tools/
 │   │       ├── definitions/
 │   │       │   ├── airnow-get-conditions.tool.test.ts
+│   │       │   ├── echo-get-case.tool.test.ts
 │   │       │   ├── echo-get-facility.tool.test.ts
 │   │       │   ├── echo-search-facilities.tool.test.ts
 │   │       │   ├── echo-search-violations.tool.test.ts
@@ -212,7 +221,10 @@ epa-mcp-server/
 │   │       │   ├── tri-get-facility-releases.tool.test.ts
 │   │       │   ├── tri-search-releases.tool.test.ts
 │   │       │   └── water-search-systems.tool.test.ts
-│   │       └── markdown-output.test.ts
+│   │       ├── effective-query.test.ts
+│   │       ├── input-formats.test.ts
+│   │       ├── markdown-output.test.ts
+│   │       └── paging.test.ts
 │   ├── prompts/
 │   ├── resources/
 │   ├── scripts/
@@ -232,9 +244,12 @@ epa-mcp-server/
 │   │   │   ├── echo-fixtures.ts
 │   │   │   └── echo-service.test.ts
 │   │   ├── ejscreen/
+│   │   │   ├── ejam-fixtures.ts
 │   │   │   └── ejscreen-service.test.ts
+│   │   ├── county-name.test.ts
 │   │   └── error-responses.test.ts
 │   ├── tools/
+│   ├── helpers.ts
 │   ├── http-session.test.ts
 │   ├── maintenance-contracts.test.ts
 │   └── startup-env.test.ts
