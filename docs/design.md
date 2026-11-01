@@ -228,7 +228,7 @@ A 200 body that is not JSON fails once as a SerializationError and is not retrie
 | `sdwis.water_system` | `primacy_agency_code` | 2-letter state code, or the EPA region code `01`–`10` for tribal systems |
 | `sdwis.water_system` | `pws_type_code` | `CWS`/`NTNCWS`/`TNCWS` |
 | `sdwis.water_system` | `pws_activity_code` | `A` active; `active_only` filters on it |
-| `sdwis.water_system` | `zip_code` | The address of record, stored as a 5-digit ZIP, a ZIP+4 (`98104-3122`), or nine digits (`985093400`), so a ZIP search is `beginsWith` |
+| `sdwis.water_system` | `zip_code` | The address of record, stored as a 5-digit ZIP, a ZIP+4 (`98104-3122`), or nine digits (`985093400`), so a ZIP search is `beginsWith`. Some systems store a ZIP and three digits (`68756-000`) or a Canadian postal code (`V6E 2Y3`); the `zip_code` input accepts neither form, and the first is still found by its 5-digit prefix |
 | `sdwis.water_system` | `pwsid` | Primary key, and the sort key of every water-system page |
 | `sdwis.geographic_area` | `county_served` | One comma-joined value of the counties a system serves (`Dallas,Johnson`), bare in most states and suffixed in others (`Calcasieu Parish`); `pwsid` joins it to the system |
 
