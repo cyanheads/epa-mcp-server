@@ -9,17 +9,15 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline, markdownLink } from '@cyanheads/mcp-ts-core/utils';
 import { formatHeading } from '@/mcp-server/tools/format-heading.js';
 import { formatNotice } from '@/mcp-server/tools/format-notice.js';
-import { getEjscreenService } from '@/services/ejscreen/ejscreen-service.js';
+import { EJAM_MAX_BUFFER_MILES, getEjscreenService } from '@/services/ejscreen/ejscreen-service.js';
 
 /** Miles-per-kilometer conversion factor. */
 const MILES_PER_KM = 0.621371;
-/** The EJAM API caps the buffer at 15 miles. */
-const MAX_BUFFER_MILES = 15;
 
 export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
   title: 'Get EJScreen Environmental Justice Indicators',
   description:
-    'EJScreen: Get EJScreen environmental-justice indicators for a point and surrounding buffer. Returns the 13 EJScreen environmental indicators (PM2.5, ozone, diesel particulate, NO2, lead paint, traffic proximity, Superfund/RMP/hazardous-waste/wastewater proximity, underground storage tanks, drinking-water non-compliance, and RSEI toxic air releases) and 6 demographic indicators (people of color, low income, limited English, less than high school, under 5, over 64), each with national and state percentiles plus EJ Index values, along with the Demographic Index and Supplemental Demographic Index. Data is EJScreen v2.2 (2022) served via the community-maintained EJAM API (api.ejanalysis.com, Public Environmental Data Partners), which rehosts EJScreen after EPA discontinued public access in 2025 — not a live EPA endpoint. Provide latitude, longitude, and a buffer distance (default 1 mile, max 15 miles). Points outside US coverage return a coverage note instead of indicators.',
+    "EJScreen: Get EJScreen environmental-justice indicators for a point and surrounding buffer. Returns the 13 EJScreen environmental indicators (PM2.5, ozone, diesel particulate, NO2, lead paint, traffic proximity, Superfund/RMP/hazardous-waste/wastewater proximity, underground storage tanks, drinking-water non-compliance, and RSEI toxic air releases) and 6 demographic indicators (people of color, low income, limited English, less than high school, under 5, over 64), each with national and state percentiles plus EJ Index values, along with the Demographic Index and Supplemental Demographic Index and their national averages. Data is EJAM's ACS 2018–2022 release of EJScreen (EJScreen 2.3 method), served via the community-maintained EJAM API (api.ejanalysis.com, Public Environmental Data Partners), which rehosts EJScreen after EPA discontinued public access in 2025 — not a live EPA endpoint. Provide latitude, longitude, and a buffer distance (default 1 mile, max 15 miles). When EJScreen has no indicators — the point is outside its US bounds, the buffer holds no Census block, or its blocks have no residents — coverage.valid is false and coverage.note says which, and whether a larger distance may help.",
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -54,21 +52,25 @@ export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
           .string()
           .optional()
           .describe(
-            '2-letter state abbreviation for the area (e.g. "MD"). Absent when out of coverage.',
+            '2-letter state abbreviation for the area (e.g. "MD"). Absent when EJScreen found no Census block for the buffer.',
           ),
         stateName: z
           .string()
           .optional()
-          .describe('Full state name (e.g. "Maryland"). Absent when out of coverage.'),
+          .describe(
+            'Full state name (e.g. "Maryland"). Absent when EJScreen found no Census block for the buffer.',
+          ),
         population: z
           .number()
           .optional()
-          .describe('Area-weighted population within the buffer. Absent when out of coverage.'),
+          .describe(
+            'Area-weighted population within the buffer; 0 when its blocks have no residents. Absent when EJScreen found no Census block for the buffer.',
+          ),
         blockGroupCount: z
           .number()
           .optional()
           .describe(
-            'Number of census block groups intersecting the buffer. Absent when out of coverage.',
+            'Number of census block groups intersecting the buffer. Absent when EJScreen found no Census block for the buffer.',
           ),
       })
       .describe('The queried location and buffer context.'),
@@ -95,7 +97,9 @@ export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
             ejIndex: z
               .number()
               .optional()
-              .describe('EJ Index (raw) — the indicator combined with the demographic index.'),
+              .describe(
+                "EJ Index: the Demographic Index × this indicator's US percentile, computed per block group and population-weighted over the buffer.",
+              ),
             ejIndexUsPercentile: z
               .number()
               .optional()
@@ -108,7 +112,7 @@ export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
           .describe('One environmental indicator with percentiles and its EJ Index.'),
       )
       .describe(
-        'EJScreen environmental indicators present for the area. Empty when out of coverage.',
+        'EJScreen environmental indicators present for the area. Empty when coverage.valid is false.',
       ),
     demographic: z
       .array(
@@ -133,14 +137,20 @@ export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
           .describe('One demographic indicator with percentiles.'),
       )
       .describe(
-        'EJScreen demographic indicators present for the area. Empty when out of coverage.',
+        'EJScreen demographic indicators present for the area. Empty when coverage.valid is false.',
       ),
     demographicIndex: z
       .object({
         value: z
           .number()
           .describe(
-            'Demographic Index raw value (average of low-income and people-of-color shares).',
+            'Demographic Index for the buffer: the mean of the national z-scores for percent low income and percent people of color, shifted so the lowest block group scores 0. Unitless; higher means more disadvantaged, and usAverage gives the national average to compare against.',
+          ),
+        usAverage: z
+          .number()
+          .optional()
+          .describe(
+            'National average of the Demographic Index. Absent when EJScreen did not report it.',
           ),
         usPercentile: z
           .number()
@@ -149,15 +159,25 @@ export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
         statePercentile: z
           .number()
           .optional()
-          .describe('State percentile (0–100) of the Demographic Index.'),
+          .describe(
+            'State percentile (0–100) of the state-normalized Demographic Index, which is built from z-scores within the state rather than nationally.',
+          ),
       })
       .optional()
-      .describe('EJScreen Demographic Index. Absent when out of coverage.'),
+      .describe('EJScreen Demographic Index. Absent when coverage.valid is false.'),
     supplementalDemographicIndex: z
       .object({
         value: z
           .number()
-          .describe('Supplemental Demographic Index raw value (five-factor average).'),
+          .describe(
+            'Supplemental Demographic Index for the buffer: the mean of the national z-scores for percent low income, percent limited English, percent less than high school education, percent with disabilities, and low life expectancy (four components when life expectancy is missing), shifted so the lowest block group scores 0. Unitless; higher means more disadvantaged, and usAverage gives the national average to compare against.',
+          ),
+        usAverage: z
+          .number()
+          .optional()
+          .describe(
+            'National average of the Supplemental Demographic Index. Absent when EJScreen did not report it.',
+          ),
         usPercentile: z
           .number()
           .optional()
@@ -165,10 +185,12 @@ export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
         statePercentile: z
           .number()
           .optional()
-          .describe('State percentile (0–100) of the Supplemental Demographic Index.'),
+          .describe(
+            'State percentile (0–100) of the state-normalized Supplemental Demographic Index, which is built from z-scores within the state rather than nationally.',
+          ),
       })
       .optional()
-      .describe('EJScreen Supplemental Demographic Index. Absent when out of coverage.'),
+      .describe('EJScreen Supplemental Demographic Index. Absent when coverage.valid is false.'),
     reportUrl: z
       .string()
       .optional()
@@ -178,16 +200,16 @@ export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
         valid: z
           .boolean()
           .describe(
-            'True when EJScreen returned indicators for the point; false when the point is outside coverage.',
+            'True when EJScreen returned indicators for the buffer; false when it has none because the point is outside its US bounds, the buffer holds no Census block, or its blocks have no residents.',
           ),
         note: z
           .string()
           .optional()
           .describe(
-            'Explanation from EJScreen when coverage is unavailable (e.g. point outside the US).',
+            'Present when valid is false: what EJScreen found for the buffer, and whether a larger distance may reach data.',
           ),
       })
-      .describe('Whether EJScreen data was available for the point.'),
+      .describe('Whether EJScreen data was available for the buffer.'),
     dataSource: z.string().describe('Provenance and vintage of the data.'),
   }),
 
@@ -195,9 +217,7 @@ export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
     notice: z
       .string()
       .optional()
-      .describe(
-        'Guidance when the point is outside EJScreen coverage and no indicators were returned.',
-      ),
+      .describe('The coverage note, repeated as guidance, when no indicators were returned.'),
   },
   enrichmentTrailer: { notice: { render: formatNotice } },
 
@@ -212,19 +232,19 @@ export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
       reason: 'upstream_rejected',
       thrownBy: 'service',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'The EJAM API rejected the request, typically for invalid coordinates.',
+      when: 'The EJAM API answered HTTP 400 for a point inside the bounds it accepts, so the lookup failed at EJAM rather than on the coordinates.',
       recovery:
-        'Check that latitude and longitude are valid decimal-degree US coordinates and retry.',
+        'Check that latitude and longitude name the intended point and retry; if EJAM rejects it again, the EJAM API is failing for this location.',
     },
   ],
 
   async handler(input, ctx) {
     const bufferMiles =
       input.unit === 'kilometers' ? input.distance * MILES_PER_KM : input.distance;
-    if (bufferMiles > MAX_BUFFER_MILES) {
+    if (bufferMiles > EJAM_MAX_BUFFER_MILES) {
       throw ctx.fail(
         'buffer_too_large',
-        `Buffer of ${bufferMiles.toFixed(2)} miles exceeds the EJAM API limit of ${MAX_BUFFER_MILES} miles.`,
+        `Buffer of ${bufferMiles.toFixed(2)} miles exceeds the EJAM API limit of ${EJAM_MAX_BUFFER_MILES} miles.`,
       );
     }
 
@@ -245,13 +265,7 @@ export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
       demographic: result.demographic.length,
     });
 
-    if (!result.coverage.valid) {
-      ctx.enrich.notice(
-        result.coverage.note
-          ? `EJScreen has no coverage for this point: ${result.coverage.note}`
-          : `EJScreen returned no indicators for lat=${input.latitude}, lon=${input.longitude}. EJScreen covers US locations only — verify the point is within the United States.`,
-      );
-    }
+    if (!result.coverage.valid) ctx.enrich.notice(result.coverage.note);
 
     return result;
   },
@@ -305,6 +319,7 @@ export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
     if (result.demographicIndex) {
       const di = result.demographicIndex;
       const parts = [`**Demographic Index:** ${di.value}`];
+      if (di.usAverage !== undefined) parts.push(`US avg ${di.usAverage}`);
       if (di.usPercentile !== undefined) parts.push(`US pctile ${di.usPercentile}`);
       if (di.statePercentile !== undefined) parts.push(`state pctile ${di.statePercentile}`);
       lines.push(`\n${parts.join(' · ')}`);
@@ -312,6 +327,7 @@ export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
     if (result.supplementalDemographicIndex) {
       const si = result.supplementalDemographicIndex;
       const parts = [`**Supplemental Demographic Index:** ${si.value}`];
+      if (si.usAverage !== undefined) parts.push(`US avg ${si.usAverage}`);
       if (si.usPercentile !== undefined) parts.push(`US pctile ${si.usPercentile}`);
       if (si.statePercentile !== undefined) parts.push(`state pctile ${si.statePercentile}`);
       lines.push(parts.join(' · '));

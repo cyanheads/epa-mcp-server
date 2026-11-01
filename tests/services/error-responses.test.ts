@@ -147,18 +147,18 @@ describe('service errors', () => {
     const result = await pending;
 
     const hint =
-      'Verify the Registry ID using epa_echo_search_facilities and retry with a valid ID.';
+      'Verify the ID: find Registry IDs with epa_echo_search_facilities or PWSIDs with epa_water_search_systems, then retry.';
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(result.isError).toBe(true);
     expect(result.structuredContent).toMatchObject({
       error: {
         code: JsonRpcErrorCode.NotFound,
-        message: 'No facility found for Registry ID "110000350509".',
+        message: 'No facility found for ID "110000350509".',
         data: { reason: 'facility_not_found', registryId: '110000350509', recovery: { hint } },
       },
     });
     const text = JSON.stringify(result.content);
-    expect(text).toContain('No facility found for Registry ID \\"110000350509\\".');
+    expect(text).toContain('No facility found for ID \\"110000350509\\".');
     expect(text).toContain(hint);
     expect(JSON.stringify(result)).not.toContain('https://example.com/private-');
   });
@@ -224,11 +224,13 @@ describe('service errors', () => {
         code: JsonRpcErrorCode.ValidationError,
         data: {
           reason: 'upstream_rejected',
+          upstreamMessage: 'Invalid coordinates',
           recovery: { hint: expect.stringContaining('latitude and longitude') },
         },
       },
     });
-    expect(JSON.stringify(result.content)).toContain('Invalid coordinates');
+    // EJAM's own text stays in error.data; the caller-facing message is server-authored.
+    expect(JSON.stringify(result.content)).not.toContain('Invalid coordinates');
     expect(JSON.stringify(result.content)).toContain('latitude and longitude');
     expect(JSON.stringify(result.content)).toContain('upstream_rejected');
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);

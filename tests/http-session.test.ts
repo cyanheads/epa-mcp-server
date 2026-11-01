@@ -2,11 +2,8 @@
  * @fileoverview HTTP session posture on the 2025-11-25 protocol revision.
  * @module tests/http-session.test
  */
-import { spawn } from 'node:child_process';
-import { once } from 'node:events';
-import { createServer } from 'node:net';
-import { setTimeout } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
+import { rpcResponse, startHttpServer } from './helpers.js';
 
 async function readReply(response: Response): Promise<string> {
   if (!response.headers.get('content-type')?.includes('text/event-stream')) return response.text();
@@ -36,24 +33,16 @@ async function readReply(response: Response): Promise<string> {
   }
 }
 
-/** The `result` of the JSON-RPC response in a reply body (plain JSON or SSE `data:` frames). */
+/** The `result` of the JSON-RPC response in a reply body. */
 function rpcResult(reply: string): Record<string, unknown> {
-  const payloads = reply.trimStart().startsWith('{')
-    ? [reply]
-    : reply
-        .split('\n')
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice(5).trim())
-        .filter((data) => data !== '');
-  const message = payloads
-    .map((data) => JSON.parse(data) as { id?: unknown; result?: Record<string, unknown> })
-    .find((parsed) => 'id' in parsed);
-  if (!message?.result) throw new Error(`Expected a JSON-RPC result, got: ${reply}`);
-  return message.result;
+  const { result } = rpcResponse(reply);
+  if (!result) throw new Error(`Expected a JSON-RPC result, got: ${reply}`);
+  return result;
 }
 
 /** Tools served without AIRNOW_API_KEY: every keyless tool, never epa_airnow_get_conditions. */
 const KEYLESS_TOOL_NAMES = [
+  'epa_echo_get_case',
   'epa_echo_get_facility',
   'epa_echo_search_facilities',
   'epa_echo_search_violations',
@@ -66,51 +55,11 @@ const KEYLESS_TOOL_NAMES = [
 ];
 
 async function inspectSession(mode: string | undefined, expected: 'stateful' | 'stateless') {
-  const reservation = createServer();
-  reservation.listen(0, '127.0.0.1');
-  await once(reservation, 'listening');
-  const address = reservation.address();
-  if (!address || typeof address === 'string') throw new Error('Expected TCP address');
-  await new Promise<void>((resolve) => reservation.close(() => resolve()));
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    MCP_TRANSPORT_TYPE: 'http',
-    MCP_HTTP_PORT: String(address.port),
-    MCP_HTTP_HOST: '127.0.0.1',
-    MCP_AUTH_MODE: 'none',
-    AIRNOW_API_KEY: '',
-    OTEL_ENABLED: 'false',
-    MCP_LOG_LEVEL: 'error',
+  const { origin, stop } = await startHttpServer({
     LOGS_DIR: '/tmp/epa-maintenance-http-logs',
-  };
-  if (mode === undefined) delete env.MCP_SESSION_MODE;
-  else env.MCP_SESSION_MODE = mode;
-  const child = spawn('bun', ['--no-env-file', 'src/index.ts'], {
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    MCP_SESSION_MODE: mode,
   });
-  let output = '';
-  child.stdout.on('data', (data) => {
-    output += String(data);
-  });
-  child.stderr.on('data', (data) => {
-    output += String(data);
-  });
-  const exited = once(child, 'exit');
-  const origin = `http://127.0.0.1:${address.port}`;
   try {
-    let ready = false;
-    for (let attempt = 0; attempt < 100; attempt++) {
-      if (child.exitCode !== null) throw new Error(output);
-      try {
-        ready = (await fetch(`${origin}/healthz`)).ok;
-      } catch {
-        /* Still starting. */
-      }
-      if (ready) break;
-      await setTimeout(50);
-    }
-    if (!ready) throw new Error(`Server did not start: ${output}`);
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       Accept: 'application/json, text/event-stream',
@@ -155,8 +104,7 @@ async function inspectSession(mode: string | undefined, expected: 'stateful' | '
       _meta: { 'io.github.cyanheads.mcp-ts-core/sessionMode': expected },
     });
   } finally {
-    child.kill('SIGTERM');
-    await exited;
+    await stop();
   }
 }
 

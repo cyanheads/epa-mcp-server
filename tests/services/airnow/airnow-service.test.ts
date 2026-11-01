@@ -4,6 +4,7 @@
  * HTTP boundary.
  * @module tests/services/airnow/airnow-service.test
  */
+
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
@@ -15,6 +16,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { airnowGetConditionsTool } from '@/mcp-server/tools/definitions/airnow-get-conditions.tool.js';
 import { AirNowService, initAirNowService } from '@/services/airnow/airnow-service.js';
+import { answerAfter, hang, textOf } from '../../helpers.js';
 import {
   FORECAST_60601_CATEGORY_ONLY,
   FORECAST_98101,
@@ -38,8 +40,6 @@ const isAirNow = (req: Request) => new URL(req.url).origin === 'https://airnow.e
 const serve = (body: string, status = 200) =>
   http.route({ match: isAirNow, respond: () => new Response(body, { status }) });
 const sentUrl = (index = 0) => new URL(http.calls[index]!.request.url);
-const textOf = (result: { content: { type: string; text?: string }[] }) =>
-  result.content.flatMap((block) => (block.type === 'text' ? [block.text ?? ''] : [])).join('\n');
 const parse = (raw: Record<string, unknown>) => airnowGetConditionsTool.input.parse(raw);
 const toolCtx = (tenantId?: string) =>
   createMockContext({ errors: airnowGetConditionsTool.errors, ...(tenantId && { tenantId }) });
@@ -66,8 +66,8 @@ describe('AirNow service', () => {
     expect(result.structuredContent).toMatchObject({
       observations: [{ readings: [{ aqi: 62 }, { aqi: 0 }, { aqi: 12 }] }],
     });
-    expect(textOf(result)).toContain('PM2.5');
-    expect(textOf(result)).toContain('AQI 12');
+    expect(textOf(result.content)).toContain('PM2.5');
+    expect(textOf(result.content)).toContain('AQI 12');
     expect(sentUrl().searchParams.get('API_KEY')).toBe('synthetic-secret');
 
     http.reset();
@@ -78,6 +78,14 @@ describe('AirNow service', () => {
     expect(await service.getCurrent(zip, ctx)).toEqual({ areas: [] });
     expect(await service.getCurrent(zip, ctx)).toEqual({ areas: [] });
     expect(http.calls).toHaveLength(1);
+  });
+
+  it('sends a ZIP+4 upstream as its first five digits', async () => {
+    serve(OBSERVATION_98101);
+    const result = await runToolContract(airnowGetConditionsTool, { zip_code: '98101-1234' });
+    expect(result.isError).not.toBe(true);
+    expect(sentUrl().searchParams.get('zipCode')).toBe('98101');
+    expect(textOf(result.content)).toContain('Seattle-Bellevue-Kent Valley');
   });
 
   it.each([
@@ -113,7 +121,7 @@ describe('AirNow service', () => {
       const result = await pending;
       expect(result.isError).toBe(true);
       expect(result.structuredContent).toMatchObject({ error: { code } });
-      expect(textOf(result)).toContain('AirNow');
+      expect(textOf(result.content)).toContain('AirNow');
       expect(http.calls).toHaveLength(calls);
       // The key was on the wire, so its absence below means the error surfaces dropped it.
       expect(sentUrl().searchParams.get('API_KEY')).toBe('synthetic-secret');
@@ -304,7 +312,7 @@ describe('AirNow 2026 observations (observation/current/ziplatlong/)', () => {
     expect(structured.attribution).toContain('U.S. EPA AirNow');
     expect(structured.attribution).toContain('preliminary');
 
-    const text = textOf(result);
+    const text = textOf(result.content);
     for (const fragment of [
       'Seattle-Bellevue-Kent Valley',
       '2026-10-08 at 03:00 PDT',
@@ -400,7 +408,7 @@ describe('AirNow 2026 observations (observation/current/ziplatlong/)', () => {
         ],
       },
     ]);
-    expect(textOf(result)).not.toContain('AQI -1');
+    expect(textOf(result.content)).not.toContain('AQI -1');
     // No agency on any reading: the credit still names the AirNow program.
     expect((result.structuredContent as { attribution: string }).attribution).toContain(
       'U.S. EPA AirNow',
@@ -419,7 +427,7 @@ describe('AirNow 2026 observations (observation/current/ziplatlong/)', () => {
     const structured = result.structuredContent as { observations: unknown[]; message: string };
     expect(structured.observations).toEqual([]);
     expect(structured.message).toContain(upstream);
-    expect(textOf(result)).toContain(upstream);
+    expect(textOf(result.content)).toContain(upstream);
   });
 
   it.each([
@@ -450,7 +458,7 @@ describe('AirNow 2026 observations (observation/current/ziplatlong/)', () => {
         data: { reason: 'invalid_zip_code', recovery: { hint } },
       },
     });
-    const text = textOf(result);
+    const text = textOf(result.content);
     expect(text).toContain('"00000"');
     expect(text).toContain('Invalid zipCode provided');
     expect(text).toContain('invalid_zip_code');
@@ -505,7 +513,7 @@ describe('AirNow 2026 forecasts (forecast/current/)', () => {
     expect(structured.attribution).toContain('U.S. EPA AirNow');
     expect(structured.attribution).toContain('preliminary');
 
-    const text = textOf(result);
+    const text = textOf(result.content);
     expect(text.split(SEATTLE_DISCUSSION)).toHaveLength(2);
     for (const fragment of [
       'wa004',
@@ -553,7 +561,7 @@ describe('AirNow 2026 forecasts (forecast/current/)', () => {
     const dates = '2026-10-08, 2026-10-09, 2026-10-10, 2026-10-11, 2026-10-12';
     expect(structured.message).toContain('2026-10-20');
     expect(structured.message).toContain(dates);
-    expect(textOf(result)).toContain(dates);
+    expect(textOf(result.content)).toContain(dates);
   });
 
   it('serves different forecast_date values from one cached fetch', async () => {
@@ -590,7 +598,7 @@ describe('AirNow 2026 forecasts (forecast/current/)', () => {
       expect(reading).toMatchObject({ categoryNumber: 1, categoryName: 'Good' });
     }
     expect(area).not.toHaveProperty('discussion');
-    const text = textOf(result);
+    const text = textOf(result.content);
     expect(text).not.toContain('AQI -1');
     expect(text).toContain('Good [category 1]');
     expect(text).not.toContain('Discussion');
@@ -658,7 +666,7 @@ describe('AirNow 2026 forecasts (forecast/current/)', () => {
     });
     expect(structured.attribution).toContain('Agency A');
     expect(structured.attribution).toContain('Agency B');
-    const text = textOf(result);
+    const text = textOf(result.content);
     expect(text.split('Discussion A')).toHaveLength(2);
     expect(text).toContain('action day: yes');
   });
@@ -684,7 +692,7 @@ describe('AirNow 2026 forecasts (forecast/current/)', () => {
     const structured = result.structuredContent as { observations: unknown[]; message: string };
     expect(structured.observations).toEqual([]);
     expect(structured.message).toContain(upstream);
-    expect(textOf(result)).toContain(upstream);
+    expect(textOf(result.content)).toContain(upstream);
   });
 });
 
@@ -693,10 +701,7 @@ describe('regression #42: one deadline per AirNow call', () => {
   const serveHung = () =>
     http.route({
       match: isAirNow,
-      respond: (req) =>
-        new Promise<Response>((_resolve, reject) => {
-          req.signal.addEventListener('abort', () => reject(req.signal.reason));
-        }),
+      respond: (req) => hang(req.signal),
     });
 
   it('a hung AirNow request ends as a server-side Timeout at 55 s on both surfaces', async () => {
@@ -715,7 +720,7 @@ describe('regression #42: one deadline per AirNow call', () => {
     expect(result?.structuredContent).toMatchObject({
       error: { code: JsonRpcErrorCode.Timeout, data: { reason: 'retry_deadline_exceeded' } },
     });
-    expect(textOf(result!)).toContain('AirNow request exceeded its 55000ms retry deadline');
+    expect(textOf(result!.content)).toContain('AirNow request exceeded its 55000ms retry deadline');
     expect(http.calls).toHaveLength(1);
     expect(JSON.stringify(result)).not.toContain('synthetic-secret');
   });
@@ -725,13 +730,7 @@ describe('regression #42: one deadline per AirNow call', () => {
     http.route({
       match: isAirNow,
       respond: (req) =>
-        new Promise<Response>((resolve, reject) => {
-          const timer = setTimeout(() => resolve(new Response('busy', { status: 503 })), 20_000);
-          req.signal.addEventListener('abort', () => {
-            clearTimeout(timer);
-            reject(req.signal.reason);
-          });
-        }),
+        answerAfter(20_000, req.signal, () => new Response('busy', { status: 503 })),
     });
     const pending = runToolContract(airnowGetConditionsTool, { zip_code: '98101' });
     await vi.advanceTimersByTimeAsync(55_000);

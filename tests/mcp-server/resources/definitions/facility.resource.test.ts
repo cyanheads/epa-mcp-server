@@ -10,7 +10,10 @@ import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { facilityResource } from '@/mcp-server/resources/definitions/facility.resource.js';
-import { INVALID_ID_110000350509 } from '../../../services/echo/echo-fixtures.js';
+import {
+  DFR_SDWIS_WA5389080,
+  INVALID_ID_110000350509,
+} from '../../../services/echo/echo-fixtures.js';
 
 const mockGetFacility = vi.fn();
 
@@ -31,9 +34,12 @@ const boeingProfile = {
   zip: '98204',
   programs: { air: true, water: true, rcra: false, tri: true, sdwa: false },
   triFacilityIds: ['98204BNGCM3003W'],
+  naics: [],
   programCompliance: [],
   inspections: [],
   inspectionsTotal: 0,
+  drinkingWaterViolations: [],
+  drinkingWaterViolationsTotal: 0,
   formalActions: [],
 };
 
@@ -89,7 +95,7 @@ describe('facilityResource', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(error).toMatchObject({
       code: JsonRpcErrorCode.NotFound,
-      message: 'No facility found for Registry ID "110000350509".',
+      message: 'No facility found for ID "110000350509".',
       data: { reason: 'facility_not_found', registryId: '110000350509' },
     });
     // The framework fills the caller's recovery hint from the contract matching the thrown reason.
@@ -97,8 +103,64 @@ describe('facilityResource', () => {
     expect(facilityResource.errors?.find((contract) => contract.reason === reason)).toMatchObject({
       code: JsonRpcErrorCode.NotFound,
       recovery:
-        'Use epa_echo_search_facilities to discover valid Registry IDs, then read this resource again.',
+        'Verify the ID: find Registry IDs with epa_echo_search_facilities or PWSIDs with epa_water_search_systems, then read this resource again.',
     });
+  });
+
+  it("regression #62: returns a PWSID's profile with the default page of drinking-water violations", async () => {
+    const { EchoService } = await vi.importActual<typeof import('@/services/echo/echo-service.js')>(
+      '@/services/echo/echo-service.js',
+    );
+    const echo = new EchoService(
+      { pkg: { name: '@cyanheads/epa-mcp-server', version: '0.0.0-test' } } as AppConfig,
+      {} as StorageService,
+    );
+    mockGetFacility.mockImplementation((id: string, ctx: Context) =>
+      echo.getFacilityReport(id, ctx),
+    );
+    const [row] = DFR_SDWIS_WA5389080.Results.ViolationsEnforcementActions.Sources[0]!.Violations;
+    const dfr = {
+      Results: {
+        ...DFR_SDWIS_WA5389080.Results,
+        ViolationsEnforcementActions: {
+          Sources: [
+            {
+              Violations: Array.from({ length: 60 }, (_, i) => ({
+                ...row,
+                ViolationID: String(1000 + i),
+              })),
+            },
+          ],
+        },
+      },
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) =>
+      String(input).includes('get_dfr')
+        ? new Response(JSON.stringify(dfr))
+        : new Response(JSON.stringify({ Results: { Facilities: [] } })),
+    );
+    const params = facilityResource.params!.parse({ registry_id: 'WA5389080' });
+
+    const result = (await facilityResource.handler(params, mockContext())) as {
+      registryId: string;
+      programs: { sdwa: boolean };
+      drinkingWaterViolations: unknown[];
+      drinkingWaterViolationsTotal: number;
+      drinkingWaterViolationsNextOffset?: number;
+    };
+
+    expect(result.registryId).toBe('110049537202');
+    expect(result.programs.sdwa).toBe(true);
+    expect(result.drinkingWaterViolations).toHaveLength(50);
+    expect(result.drinkingWaterViolationsTotal).toBe(60);
+    expect(result.drinkingWaterViolationsNextOffset).toBe(50);
+  });
+
+  it('names the PWSID input in its description and registry_id parameter', () => {
+    expect(facilityResource.description).toContain('public water system PWSID');
+    expect(facilityResource.params!.shape.registry_id.description).toContain(
+      'PWSID (from epa_water_search_systems)',
+    );
   });
 
   it('propagates service errors upward', async () => {

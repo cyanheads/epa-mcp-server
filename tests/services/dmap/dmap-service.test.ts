@@ -10,22 +10,32 @@ import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { superfundSearchSitesTool } from '@/mcp-server/tools/definitions/superfund-search-sites.tool.js';
 import { triGetFacilityReleasesTool } from '@/mcp-server/tools/definitions/tri-get-facility-releases.tool.js';
 import { triSearchReleasesTool } from '@/mcp-server/tools/definitions/tri-search-releases.tool.js';
-import { DmapService, initDmapService } from '@/services/dmap/dmap-service.js';
+import { waterSearchSystemsTool } from '@/mcp-server/tools/definitions/water-search-systems.tool.js';
+import {
+  type CurrentViolatorLookup,
+  DmapService,
+  initDmapService,
+} from '@/services/dmap/dmap-service.js';
+import { initEchoService, type SdwViolatorScope } from '@/services/echo/echo-service.js';
+import { answerAfter, hang, textOf } from '../../helpers.js';
 import newarkCoordinates from './fixtures/newark-superfund-coordinates.json' with { type: 'json' };
 import seattleCoordinates from './fixtures/seattle-superfund-coordinates.json' with {
   type: 'json',
 };
 
 /**
- * Route fetch by URL substring, returning each route's rows as a JSON array. A request no route
- * matches rejects with a non-retryable error, so an unexpected URL fails the test instead of
- * silently reading as an empty table.
+ * Route fetch by URL substring, answering each request with `body(route, url)` as JSON. A request
+ * no route matches rejects with a non-retryable error, so an unexpected URL fails the test instead
+ * of silently reading as an empty table.
  */
-function stubDmapFetch(routes: Array<{ match: string; rows: unknown[] }>): string[] {
+function stubRoutes<Route extends { match: string }>(
+  routes: Route[],
+  body: (route: Route, url: string) => unknown,
+): string[] {
   const urls: string[] = [];
   vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
     const url = String(input);
@@ -34,10 +44,14 @@ function stubDmapFetch(routes: Array<{ match: string; rows: unknown[] }>): strin
     if (!route) {
       return Promise.reject(validationError(`Unmocked DMAP fetch: ${url}`, { retryable: false }));
     }
-    return Promise.resolve(new Response(JSON.stringify(route.rows), { status: 200 }));
+    return Promise.resolve(new Response(JSON.stringify(body(route, url)), { status: 200 }));
   });
   return urls;
 }
+
+/** Stub fetch with each route's `rows` as its whole response. */
+const stubDmapFetch = (routes: Array<{ match: string; rows: unknown[] }>): string[] =>
+  stubRoutes(routes, (route) => route.rows);
 
 /**
  * Serve a table the way DMAP pages it: the trailing `first:last` range is 1-based and inclusive,
@@ -52,21 +66,8 @@ function dmapPage(url: string, table: unknown[]): unknown[] {
 }
 
 /** Stub fetch with one paged table per URL substring; unmatched URLs reject. */
-function stubPagedDmapFetch(routes: Array<{ match: string; table: unknown[] }>): string[] {
-  const urls: string[] = [];
-  vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
-    const url = String(input);
-    urls.push(url);
-    const route = routes.find((r) => url.includes(r.match));
-    if (!route) {
-      return Promise.reject(validationError(`Unmocked DMAP fetch: ${url}`, { retryable: false }));
-    }
-    return Promise.resolve(
-      new Response(JSON.stringify(dmapPage(url, route.table)), { status: 200 }),
-    );
-  });
-  return urls;
-}
+const stubPagedDmapFetch = (routes: Array<{ match: string; table: unknown[] }>): string[] =>
+  stubRoutes(routes, (route, url) => dmapPage(url, route.table));
 
 function makeService(): DmapService {
   // Constructor ignores config/storage and reads only getServerConfig().dmapBaseUrl (defaulted).
@@ -335,14 +336,19 @@ describe('DmapService Superfund proximity candidates', () => {
         limit: 200,
       });
       expect(call.isError).toBeFalsy();
-      const structured = call.structuredContent as { sites: { siteId: string }[]; notice?: string };
+      const structured = call.structuredContent as {
+        sites: { siteId: string }[];
+        totalCount?: number;
+        notice?: string;
+      };
       expect(structured.sites).toHaveLength(Math.min(total, 200));
+      expect(structured.totalCount).toBe(total);
       expect(structured.sites[0]?.siteId).toBe(nearest);
       expect(urls).toHaveLength(requests);
-      const text = call.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n');
+      const text = textOf(call.content);
       expect(text).toContain(nearest);
       if (total > 200) {
-        expect(structured.notice).toContain('nearest 200 of 203');
+        expect(structured.notice).toContain('Showing sites 1–200 of 203');
         expect(text).toContain(structured.notice);
       } else
         expect(structured.notice).toContain(
@@ -363,7 +369,7 @@ describe('DmapService Superfund proximity candidates', () => {
       { latitude: 9.99, longitude: 0, radiusMiles: 5 },
       createMockContext(),
     );
-    expect(result.map((site) => site.siteId)).toEqual(['0000500']);
+    expect(result.items.map((site) => site.siteId)).toEqual(['0000500']);
     expect(urls.some((url) => url.includes('/501:1000/json'))).toBe(true);
     expect(urls.some((url) => url.includes('/beginsWith/10/'))).toBe(true);
   });
@@ -382,7 +388,7 @@ describe('DmapService Superfund proximity candidates', () => {
       { latitude: 0, longitude: 0, radiusMiles: 5 },
       createMockContext(),
     );
-    expect(result.map((site) => site.siteId).sort()).toEqual([
+    expect(result.items.map((site) => site.siteId).sort()).toEqual([
       '00',
       '01',
       '02',
@@ -414,7 +420,7 @@ describe('DmapService Superfund proximity candidates', () => {
       { latitude: 40.7357, longitude: -74.1724, radiusMiles: 5, limit: 1 },
       createMockContext(),
     );
-    expect(result.map((site) => site.siteId)).toEqual(['0000501']);
+    expect(result.items.map((site) => site.siteId)).toEqual(['0000501']);
     expect(urls).toHaveLength(2);
     expect(urls[0]).toContain('/primary_longitude_decimal_val/beginsWith/-74/');
     expect(urls[0]).toContain('/sort/sems.envirofacts_site.site_id:asc/1:500/json');
@@ -438,7 +444,7 @@ describe('DmapService Superfund proximity candidates', () => {
     expect(urls).toHaveLength(2);
   });
 
-  it('characterizes ZIP-only searches without coordinates', async () => {
+  it('searches a ZIP by prefix without coordinates', async () => {
     const urls = stubFakeDmap({
       'sems.envirofacts_site': [{ site_id: 'S1', name: 'SPARSE', zip_code: '98104' }],
     });
@@ -446,10 +452,59 @@ describe('DmapService Superfund proximity candidates', () => {
       { zipCode: '98104', limit: 1 },
       createMockContext(),
     );
-    expect(sites).toEqual([{ siteId: 'S1', name: 'SPARSE', zip: '98104' }]);
+    expect(sites).toEqual({ items: [{ siteId: 'S1', name: 'SPARSE', zip: '98104' }] });
     expect(urls).toEqual([
-      'https://data.epa.gov/dmapservice/sems.envirofacts_site/zip_code/equals/98104/1:1/json',
+      'https://data.epa.gov/dmapservice/sems.envirofacts_site/zip_code/beginsWith/98104/sort/sems.envirofacts_site.site_id:asc/1:2/json',
     ]);
+  });
+
+  it('finds a ZIP+4 search across the whole 5-digit ZIP on both surfaces', async () => {
+    // sems.envirofacts_site rows with zip_code beginning 07631 (live, 2026-11-01), and a neighbor.
+    const rows = [
+      ['0206741', '07631-2720'],
+      ['0203738', '07631'],
+      ['0203613', '07631'],
+      ['0200991', '07631'],
+      ['0203182', '07631'],
+      ['0206739', '07631-3445'],
+      ['0203212', '07631'],
+      ['0206740', '07631-2720'],
+      ['0200701', '07631'],
+      ['0200999', '07632'],
+    ].map(([site_id, zip_code]) => ({
+      site_id,
+      name: `SITE ${site_id}`,
+      zip_code,
+      fk_ref_state_code: 'NJ',
+    }));
+    const urls = stubFakeDmap({ 'sems.envirofacts_site': rows });
+    initDmapService({} as AppConfig, {} as StorageService);
+
+    const call = await runToolContract(superfundSearchSitesTool, { zip_code: '07631-2720' });
+
+    expect(call.isError).toBeFalsy();
+    expect(urls).toEqual([
+      'https://data.epa.gov/dmapservice/sems.envirofacts_site/zip_code/beginsWith/07631/sort/sems.envirofacts_site.site_id:asc/1:51/json',
+    ]);
+    const structured = call.structuredContent as {
+      sites: Array<{ siteId: string; zip?: string }>;
+      effectiveQuery?: string;
+    };
+    expect(structured.sites.map((s) => s.siteId)).toEqual(
+      rows
+        .slice(0, 9)
+        .map((r) => r.site_id)
+        .toSorted(),
+    );
+    expect(structured.sites.filter((s) => s.zip === '07631-2720').map((s) => s.siteId)).toEqual([
+      '0206740',
+      '0206741',
+    ]);
+    expect(structured.effectiveQuery).toBe('zip_code begins with 07631');
+    const text = textOf(call.content);
+    expect(text).toContain('**Returned:** 9');
+    expect(text).toContain('07631-2720');
+    expect(text).not.toContain('0200999');
   });
 
   it('requests latitude candidates for coordinate-only searches', async () => {
@@ -473,7 +528,7 @@ describe('DmapService Superfund proximity candidates', () => {
       { latitude: 47.6, longitude: -122.3, radiusMiles: 25 },
       createMockContext(),
     );
-    expect(sites.map((s) => s.siteId)).toEqual(['1002655']);
+    expect(sites.items.map((s) => s.siteId)).toEqual(['1002655']);
     expect(urls).toHaveLength(2);
     expect(urls[0]).toContain(
       '/primary_latitude_decimal_val/beginsWith/47/and/primary_longitude_decimal_val/beginsWith/-122/',
@@ -512,7 +567,7 @@ describe('DmapService Superfund proximity candidates', () => {
         { latitude, longitude, radiusMiles: 5 },
         createMockContext(),
       );
-      expect(sites.map((s) => s.siteId)).toEqual(['NEAR']);
+      expect(sites.items.map((s) => s.siteId)).toEqual(['NEAR']);
       expect(urls.every((url) => url.includes('/primary_longitude_decimal_val/'))).toBe(
         Math.abs(latitude) < 89.9,
       );
@@ -549,11 +604,11 @@ describe('DmapService Superfund proximity candidates', () => {
       },
       createMockContext(),
     );
-    expect(sites.map((s) => s.siteId)).toEqual(['S1']);
+    expect(sites.items.map((s) => s.siteId)).toEqual(['S1']);
     expect(urls).toHaveLength(4);
     for (const url of urls)
       expect(decodeURIComponent(url)).toContain(
-        '/fk_ref_state_code/equals/MO/and/city_name/contains/St_ Louis/and/zip_code/equals/63101/and/npl_status_code/in/F,A/and/primary_latitude_decimal_val/beginsWith/',
+        '/fk_ref_state_code/equals/MO/and/city_name/contains/St_ Louis/and/zip_code/beginsWith/63101/and/npl_status_code/in/F,A/and/primary_latitude_decimal_val/beginsWith/',
       );
   });
 
@@ -581,15 +636,16 @@ describe('DmapService Superfund proximity candidates', () => {
         message?: string;
       };
       expect(structured.sites).toHaveLength(nearby ? 2 : 0);
-      const text = call.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n');
+      const text = textOf(call.content);
       if (nearby) {
-        expect(structured.notice).toContain('nearest 2 of 600');
+        expect(structured.notice).toContain('Showing sites 1–2 of 600');
         expect(text).toContain(structured.notice);
       } else {
         expect(structured.notice).toContain(
           'Proximity searches match only sites with usable coordinates.',
         );
-        expect(text).toContain('No Superfund sites found near');
+        expect(text).toContain('No Superfund sites found.');
+        expect(text).toContain('**Total Found:** 0 | **Returned:** 0');
       }
       expect(urls.every((url) => url.includes('/sort/sems.envirofacts_site.site_id:asc/'))).toBe(
         true,
@@ -625,9 +681,7 @@ describe('DmapService Superfund proximity candidates', () => {
         'Proximity searches match only sites with usable coordinates.',
       ),
     });
-    expect(call.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n')).toContain(
-      '**Coordinates:** 0, 0',
-    );
+    expect(textOf(call.content)).toContain('**Coordinates:** 0, 0');
   });
 
   it('excludes integer-prefix overfetch at another digit width', async () => {
@@ -651,7 +705,7 @@ describe('DmapService Superfund proximity candidates', () => {
       { latitude: 4.5, longitude: 0, radiusMiles: 5 },
       createMockContext(),
     );
-    expect(sites.map((site) => site.siteId)).toEqual(['NEAR']);
+    expect(sites.items.map((site) => site.siteId)).toEqual(['NEAR']);
   });
 
   it('stops candidate queries when the second request is cancelled', async () => {
@@ -668,6 +722,216 @@ describe('DmapService Superfund proximity candidates', () => {
       ),
     ).rejects.toMatchObject({ name: 'AbortError' });
     expect(urls).toHaveLength(2);
+  });
+});
+
+/** Great-circle miles, as an independent check on the service's nearest-first order. */
+function milesBetween(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const rad = (deg: number) => (deg * Math.PI) / 180;
+  const a =
+    Math.sin(rad(lat2 - lat1) / 2) ** 2 +
+    Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(rad(lon2 - lon1) / 2) ** 2;
+  return 3958.8 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+describe('DmapService Superfund paging', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** Seven NJ sites in shuffled upstream order: the sort, not DMAP's row order, fixes each page. */
+  const NJ_IDS = ['0200007', '0200002', '0200005', '0200001', '0200006', '0200003', '0200004'];
+  const njTable = () => ({
+    'sems.envirofacts_site': NJ_IDS.map((site_id) => ({
+      site_id,
+      name: `SITE ${site_id}`,
+      fk_ref_state_code: 'NJ',
+    })),
+  });
+  const SORTED = '/sort/sems.envirofacts_site.site_id:asc';
+
+  it('walks an administrative search in site ID order, each site once, until nextOffset is absent', async () => {
+    const urls = stubFakeDmap(njTable());
+    const service = makeService();
+    const walked: string[] = [];
+    const nextOffsets: Array<number | undefined> = [];
+    let offset: number | undefined = 0;
+    while (offset !== undefined) {
+      const page = await service.searchSuperfund(
+        { state: 'NJ', offset, limit: 3 },
+        createMockContext(),
+      );
+      expect(page).not.toHaveProperty('totalCount');
+      walked.push(...page.items.map((site) => site.siteId));
+      nextOffsets.push(page.nextOffset);
+      offset = page.nextOffset;
+    }
+    expect(walked).toEqual(NJ_IDS.toSorted());
+    expect(nextOffsets).toEqual([3, 6, undefined]);
+    expect(urls).toEqual(
+      ['1:4', '4:7', '7:10'].map(
+        (range) =>
+          `https://data.epa.gov/dmapservice/sems.envirofacts_site/fk_ref_state_code/equals/NJ${SORTED}/${range}/json`,
+      ),
+    );
+  });
+
+  it.each([
+    [2, ['0200003', '0200004', '0200005'], 5],
+    [6, ['0200007'], undefined],
+    [7, [], undefined],
+    [50, [], undefined],
+  ] as const)(
+    'reads offset %s as upstream position, one row past the page',
+    async (offset, ids, nextOffset) => {
+      const urls = stubFakeDmap(njTable());
+      const page = await makeService().searchSuperfund(
+        { state: 'NJ', offset, limit: 3 },
+        createMockContext(),
+      );
+      expect(page.items.map((site) => site.siteId)).toEqual(ids);
+      expect(page.nextOffset).toBe(nextOffset);
+      expect(urls).toHaveLength(1);
+      expect(urls[0]).toContain(`${SORTED}/${offset + 1}:${offset + 4}/json`);
+    },
+  );
+
+  it('continues a punctuated city from the next exact match, skipping dropped near-variants', async () => {
+    const sites = [
+      semsSite('0100001', "COEUR D'ALENE"),
+      ...['0100002', '0100003', '0100004', '0100005'].map((id) => semsSite(id, 'COEUR D ALENE')),
+      semsSite('0100006', "COEUR D'ALENE"),
+      semsSite('0100007', "COEUR D'ALENE"),
+    ].toReversed();
+    const urls = stubFakeDmap({ 'sems.envirofacts_site': sites });
+    const service = makeService();
+    const pages: Array<{ ids: string[]; nextOffset?: number }> = [];
+    let offset: number | undefined = 0;
+    while (offset !== undefined) {
+      const page = await service.searchSuperfund(
+        { state: 'ID', city: "Coeur d'Alene", offset, limit: 1 },
+        createMockContext(),
+      );
+      pages.push({
+        ids: page.items.map((site) => site.siteId),
+        ...(page.nextOffset !== undefined && { nextOffset: page.nextOffset }),
+      });
+      offset = page.nextOffset;
+    }
+    expect(pages).toEqual([
+      { ids: ['0100001'], nextOffset: 5 },
+      { ids: ['0100006'], nextOffset: 6 },
+      { ids: ['0100007'] },
+    ]);
+    expect(urls.map((u) => /\/(\d+:\d+)\/json$/.exec(u)?.[1])).toEqual(['1:100', '6:105', '7:106']);
+  });
+
+  /** The Newark 5-mile reference: 203 matches (EPA DMAP capture, 2026-10-24). */
+  const newark = { latitude: 40.7357, longitude: -74.1724, radiusMiles: 5 };
+  const newarkRows = () =>
+    newarkCoordinates.map(
+      ([site_id, primary_latitude_decimal_val, primary_longitude_decimal_val]) => ({
+        site_id,
+        name: site_id,
+        primary_latitude_decimal_val,
+        primary_longitude_decimal_val,
+      }),
+    );
+
+  it('pages the Newark proximity match nearest first, with no gap or repeat and a past-end page', async () => {
+    stubFakeDmap({ 'sems.envirofacts_site': newarkRows() });
+    const service = makeService();
+    const pages = [];
+    for (const offset of [0, 100, 200, 300]) {
+      pages.push(
+        await service.searchSuperfund({ ...newark, offset, limit: 100 }, createMockContext()),
+      );
+    }
+    expect(pages.map((page) => page.items.length)).toEqual([100, 100, 3, 0]);
+    expect(pages.map((page) => page.nextOffset)).toEqual([100, 200, undefined, undefined]);
+    expect(pages.map((page) => page.totalCount)).toEqual([203, 203, 203, 203]);
+    const joined = pages.flatMap((page) => page.items);
+    expect(joined[0]?.siteId).toBe('0202764');
+    expect(new Set(joined.map((site) => site.siteId)).size).toBe(203);
+    const miles = joined.map((site) =>
+      milesBetween(newark.latitude, newark.longitude, site.latitude!, site.longitude!),
+    );
+    expect(miles.every((distance, i) => i === 0 || distance >= miles[i - 1]!)).toBe(true);
+    expect(miles.every((distance) => distance <= 5)).toBe(true);
+  });
+
+  it('breaks a distance tie by site ID across a page boundary', async () => {
+    const at = { primary_latitude_decimal_val: '40.7357', primary_longitude_decimal_val: '-74.17' };
+    stubFakeDmap({
+      'sems.envirofacts_site': [
+        { site_id: 'B2', name: 'B2', ...at },
+        { site_id: 'A1', name: 'A1', ...at },
+      ],
+    });
+    const service = makeService();
+    const first = await service.searchSuperfund({ ...newark, limit: 1 }, createMockContext());
+    const second = await service.searchSuperfund(
+      { ...newark, offset: 1, limit: 1 },
+      createMockContext(),
+    );
+    expect(first).toMatchObject({ items: [{ siteId: 'A1' }], nextOffset: 1, totalCount: 2 });
+    expect(second).toMatchObject({ items: [{ siteId: 'B2' }], totalCount: 2 });
+    expect(second).not.toHaveProperty('nextOffset');
+  });
+
+  it('epa_superfund_search_sites carries paging, the query echo, and the guidance on both surfaces', async () => {
+    stubFakeDmap(njTable());
+    initDmapService({} as AppConfig, {} as StorageService);
+    const call = await runToolContract(superfundSearchSitesTool, {
+      state: 'nj',
+      offset: 3,
+      limit: 3,
+      exclude_archived: false,
+    });
+    expect(call.isError).toBeFalsy();
+    const guidance = 'More records follow; call again with offset 6 to continue.';
+    expect(call.structuredContent).toMatchObject({
+      sites: [{ siteId: '0200004' }, { siteId: '0200005' }, { siteId: '0200006' }],
+      effectiveQuery: 'state=NJ',
+      nextOffset: 6,
+      guidance,
+    });
+    expect(call.structuredContent).not.toHaveProperty('totalCount');
+    const text = textOf(call.content);
+    expect(text).toContain('**Returned:** 3');
+    expect(text).toContain('Query: `state=NJ`');
+    expect(text).toContain('**Next offset:** 6');
+    expect(text).toContain(guidance);
+  });
+
+  it('epa_superfund_search_sites reports the proximity match count and page on both surfaces', async () => {
+    stubFakeDmap({ 'sems.envirofacts_site': newarkRows() });
+    initDmapService({} as AppConfig, {} as StorageService);
+    const call = await runToolContract(superfundSearchSitesTool, {
+      latitude: 40.7357,
+      longitude: -74.1724,
+      radius_miles: 5,
+      limit: 3,
+    });
+    expect(call.isError).toBeFalsy();
+    const structured = call.structuredContent as {
+      sites: unknown[];
+      totalCount?: number;
+      notice?: string;
+      nextOffset?: number;
+      effectiveQuery?: string;
+    };
+    expect(structured.sites).toHaveLength(3);
+    expect(structured.totalCount).toBe(203);
+    expect(structured.nextOffset).toBe(3);
+    expect(structured.notice).toContain(
+      'Showing sites 1–3 of 203 matching Superfund sites within the radius, nearest first.',
+    );
+    expect(structured.effectiveQuery).toBe(
+      'latitude=40.7357; longitude=-74.1724; radius_miles=5, nearest first',
+    );
+    const text = textOf(call.content);
+    expect(text).toContain('**Total Found:** 203 | **Returned:** 3');
+    expect(text).toContain('Showing sites 1–3 of 203');
+    expect(text).toContain('**Next offset:** 3');
   });
 });
 
@@ -689,43 +953,39 @@ describe('DmapService facility TRI cap and order', () => {
     })),
   ];
 
-  it('characterizes explicit-year request order and per-medium merge', async () => {
+  it('sorts an explicit-year request by submission number and merges the per-medium breakdown', async () => {
     const urls = stubFakeDmap({
       'tri.tri_reporting_form': forms(),
-      'tri.tri_release_qty': [
-        {
-          doc_ctrl_num: 'D500',
-          environmental_medium: 'AIR STACK',
-          total_release: '12',
-          release_na: '0',
-        },
-      ],
+      'tri.tri_release_qty': [qtyRow('D500', 'AIR STACK', '12')],
     });
-    const releases = await makeService().getTriReleases(
+    const page = await makeService().getTriReleases(
       { facilityId: 'FAC', year: 2024 },
       createMockContext(),
     );
-    expect(releases[0]).toMatchObject({ reportingYear: 2024, releasesToAirInLbs: 12 });
+    // Exactly 500 filings that year: the full page, and nothing follows it.
+    expect(page.items).toHaveLength(500);
+    expect(page).not.toHaveProperty('nextOffset');
+    expect(page.items.at(-1)).toMatchObject({ reportingYear: 2024, releasesToAirInLbs: 12 });
     expect(urls[0]).toBe(
-      'https://data.epa.gov/dmapservice/tri.tri_reporting_form/tri_facility_id/equals/FAC/and/reporting_year/equals/2024/1:500/json',
+      `https://data.epa.gov/dmapservice/tri.tri_reporting_form/tri_facility_id/equals/FAC/and/reporting_year/equals/2024${NEWEST_FIRST_SORT}/1:501/json`,
     );
   });
 
   it('sorts capped all-years filings newest-first with a submission tiebreak', async () => {
     const urls = stubFakeDmap({ 'tri.tri_reporting_form': forms(), 'tri.tri_release_qty': [] });
-    const releases = await makeService().getTriReleases(
+    const { items: releases } = await makeService().getTriReleases(
       { facilityId: 'FAC', chemicalName: '1,3-Butadiene' },
       createMockContext(),
     );
     expect(releases).toHaveLength(500);
     expect(releases.every((r) => r.reportingYear === 2024)).toBe(true);
     expect(urls[0]).toContain(
-      '/sort/tri.tri_reporting_form.reporting_year:desc,tri.tri_reporting_form.doc_ctrl_num:asc/1:500/json',
+      '/sort/tri.tri_reporting_form.reporting_year:desc,tri.tri_reporting_form.doc_ctrl_num:asc/1:501/json',
     );
     const docs = urls.filter((url) => url.includes('/tri.tri_release_qty/')).flatMap(docInFilter);
     expect(docs[0]).toBe('D001');
     expect(docs.at(-1)).toBe('D500');
-    const oldYear = await makeService().getTriReleases(
+    const { items: oldYear } = await makeService().getTriReleases(
       { facilityId: 'FAC', year: 1987 },
       createMockContext(),
     );
@@ -733,9 +993,14 @@ describe('DmapService facility TRI cap and order', () => {
     expect(oldYear[0]?.reportingYear).toBe(1987);
   });
 
-  it.each([undefined, 2024])(
-    'discloses 500 records with usable guidance on both surfaces, year=%s',
-    async (year) => {
+  it.each([
+    // 501 filings across all years: one follows the 500-filing page.
+    [undefined, 500],
+    // Exactly 500 in 2024: the page is full and nothing follows.
+    [2024, undefined],
+  ])(
+    'discloses a capped lookup only when more filings follow, on both surfaces, year=%s',
+    async (year, nextOffset) => {
       stubFakeDmap({ 'tri.tri_reporting_form': forms(), 'tri.tri_release_qty': [] });
       initDmapService({} as AppConfig, {} as StorageService);
       const original = DmapService.prototype.getTriReleases;
@@ -752,19 +1017,26 @@ describe('DmapService facility TRI cap and order', () => {
         ...(year !== undefined && { year }),
       });
       expect(call.isError).toBeFalsy();
-      expect(call.structuredContent).toMatchObject({
+      const structured = call.structuredContent as { releases: unknown[]; guidance?: string };
+      expect(structured.releases).toHaveLength(500);
+      expect(structured).toMatchObject({ notice: 'Existing punctuation-scan notice.' });
+      const text = textOf(call.content);
+      expect(text).toContain('Existing punctuation-scan notice.');
+      if (nextOffset === undefined) {
+        for (const key of ['nextOffset', 'truncated', 'shown', 'cap', 'guidance'])
+          expect(structured).not.toHaveProperty(key);
+        return;
+      }
+      expect(structured).toMatchObject({
+        nextOffset,
         truncated: true,
         shown: 500,
         cap: 500,
-        notice: 'Existing punctuation-scan notice.',
+        guidance: `More records follow; call again with offset ${nextOffset} to continue.`,
       });
-      const structured = call.structuredContent as { guidance: string };
-      expect(structured.guidance).toContain('more may exist');
-      expect(structured.guidance).toContain('chemical_name');
-      expect(structured.guidance.includes('year')).toBe(year === undefined);
-      const text = call.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n');
+      expect(structured.guidance?.toLowerCase()).not.toContain('raise');
       expect(text).toContain(structured.guidance);
-      expect(text).toContain('Existing punctuation-scan notice.');
+      expect(text).toContain(`**Next offset:** ${nextOffset}`);
       expect(text).toContain('**truncated:** true');
       expect(text).toContain('**shown:** 500');
       expect(text).toContain('**cap:** 500');
@@ -779,15 +1051,14 @@ describe('DmapService facility TRI cap and order', () => {
     expect(call.structuredContent).toMatchObject({ releases: [], facilityId: 'FAC' });
     for (const key of ['truncated', 'shown', 'cap', 'guidance'])
       expect(call.structuredContent).not.toHaveProperty(key);
-    expect(call.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n')).toContain(
-      'No TRI releases found',
-    );
+    expect(textOf(call.content)).toContain('No TRI releases found');
   });
 
   it.each([0, 2])(
     'sorts later exact-text pages and stops at exhaustion with %s matches',
     async (count) => {
-      const nearVariants = Array.from({ length: 500 }, (_, i) => ({
+      // One more than the 501-row page, so the exact matches always sit on a later page.
+      const nearVariants = Array.from({ length: 501 }, (_, i) => ({
         tri_facility_id: 'FAC',
         cas_chem_name: '1X3-Butadiene',
         reporting_year: '2024',
@@ -804,7 +1075,7 @@ describe('DmapService facility TRI cap and order', () => {
         'tri.tri_release_qty': [],
       });
       const ctx = createMockContext();
-      const releases = await makeService().getTriReleases(
+      const { items: releases } = await makeService().getTriReleases(
         { facilityId: 'FAC', chemicalName: '1,3-Butadiene' },
         ctx,
       );
@@ -813,9 +1084,10 @@ describe('DmapService facility TRI cap and order', () => {
         releases.every((r) => r.reportingYear === 2023 && r.chemicalName === '1,3-Butadiene'),
       ).toBe(true);
       const pages = urls.filter((url) => url.includes('/tri.tri_reporting_form/'));
+      // A 500-filing page reads 501 rows a page, so one extra match proves more follow.
       expect(pages).toHaveLength(2);
-      expect(pages[0]).toContain(`${NEWEST_FIRST_SORT}/1:500/json`);
-      expect(pages[1]).toContain(`${NEWEST_FIRST_SORT}/501:1000/json`);
+      expect(pages[0]).toContain(`${NEWEST_FIRST_SORT}/1:501/json`);
+      expect(pages[1]).toContain(`${NEWEST_FIRST_SORT}/502:1002/json`);
       expect(getEnrichment(ctx)).toEqual({});
     },
   );
@@ -843,18 +1115,8 @@ describe('DmapService.getTriReleases per-medium breakdown', () => {
       {
         match: '/tri.tri_release_qty/',
         rows: [
-          {
-            doc_ctrl_num: 'D1',
-            environmental_medium: 'AIR FUG',
-            total_release: 120,
-            release_na: '0',
-          },
-          {
-            doc_ctrl_num: 'D1',
-            environmental_medium: 'AIR STACK',
-            total_release: 100,
-            release_na: '0',
-          },
+          qtyRow('D1', 'AIR FUG', 120),
+          qtyRow('D1', 'AIR STACK', 100),
           {
             doc_ctrl_num: 'D1',
             environmental_medium: 'WATER',
@@ -862,29 +1124,14 @@ describe('DmapService.getTriReleases per-medium breakdown', () => {
             release_na: '0',
             water_sequence_num: '1',
           },
-          {
-            doc_ctrl_num: 'D1',
-            environmental_medium: 'RCRA C',
-            total_release: 30,
-            release_na: '0',
-          },
-          {
-            doc_ctrl_num: 'D1',
-            environmental_medium: 'OTH DISP',
-            total_release: 5,
-            release_na: '0',
-          },
-          {
-            doc_ctrl_num: 'D1',
-            environmental_medium: 'UNINJ I',
-            total_release: 200,
-            release_na: '0',
-          },
+          qtyRow('D1', 'RCRA C', 30),
+          qtyRow('D1', 'OTH DISP', 5),
+          qtyRow('D1', 'UNINJ I', 200),
         ],
       },
     ]);
 
-    const releases = await makeService().getTriReleases(
+    const { items: releases } = await makeService().getTriReleases(
       { facilityId: 'FAC1' },
       createMockContext(),
     );
@@ -895,11 +1142,12 @@ describe('DmapService.getTriReleases per-medium breakdown', () => {
     expect(r.releasesToWaterInLbs).toBe(50);
     expect(r.releasesToLandInLbs).toBe(35); // RCRA C 30 + OTH DISP 5
     expect(r.releasesToUndergroundInjectionInLbs).toBe(200);
-    // one_time_release_qty stays its own distinct category, untouched by the breakdown.
-    expect(r.totalReleasesInLbs).toBe(0);
+    // one_time_release_qty keeps its own value, untouched by the breakdown.
+    expect(r.oneTimeReleaseInLbs).toBe(0);
+    expect(r.totalOnSiteReleasesInLbs).toBe(505);
     // The forms request, then one breakdown request on doc_ctrl_num ranged 30 rows per submission.
     expect(urls).toEqual([
-      `https://data.epa.gov/dmapservice/tri.tri_reporting_form/tri_facility_id/equals/FAC1${NEWEST_FIRST_SORT}/1:500/json`,
+      `https://data.epa.gov/dmapservice/tri.tri_reporting_form/tri_facility_id/equals/FAC1${NEWEST_FIRST_SORT}/1:501/json`,
       'https://data.epa.gov/dmapservice/tri.tri_release_qty/doc_ctrl_num/in/D1/1:30/json',
     ]);
   });
@@ -925,19 +1173,11 @@ describe('DmapService.getTriReleases per-medium breakdown', () => {
       },
       {
         match: '/tri.tri_release_qty/',
-        rows: [
-          {
-            doc_ctrl_num: 'D1',
-            environmental_medium: 'AIR FUG',
-            total_release: 10,
-            release_na: '0',
-          },
-          { doc_ctrl_num: 'D2', environmental_medium: 'WATER', total_release: 40, release_na: '0' },
-        ],
+        rows: [qtyRow('D1', 'AIR FUG', 10), qtyRow('D2', 'WATER', 40)],
       },
     ]);
 
-    const releases = await makeService().getTriReleases(
+    const { items: releases } = await makeService().getTriReleases(
       { facilityId: 'FAC1' },
       createMockContext(),
     );
@@ -966,12 +1206,7 @@ describe('DmapService.getTriReleases per-medium breakdown', () => {
       {
         match: '/tri.tri_release_qty/',
         rows: [
-          {
-            doc_ctrl_num: 'D3',
-            environmental_medium: 'AIR FUG',
-            total_release: 75,
-            release_na: '0',
-          },
+          qtyRow('D3', 'AIR FUG', 75),
           // Not applicable to this submission — the 0 it carries must not surface as a release.
           {
             doc_ctrl_num: 'D3',
@@ -979,13 +1214,8 @@ describe('DmapService.getTriReleases per-medium breakdown', () => {
             total_release: 0,
             release_na: '1',
           },
-          // A code outside the on-site release taxonomy (a non-release sub-metric) adds nothing.
-          {
-            doc_ctrl_num: 'D3',
-            environmental_medium: 'SI 5.5.3A',
-            total_release: 8,
-            release_na: '0',
-          },
+          // A Form R surface impoundment line (5.5.3A, RCRA Subtitle C) is an on-site land release.
+          qtyRow('D3', 'SI 5.5.3A', 8),
           // Reported as a coarse range band, not a hard number — must not become 0.
           {
             doc_ctrl_num: 'D3',
@@ -998,14 +1228,22 @@ describe('DmapService.getTriReleases per-medium breakdown', () => {
       },
     ]);
 
-    const releases = await makeService().getTriReleases(
+    const { items: releases } = await makeService().getTriReleases(
       { facilityId: 'FAC2' },
       createMockContext(),
     );
 
-    // Only the hard AIR FUG quantity lands; no other field, zero or otherwise, is added.
+    // Only the hard AIR FUG and SI 5.5.3A quantities land; no other field, zero or otherwise. The
+    // on-site total sums those two and leaves the range-coded water out.
     expect(releases).toEqual([
-      { facilityId: 'FAC2', chemicalName: 'LEAD', reportingYear: 2019, releasesToAirInLbs: 75 },
+      {
+        facilityId: 'FAC2',
+        chemicalName: 'LEAD',
+        reportingYear: 2019,
+        releasesToAirInLbs: 75,
+        releasesToLandInLbs: 8,
+        totalOnSiteReleasesInLbs: 83,
+      },
     ]);
   });
 
@@ -1034,7 +1272,9 @@ describe('DmapService.getTriReleases per-medium breakdown', () => {
       },
     ]);
 
-    const [r] = await makeService().getTriReleases({ facilityId: 'FAC3' }, createMockContext());
+    const {
+      items: [r],
+    } = await makeService().getTriReleases({ facilityId: 'FAC3' }, createMockContext());
 
     // Unrounded: 0.0009080000000000001 and 0.30000000000000004.
     expect(r!.releasesToAirInLbs).toBe(0.000908);
@@ -1042,7 +1282,144 @@ describe('DmapService.getTriReleases per-medium breakdown', () => {
     expect(r!.releasesToWaterInLbs).toBe(12345.678);
     expect(r!.releasesToUndergroundInjectionInLbs).toBe(1e-7);
   });
+
+  it('rolls the pre-2003 impoundment and pre-1996 landfill and injection codes into their media', async () => {
+    stubDmapFetch([
+      {
+        match: '/tri.tri_reporting_form/',
+        rows: [{ doc_ctrl_num: 'D5', tri_facility_id: 'FAC5', cas_chem_name: 'ARSENIC' }],
+      },
+      {
+        match: '/tri.tri_release_qty/',
+        rows: [
+          qtyRow('D5', 'SURF IMP', 10),
+          qtyRow('D5', 'LANDF8795', 3),
+          qtyRow('D5', 'UNINJ8795', 7),
+        ],
+      },
+    ]);
+
+    const {
+      items: [r],
+    } = await makeService().getTriReleases({ facilityId: 'FAC5' }, createMockContext());
+
+    expect(r).toMatchObject({ releasesToLandInLbs: 13, releasesToUndergroundInjectionInLbs: 7 });
+  });
+
+  it('adds both Form R surface impoundment lines to land: Rockport 2022 barium is 955,005 lb', async () => {
+    stubDmapFetch([
+      {
+        match: '/tri.tri_reporting_form/',
+        rows: [
+          { ...ROCKPORT_BARIUM_FORM },
+          // Only an N/A and a range-coded impoundment line: no land quantity, never a 0.
+          triForm('D-RANGE', ROCKPORT_BARIUM_FORM.tri_facility_id, 'Mercury', 2022),
+        ],
+      },
+      {
+        match: '/tri.tri_release_qty/',
+        rows: [
+          ...ROCKPORT_BARIUM_RELEASE_QTY,
+          qtyRow('D-RANGE', 'SI 5.5.3A', null, '1', null),
+          qtyRow('D-RANGE', 'SI 5.5.3B', null, '0', '2'),
+        ],
+      },
+    ]);
+
+    const {
+      items: [barium, mercury],
+    } = await makeService().getTriReleases(
+      { facilityId: ROCKPORT_BARIUM_FORM.tri_facility_id, year: 2022 },
+      createMockContext(),
+    );
+
+    expect(barium).toEqual({
+      facilityId: '47635RCKPR2791N',
+      chemicalName: ROCKPORT_BARIUM_FORM.cas_chem_name,
+      reportingYear: 2022,
+      releasesToAirInLbs: 552,
+      releasesToWaterInLbs: 1100,
+      // OTH LANDF 740,000 + SI 5.5.3B 215,000 + OTH DISP 5; SI 5.5.3A is N/A.
+      releasesToLandInLbs: 955005,
+      totalOnSiteReleasesInLbs: 956657,
+    });
+    expect(mercury).toEqual({
+      facilityId: '47635RCKPR2791N',
+      chemicalName: 'Mercury',
+      reportingYear: 2022,
+    });
+  });
+
+  it('converts a gram-reported surface impoundment quantity to pounds like the other land codes', async () => {
+    stubDmapFetch([
+      {
+        match: '/tri.tri_reporting_form/',
+        rows: [{ ...DIOXIN_FACILITY_FORMS[1], one_time_release_qty: null }],
+      },
+      {
+        match: '/tri.tri_release_qty/',
+        rows: [
+          qtyRow('1322220762367', 'SI 5.5.3A', 1, '0', null),
+          qtyRow('1322220762367', 'SI 5.5.3B', 2, '0', null),
+          qtyRow('1322220762367', 'LAND TREA', 0.0005809, '0', null),
+        ],
+      },
+    ]);
+
+    const {
+      items: [dioxin],
+    } = await makeService().getTriReleases({ facilityId: '96020CLLNS500MA' }, createMockContext());
+
+    // 3.0005809 g / 453.59237 g per lb, rounded to 12 significant digits.
+    expect(dioxin).toMatchObject({ reportedUnit: 'grams', releasesToLandInLbs: 0.00661514853083 });
+  });
 });
+
+/** One tri.tri_release_qty row; `na` defaults to "0", and an omitted `range` leaves release_range_code off the wire. */
+function qtyRow(
+  doc: unknown,
+  medium: string,
+  total: number | string | null,
+  na = '0',
+  range?: string | null,
+): DmapRow {
+  return {
+    doc_ctrl_num: doc,
+    environmental_medium: medium,
+    total_release: total,
+    release_na: na,
+    release_range_code: range,
+  };
+}
+
+/** Rockport Plant (IN) 2022 barium compounds form, captured live from DMAP (2026-11-01). */
+const ROCKPORT_BARIUM_FORM = {
+  doc_ctrl_num: '1322221158328',
+  tri_facility_id: '47635RCKPR2791N',
+  tri_chem_id: 'N040',
+  cas_chem_name: 'Barium compounds (except for barium sulfate (CAS No. 7727-43-7))',
+  reporting_year: '2022',
+  one_time_release_qty: null,
+};
+
+/** Every tri.tri_release_qty row of that form, captured live from DMAP (2026-11-01). */
+const ROCKPORT_BARIUM_RELEASE_QTY = (
+  [
+    ['LAND TREA', null, '1'],
+    ['OTH DISP', 5, '0'],
+    ['SI 5.5.3B', 215000, '0'],
+    ['SI 5.5.3A', null, '1'],
+    ['OTH LANDF', 740000, '0'],
+    ['RCRA C', null, '1'],
+    ['UNINJ IIV', null, '1'],
+    ['UNINJ I', null, '1'],
+    ['AIR STACK', 547, '0'],
+    ['AIR FUG', 5, '0'],
+    ['WATER', 1100, '0'],
+    ['WATER', 0, '0'],
+    ['WATER', 0, '0'],
+  ] as const
+).map(([medium, total, na]) => qtyRow(ROCKPORT_BARIUM_FORM.doc_ctrl_num, medium, total, na, null));
 
 /**
  * Facility 96020CLLNS500MA, reporting year 2022, captured live from DMAP (2026-10-08). The N150
@@ -1092,7 +1469,9 @@ describe('DmapService TRI dioxin quantities (reported in grams)', () => {
       { match: '/tri.tri_release_qty/', rows: DIOXIN_FACILITY_RELEASE_QTY },
     ]);
 
-    const [lead, dioxin] = await makeService().getTriReleases(
+    const {
+      items: [lead, dioxin],
+    } = await makeService().getTriReleases(
       { facilityId: '96020CLLNS500MA', year: 2022 },
       createMockContext(),
     );
@@ -1103,9 +1482,10 @@ describe('DmapService TRI dioxin quantities (reported in grams)', () => {
       chemicalName: 'Dioxin and dioxin-like compounds',
       reportingYear: 2022,
       reportedUnit: 'grams',
-      totalReleasesInLbs: 0.0044092452437,
+      oneTimeReleaseInLbs: 0.0044092452437,
       releasesToAirInLbs: 0.000162952476471,
       releasesToLandInLbs: 1.28066528103e-6,
+      totalOnSiteReleasesInLbs: 0.000164233141752,
     });
     // Pound-reported chemicals pass through unconverted and unmarked.
     expect(lead).toEqual({
@@ -1114,6 +1494,7 @@ describe('DmapService TRI dioxin quantities (reported in grams)', () => {
       reportingYear: 2022,
       releasesToAirInLbs: 2.21,
       releasesToLandInLbs: 26.3,
+      totalOnSiteReleasesInLbs: 28.51,
     });
   });
 
@@ -1126,10 +1507,9 @@ describe('DmapService TRI dioxin quantities (reported in grams)', () => {
       { match: '/tri.tri_release_qty/', rows: [] },
     ]);
 
-    const [dioxin] = await makeService().getTriReleases(
-      { facilityId: '96020CLLNS500MA' },
-      createMockContext(),
-    );
+    const {
+      items: [dioxin],
+    } = await makeService().getTriReleases({ facilityId: '96020CLLNS500MA' }, createMockContext());
 
     expect(dioxin).toEqual({
       facilityId: '96020CLLNS500MA',
@@ -1147,20 +1527,20 @@ describe('DmapService TRI dioxin quantities (reported in grams)', () => {
     };
 
     stubFakeDmap(tables);
-    const withBreakdown = await makeService().searchTriReleases(
+    const { items: withBreakdown } = await makeService().searchTriReleases(
       { state: 'CA', county: 'PLUMAS', year: 2022, limit: 5, includeReleaseBreakdown: true },
       createMockContext(),
     );
     vi.restoreAllMocks();
     stubFakeDmap(tables);
-    const withoutBreakdown = await makeService().searchTriReleases(
+    const { items: withoutBreakdown } = await makeService().searchTriReleases(
       { state: 'CA', county: 'PLUMAS', year: 2022, limit: 5 },
       createMockContext(),
     );
 
     expect(withBreakdown[1]).toMatchObject({
       reportedUnit: 'grams',
-      totalReleasesInLbs: 0.0044092452437,
+      oneTimeReleaseInLbs: 0.0044092452437,
       releasesToAirInLbs: 0.000162952476471,
       releasesToLandInLbs: 1.28066528103e-6,
     });
@@ -1173,7 +1553,7 @@ describe('DmapService TRI dioxin quantities (reported in grams)', () => {
       chemicalName: 'Dioxin and dioxin-like compounds',
       reportingYear: 2022,
       reportedUnit: 'grams',
-      totalReleasesInLbs: 0.0044092452437,
+      oneTimeReleaseInLbs: 0.0044092452437,
     });
   });
 });
@@ -1181,7 +1561,7 @@ describe('DmapService TRI dioxin quantities (reported in grams)', () => {
 /**
  * tri.tri_release_qty rows captured live from DMAP (OR, reporting year 2022, 2026-10-08), trimmed
  * to the columns the rollup reads. 1322220659559 mixes a hard AIR STACK quantity with a range-coded
- * AIR FUG row and release_na rows (including the unmapped "SI 5.5.3*" codes); 1322220789794 is
+ * AIR FUG row and release_na rows (including the "SI 5.5.3*" impoundment lines); 1322220789794 is
  * release_na on every medium; 1322221249042 reports hard zeros; 1322220687305 has no rows at all.
  */
 const OR_2022_RELEASE_QTY = [
@@ -1247,11 +1627,12 @@ describe('DmapService.searchTriReleases per-medium breakdown', () => {
       'tri.tri_release_qty': OR_2022_RELEASE_QTY,
     });
 
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'OR', year: 2022, limit: 10, includeReleaseBreakdown: true },
       createMockContext(),
     );
 
+    // In submission-number order, the sort a single-year search sends.
     expect(releases).toEqual([
       {
         facilityId: '97321RCNPC3009S',
@@ -1259,10 +1640,19 @@ describe('DmapService.searchTriReleases per-medium breakdown', () => {
         countyName: 'LINN',
         chemicalName: 'Lead compounds',
         reportingYear: 2022,
-        // one_time_release_qty keeps its own value — never summed with the routine media.
-        totalReleasesInLbs: 4,
+        // one_time_release_qty keeps its own value; the media already count it.
+        oneTimeReleaseInLbs: 4,
         // AIR STACK 17.123; the range-coded AIR FUG row adds nothing.
         releasesToAirInLbs: 17.123,
+        totalOnSiteReleasesInLbs: 17.123,
+      },
+      // No tri_release_qty rows at all — none of the four fields.
+      {
+        facilityId: '97487MRCDS2500W',
+        facilityName: 'FACILITY B',
+        countyName: 'DOUGLAS',
+        chemicalName: 'Ammonia',
+        reportingYear: 2022,
       },
       // Every medium release_na — none of the four fields, no fabricated 0.
       {
@@ -1280,21 +1670,14 @@ describe('DmapService.searchTriReleases per-medium breakdown', () => {
         chemicalName: 'Methanol',
         reportingYear: 2022,
         releasesToAirInLbs: 0,
-      },
-      // No tri_release_qty rows at all — none of the four fields.
-      {
-        facilityId: '97487MRCDS2500W',
-        facilityName: 'FACILITY B',
-        countyName: 'DOUGLAS',
-        chemicalName: 'Ammonia',
-        reportingYear: 2022,
+        totalOnSiteReleasesInLbs: 0,
       },
     ]);
 
     const breakdownUrls = urls.filter((u) => u.includes('/tri.tri_release_qty/'));
     expect(breakdownUrls).toHaveLength(1);
     expect(breakdownUrls[0]).toContain(
-      '/doc_ctrl_num/in/1322220659559%2C1322220789794%2C1322221249042%2C1322220687305/',
+      '/doc_ctrl_num/in/1322220659559%2C1322220687305%2C1322220789794%2C1322221249042/',
     );
     // The search request, then the one breakdown request after it.
     expect(urls).toHaveLength(2);
@@ -1314,21 +1697,38 @@ describe('DmapService.searchTriReleases per-medium breakdown', () => {
       triForm('LATE', 'LATE1', 'Toluene', 2022),
     ],
     'tri.tri_release_qty': [
-      { doc_ctrl_num: 'EARLY', environmental_medium: 'WATER', total_release: 12, release_na: '0' },
-      { doc_ctrl_num: 'LATE', environmental_medium: 'UNINJ I', total_release: 9, release_na: '0' },
-      {
-        doc_ctrl_num: 'LATE',
-        environmental_medium: 'LANDF8795',
-        total_release: 3,
-        release_na: '0',
-      },
+      qtyRow('EARLY', 'WATER', 12),
+      qtyRow('LATE', 'UNINJ I', 9),
+      qtyRow('LATE', 'LANDF8795', 3),
     ],
   };
+
+  it('adds both Form R surface impoundment lines to land on a breakdown search', async () => {
+    stubFakeDmap({
+      'tri.tri_facility': [triFacility('47635RCKPR2791N', 'ROCKPORT PLANT', 'IN', 'SPENCER')],
+      'tri.tri_reporting_form': [ROCKPORT_BARIUM_FORM],
+      'tri.tri_release_qty': ROCKPORT_BARIUM_RELEASE_QTY,
+    });
+
+    const {
+      items: [barium],
+    } = await makeService().searchTriReleases(
+      { state: 'IN', county: 'SPENCER', year: 2022, includeReleaseBreakdown: true },
+      createMockContext(),
+    );
+
+    expect(barium).toMatchObject({
+      facilityId: '47635RCKPR2791N',
+      releasesToAirInLbs: 552,
+      releasesToWaterInLbs: 1100,
+      releasesToLandInLbs: 955005,
+    });
+  });
 
   it('makes exactly one breakdown request for matches anywhere in the state', async () => {
     const urls = stubFakeDmap(firstAndLast);
 
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'WA', limit: 5, includeReleaseBreakdown: true },
       createMockContext(),
     );
@@ -1359,7 +1759,7 @@ describe('DmapService.searchTriReleases per-medium breakdown', () => {
       'tri.tri_release_qty': [],
     });
 
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'WA', limit: 2, includeReleaseBreakdown: true },
       createMockContext(),
     );
@@ -1376,7 +1776,7 @@ describe('DmapService.searchTriReleases per-medium breakdown', () => {
       'tri.tri_reporting_form': [triForm('D2022', 'FAC1', 'Benzene', 2022)],
     });
 
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'WA', year: 1990, includeReleaseBreakdown: true },
       createMockContext(),
     );
@@ -1391,7 +1791,7 @@ describe('DmapService.searchTriReleases per-medium breakdown', () => {
   ])('makes no breakdown request and carries no media when the flag is %s', async (_, flag) => {
     const urls = stubFakeDmap(firstAndLast);
 
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'WA', limit: 5, ...flag },
       createMockContext(),
     );
@@ -1404,7 +1804,7 @@ describe('DmapService.searchTriReleases per-medium breakdown', () => {
         countyName: 'KING',
         chemicalName: 'Benzene',
         reportingYear: 2022,
-        totalReleasesInLbs: 7,
+        oneTimeReleaseInLbs: 7,
       },
       {
         facilityId: 'LATE1',
@@ -1425,7 +1825,7 @@ describe('DmapService.searchTriReleases request shape', () => {
 
   const joinPath = '/join/tri.tri_reporting_form/tri_facility_id/equals/tri_facility_id';
 
-  it('joins the forms to the state facilities in one request ranged 1:limit', async () => {
+  it('joins the forms to the state facilities in one request ranged 1:limit+1', async () => {
     const urls = stubFakeDmap({
       'tri.tri_facility': [
         triFacility('FAC1', 'ACME', 'WA', 'KING'),
@@ -1437,24 +1837,24 @@ describe('DmapService.searchTriReleases request shape', () => {
       ],
     });
 
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'WA', limit: 1 },
       createMockContext(),
     );
 
     expect(releases.map((r) => r.facilityId)).toEqual(['FAC1']);
     expect(urls).toEqual([
-      `https://data.epa.gov/dmapservice/tri.tri_facility/state_abbr/equals/WA${joinPath}${NEWEST_FIRST_SORT}/1:1/json`,
+      `https://data.epa.gov/dmapservice/tri.tri_facility/state_abbr/equals/WA${joinPath}${NEWEST_FIRST_SORT}/1:2/json`,
     ]);
   });
 
-  it('defaults to 50 joined rows', async () => {
+  it('defaults to 50 joined rows, reading one more to see whether more follow', async () => {
     const urls = stubFakeDmap({ 'tri.tri_facility': [], 'tri.tri_reporting_form': [] });
 
     await makeService().searchTriReleases({ state: 'WA' }, createMockContext());
 
     expect(urls).toHaveLength(1);
-    expect(urls[0]).toMatch(/\/1:50\/json$/);
+    expect(urls[0]).toMatch(/\/1:51\/json$/);
   });
 
   it('filters facilities on county_name before the join and forms on year and chemical after it', async () => {
@@ -1469,14 +1869,14 @@ describe('DmapService.searchTriReleases request shape', () => {
       ],
     });
 
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'WA', county: 'KING', year: 2023, chemicalName: 'chromium compounds', limit: 5 },
       createMockContext(),
     );
 
     expect(releases).toEqual([]);
     expect(urls).toEqual([
-      `https://data.epa.gov/dmapservice/tri.tri_facility/state_abbr/equals/WA/and/county_name/contains/KING${joinPath}/and/reporting_year/equals/2023/and/cas_chem_name/contains/chromium%20compounds/1:5/json`,
+      `https://data.epa.gov/dmapservice/tri.tri_facility/state_abbr/equals/WA/and/county_name/contains/KING${joinPath}/and/reporting_year/equals/2023/and/cas_chem_name/contains/chromium%20compounds${NEWEST_FIRST_SORT}/1:6/json`,
     ]);
   });
 
@@ -1486,7 +1886,7 @@ describe('DmapService.searchTriReleases request shape', () => {
       'tri.tri_reporting_form': [triForm('F1', '99701FRBNK', 'Lead', 2022)],
     });
 
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'AK', county: 'FAIRBANKS NORTH STAR' },
       createMockContext(),
     );
@@ -1532,14 +1932,7 @@ function sparseState(count: number): Record<string, DmapRow[]> {
   return {
     'tri.tri_facility': facilities,
     'tri.tri_reporting_form': forms,
-    'tri.tri_release_qty': [
-      {
-        doc_ctrl_num: `DOC${count - 1}`,
-        environmental_medium: 'AIR STACK',
-        total_release: 5,
-        release_na: '0',
-      },
-    ],
+    'tri.tri_release_qty': [qtyRow(`DOC${count - 1}`, 'AIR STACK', 5)],
   };
 }
 
@@ -1568,7 +1961,7 @@ describe('DmapService.searchTriReleases against DMAP semantics', () => {
   it('returns each matching form with its facility name, honoring county, year, and chemical', async () => {
     stubFakeDmap(tables);
 
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'WA', county: 'KING', year: 2022, chemicalName: 'lead', limit: 10 },
       createMockContext(),
     );
@@ -1594,7 +1987,7 @@ describe('DmapService.searchTriReleases against DMAP semantics', () => {
   it('caps the records at limit, newest reporting year first', async () => {
     stubFakeDmap(tables);
 
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'WA', limit: 3 },
       createMockContext(),
     );
@@ -1610,7 +2003,7 @@ describe('DmapService.searchTriReleases against DMAP semantics', () => {
   it('returns nothing when no facility in the state filed a matching form', async () => {
     stubFakeDmap(tables);
 
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'WA', year: 1990, limit: 10 },
       createMockContext(),
     );
@@ -1630,7 +2023,7 @@ describe('DmapService.searchTriReleases against DMAP semantics', () => {
       ],
     });
 
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'WA', year: 2022, limit: 5 },
       createMockContext(),
     );
@@ -1653,7 +2046,7 @@ describe('DmapService.searchTriReleases against DMAP semantics', () => {
   it('finds a sparse match in a large state with one request, however many facilities precede it', async () => {
     const urls = stubFakeDmap(sparseState(2000));
 
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'TX', year: 2022, limit: 200 },
       createMockContext(),
     );
@@ -1710,7 +2103,7 @@ describe('DmapService.searchTriReleases against DMAP semantics', () => {
         reportingYear: 2022,
       },
     ]);
-    const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    const text = textOf(call.content);
     const sections = text.split('\n### ').slice(1);
     expect(sections).toHaveLength(2);
     expect(sections[0]).toContain('TWO HARBORS SIDING (55616LPTWO)');
@@ -1723,7 +2116,7 @@ describe('DmapService.searchTriReleases against DMAP semantics', () => {
   it('adds the breakdown to a sparse search with exactly one more request', async () => {
     const urls = stubFakeDmap(sparseState(2000));
 
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'TX', year: 2022, limit: 200, includeReleaseBreakdown: true },
       createMockContext(),
     );
@@ -1734,35 +2127,7 @@ describe('DmapService.searchTriReleases against DMAP semantics', () => {
   });
 });
 
-describe('DmapService.searchWaterSystems pagination', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it('uses DMAP one-based ranges and bounds returned systems when limit is one', async () => {
-    const urls = stubDmapFetch([
-      {
-        match: '/sdwis.water_system/',
-        rows: [
-          { pwsid: 'WA0000001', pws_name: 'First Water System' },
-          { pwsid: 'WA0000002', pws_name: 'Second Water System' },
-        ],
-      },
-    ]);
-
-    const systems = await makeService().searchWaterSystems(
-      { state: 'WA', limit: 1 },
-      createMockContext(),
-    );
-
-    expect(systems).toEqual([{ pwsid: 'WA0000001', name: 'First Water System' }]);
-    expect(urls).toEqual([
-      'https://data.epa.gov/dmapservice/sdwis.water_system/primacy_agency_code/equals/WA/1:1/json',
-    ]);
-  });
-});
-
-/** WA-style PWSID for violator number `n` (1-based). */
+/** WA-style PWSID for system number `n` (1-based). */
 const pwsidOf = (n: number) => `WA${String(n).padStart(7, '0')}`;
 
 /** IDs a `sdwis.water_system` URL restricts on through its `pwsid/in/<ids>` filter. */
@@ -1771,396 +2136,535 @@ function pwsidInFilter(url: string): string[] | undefined {
   return match ? decodeURIComponent(match[1]!).split(',') : undefined;
 }
 
-/** Status codes a `sdwis.violation` URL restricts on through `compliance_status_code/in/<codes>`. */
-function statusInFilter(url: string): string[] | undefined {
-  const match = /\/compliance_status_code\/in\/([^/]+)\//.exec(url);
-  return match ? decodeURIComponent(match[1]!).split(',') : undefined;
-}
+/** The `first:last` range a DMAP URL reads. */
+const rangeOf = (url: string) => /\/(\d+:\d+)\/json$/.exec(url)?.[1];
+
+const BY_PWSID_SORT = '/sort/sdwis.water_system.pwsid:asc';
+const WATER_SYSTEM_URL = 'https://data.epa.gov/dmapservice/sdwis.water_system';
+
+/** A WA water system row, number `n`, under WA primacy unless `extra` says otherwise. */
+const waterSystem = (n: number, extra: DmapRow = {}): DmapRow => ({
+  pwsid: pwsidOf(n),
+  pws_name: `System ${n}`,
+  primacy_agency_code: 'WA',
+  ...extra,
+});
 
 /**
- * Serve sdwis.violation and sdwis.water_system the way DMAP filters them: only the rows the URL's
- * `pwsid in` list names (when it has one) and, for violations, the `compliance_status_code in`
- * list (a fixture row without a code is an open "O" violation), then the `first:last` range.
+ * A current-violation lookup over a fixed violator set, recording every scope it is asked about:
+ * a state scope answers that state's violators, a PWSID scope the listed ones, each in PWSID
+ * order, as EchoService.findCurrentSdwViolators does.
  */
-function stubSdwisFetch(
-  violations: Array<{ pwsid: string; [column: string]: unknown }>,
-  systems: Array<{ pwsid: string; [column: string]: unknown }>,
-): string[] {
-  const urls: string[] = [];
-  vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
-    const url = String(input);
-    urls.push(url);
-    let table: unknown[];
-    if (url.includes('/sdwis.violation/')) {
-      const ids = pwsidInFilter(url);
-      const codes = statusInFilter(url);
-      table = violations.filter(
-        (v) =>
-          (!ids || ids.includes(v.pwsid)) &&
-          (!codes || codes.includes(String(v.compliance_status_code ?? 'O'))),
-      );
-    } else if (url.includes('/sdwis.water_system/')) {
-      const ids = pwsidInFilter(url);
-      table = ids ? systems.filter((s) => ids.includes(s.pwsid)) : systems;
-    } else {
-      return Promise.reject(validationError(`Unmocked DMAP fetch: ${url}`, { retryable: false }));
-    }
-    return Promise.resolve(new Response(JSON.stringify(dmapPage(url, table)), { status: 200 }));
-  });
-  return urls;
+function fakeViolatorLookup(violators: Array<{ pwsid: string; state?: string }>) {
+  const scopes: SdwViolatorScope[] = [];
+  const lookup: CurrentViolatorLookup = async (scope) => {
+    scopes.push(scope);
+    const found = violators.filter((v) =>
+      'pwsids' in scope ? scope.pwsids.includes(v.pwsid) : (v.state ?? 'WA') === scope.state,
+    );
+    return { pwsids: new Set(found.map((v) => v.pwsid).sort()) };
+  };
+  return { lookup, scopes };
 }
 
-describe('DmapService.searchWaterSystems violation filter', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+describe('DmapService.searchWaterSystems paging', () => {
+  afterEach(() => vi.restoreAllMocks());
 
-  /** Two violation rows per violator, so distinct PWSIDs are half the scanned rows. */
-  const violationRows = (violators: number) =>
-    Array.from({ length: violators * 2 }, (_, i) => ({ pwsid: pwsidOf(Math.floor(i / 2) + 1) }));
-  const systemsFor = (violators: number) =>
-    Array.from({ length: violators }, (_, i) => ({
-      pwsid: pwsidOf(i + 1),
-      pws_name: `System ${i + 1}`,
-    }));
+  // Table order is not PWSID order, so only the sort can put System 1 first.
+  const shuffled = [3, 1, 5, 2, 4].map((n) => waterSystem(n));
 
-  it('returns violators past the first 100 the violation scan found', async () => {
-    const urls = stubSdwisFetch(violationRows(150), systemsFor(150));
-    const ctx = createMockContext();
+  it('reads limit + 1 rows in PWSID order and reports the next row as nextOffset', async () => {
+    const urls = stubFakeDmap({ 'sdwis.water_system': shuffled });
 
-    const systems = await makeService().searchWaterSystems(
-      { state: 'WA', hasViolation: true, limit: 200 },
-      ctx,
-    );
-
-    expect(systems).toHaveLength(150);
-    expect(systems.at(-1)).toEqual(
-      expect.objectContaining({ pwsid: pwsidOf(150), hasViolation: true }),
-    );
-    expect(systems.every((s) => s.hasViolation === true)).toBe(true);
-    // 300 violation rows is below the 1,000-row scan, so nothing is disclosed.
-    expect(getEnrichment(ctx)).not.toHaveProperty('notice');
-    expect(urls.filter((u) => u.includes('/sdwis.water_system/'))).toHaveLength(1);
-  });
-
-  it('stops requesting systems once the limit is filled', async () => {
-    const urls = stubSdwisFetch(violationRows(450), systemsFor(450));
-
-    const systems = await makeService().searchWaterSystems(
-      { state: 'WA', hasViolation: true, limit: 50 },
+    const page = await makeService().searchWaterSystems(
+      { state: 'WA', limit: 2 },
       createMockContext(),
     );
 
-    expect(systems.map((s) => s.pwsid)).toEqual(
-      Array.from({ length: 50 }, (_, i) => pwsidOf(i + 1)),
-    );
-    const systemUrls = urls.filter((u) => u.includes('/sdwis.water_system/'));
-    expect(systemUrls).toHaveLength(1);
-    expect(systemUrls[0]).toContain('/1:50/json');
-  });
-
-  it('walks every chunk of at most 200 IDs when the filters thin the matches', async () => {
-    const violations = Array.from({ length: 1000 }, (_, i) => ({ pwsid: pwsidOf(i + 1) }));
-    // Only three violators are community systems; they sit in the first, third, and last chunk.
-    const communityViolators = [5, 450, 1000].map((n) => ({
-      pwsid: pwsidOf(n),
-      pws_name: `Community ${n}`,
-      pws_type_code: 'CWS',
-    }));
-    const urls = stubSdwisFetch(violations, communityViolators);
-
-    const systems = await makeService().searchWaterSystems(
-      { state: 'WA', hasViolation: true, pwsType: 'community', limit: 10 },
-      createMockContext(),
-    );
-
-    expect(systems.map((s) => s.pwsid)).toEqual([pwsidOf(5), pwsidOf(450), pwsidOf(1000)]);
-    const systemUrls = urls.filter((u) => u.includes('/sdwis.water_system/'));
-    expect(systemUrls).toHaveLength(5);
-    const chunks = systemUrls.map((u) => pwsidInFilter(u) ?? []);
-    expect(chunks.every((ids) => ids.length <= 200)).toBe(true);
-    expect(new Set(chunks.flat()).size).toBe(1000);
-    expect(systemUrls.every((u) => u.includes('/pws_type_code/equals/CWS/'))).toBe(true);
-    // Each chunk asks only for the rows the limit still has room for.
-    expect(systemUrls.map((u) => /\/(\d+:\d+)\/json$/.exec(u)?.[1])).toEqual([
-      '1:10',
-      '1:9',
-      '1:9',
-      '1:8',
-      '1:8',
+    expect(page.items.map((s) => s.pwsid)).toEqual([pwsidOf(1), pwsidOf(2)]);
+    expect(page.nextOffset).toBe(2);
+    expect(page).not.toHaveProperty('totalCount');
+    expect(urls).toEqual([
+      `${WATER_SYSTEM_URL}/primacy_agency_code/equals/WA${BY_PWSID_SORT}/1:3/json`,
     ]);
   });
 
-  it('discloses that a scan reaching its 1,000-row cap may miss violators', async () => {
-    // 1,000 rows naming 500 distinct systems — the state has more violation records than were read.
-    const urls = stubSdwisFetch(violationRows(500), systemsFor(500));
-    const ctx = createMockContext();
+  it('continues from an unaligned offset to a last page that has no nextOffset', async () => {
+    const urls = stubFakeDmap({ 'sdwis.water_system': shuffled });
 
-    const systems = await makeService().searchWaterSystems(
-      { state: 'WA', hasViolation: true, limit: 5 },
-      ctx,
-    );
-
-    expect(systems).toHaveLength(5);
-    expect(urls.find((u) => u.includes('/sdwis.violation/'))).toContain('/1:1000/json');
-    const { notice } = getEnrichment(ctx) as { notice?: string };
-    expect(notice).toBe(
-      "The violation check stopped at the first 1,000 of WA's open SDWIS violation records, which name 500 distinct systems. Records past that point were not read, so these results may not include every system with an open violation in the state.",
-    );
-  });
-
-  it('returns nothing after walking every chunk when no violator matches the filters', async () => {
-    const urls = stubSdwisFetch(violationRows(250), []);
-
-    const systems = await makeService().searchWaterSystems(
-      { state: 'WA', hasViolation: true, pwsType: 'transient', limit: 200 },
+    const page = await makeService().searchWaterSystems(
+      { state: 'WA', offset: 3, limit: 2 },
       createMockContext(),
     );
 
-    expect(systems).toEqual([]);
-    expect(urls.filter((u) => u.includes('/sdwis.water_system/'))).toHaveLength(2);
+    expect(page.items.map((s) => s.pwsid)).toEqual([pwsidOf(4), pwsidOf(5)]);
+    // offset 3 hides the first rows, so the call never saw the whole match.
+    expect(page).toEqual({ items: expect.any(Array) });
+    expect(rangeOf(urls[0]!)).toBe('4:6');
   });
 
-  it('makes no system request when the scan finds no violators', async () => {
-    const urls = stubSdwisFetch([], systemsFor(3));
+  it('returns an empty page with no nextOffset past the end', async () => {
+    stubFakeDmap({ 'sdwis.water_system': shuffled });
 
-    const systems = await makeService().searchWaterSystems(
-      { state: 'WA', hasViolation: true, limit: 5 },
+    const page = await makeService().searchWaterSystems(
+      { state: 'WA', offset: 50, limit: 2 },
       createMockContext(),
     );
 
-    expect(systems).toEqual([]);
-    expect(urls).toHaveLength(1);
+    expect(page).toEqual({ items: [] });
+  });
+
+  it('sets totalCount when one page from offset 0 holds the whole match', async () => {
+    stubFakeDmap({ 'sdwis.water_system': shuffled });
+
+    const page = await makeService().searchWaterSystems(
+      { state: 'WA', limit: 50 },
+      createMockContext(),
+    );
+
+    expect(page.items).toHaveLength(5);
+    expect(page.totalCount).toBe(5);
+    expect(page).not.toHaveProperty('nextOffset');
+  });
+
+  it('matches stored ZIP+4 and nine-digit ZIPs by their five-digit prefix', async () => {
+    const urls = stubFakeDmap({
+      'sdwis.water_system': [
+        waterSystem(1, { zip_code: '98104' }),
+        waterSystem(2, { zip_code: '98104-3122' }),
+        waterSystem(3, { zip_code: '981042017' }),
+        waterSystem(4, { zip_code: '98105' }),
+      ],
+    });
+
+    const page = await makeService().searchWaterSystems({ zipCode: '98104' }, createMockContext());
+
+    expect(page.items.map((s) => s.zip)).toEqual(['98104', '98104-3122', '981042017']);
+    expect(urls[0]).toBe(`${WATER_SYSTEM_URL}/zip_code/beginsWith/98104${BY_PWSID_SORT}/1:51/json`);
+  });
+
+  it('active_only keeps only activity code A; without it every code returns', async () => {
+    const tables = {
+      'sdwis.water_system': [
+        waterSystem(1, { pws_activity_code: 'A' }),
+        waterSystem(2, { pws_activity_code: 'I' }),
+        waterSystem(3, { pws_activity_code: 'N' }),
+      ],
+    };
+    const urls = stubFakeDmap(tables);
+
+    const active = await makeService().searchWaterSystems(
+      { state: 'WA', activeOnly: true },
+      createMockContext(),
+    );
+    const all = await makeService().searchWaterSystems({ state: 'WA' }, createMockContext());
+
+    expect(active.items.map((s) => s.pwsid)).toEqual([pwsidOf(1)]);
+    expect(all.items).toHaveLength(3);
+    expect(urls[0]).toContain('/primacy_agency_code/equals/WA/and/pws_activity_code/equals/A/');
+    expect(urls[1]).not.toContain('pws_activity_code');
+  });
+
+  it.each([
+    ['community', 'CWS'],
+    ['non-transient', 'NTNCWS'],
+    ['transient', 'TNCWS'],
+  ] as const)('sends pws_type %s as pws_type_code %s', async (pwsType, code) => {
+    const urls = stubFakeDmap({ 'sdwis.water_system': [] });
+
+    await makeService().searchWaterSystems({ state: 'WA', pwsType }, createMockContext());
+
+    expect(urls[0]).toContain(`/pws_type_code/equals/${code}/`);
   });
 });
 
-describe('DmapService.searchWaterSystems violation filter on a ZIP', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
+/** sdwis.geographic_area rows: one per system, with its counties served. */
+const servedBy = (systems: DmapRow[]): DmapRow[] =>
+  systems.map((s) => ({ pwsid: s.pwsid, county_served: s.county_served ?? null }));
+
+/** Fake DMAP tables for systems that carry their `county_served` in the geographic_area table. */
+function countyTables(systems: DmapRow[]) {
+  return {
+    'sdwis.water_system': systems.map(({ county_served: _, ...system }) => system),
+    'sdwis.geographic_area': servedBy(systems),
+  };
+}
+
+describe('DmapService.searchWaterSystems county served', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const tx = (n: number, county: string) =>
+    waterSystem(n, {
+      pwsid: `TX${String(n).padStart(7, '0')}`,
+      primacy_agency_code: 'TX',
+      county_served: county,
+    });
+
+  it('joins geographic_area and keeps only systems serving the whole county', async () => {
+    const urls = stubFakeDmap(
+      countyTables([tx(1, 'Harris'), tx(2, 'Harrison'), tx(3, 'Harris'), tx(4, 'Dallas')]),
+    );
+
+    const page = await makeService().searchWaterSystems(
+      { state: 'TX', county: 'HARRIS' },
+      createMockContext(),
+    );
+
+    expect(page.items.map((s) => s.pwsid)).toEqual(['TX0000001', 'TX0000003']);
+    expect(page.totalCount).toBe(2);
+    expect(urls).toEqual([
+      `${WATER_SYSTEM_URL}/primacy_agency_code/equals/TX/join/sdwis.geographic_area/pwsid/equals/pwsid/and/county_served/contains/HARRIS${BY_PWSID_SORT}/1:100/json`,
+    ]);
   });
 
-  /** `count` systems in one ZIP, numbered from 1. */
+  it.each(['DALLAS', 'JOHNSON'])(
+    'matches %s against each entry of a comma-joined county list',
+    async (county) => {
+      stubFakeDmap(countyTables([tx(1, 'Dallas,Johnson'), tx(2, 'Johnson County Line')]));
+
+      const page = await makeService().searchWaterSystems(
+        { state: 'TX', county },
+        createMockContext(),
+      );
+
+      expect(page.items.map((s) => s.pwsid)).toEqual(['TX0000001']);
+    },
+  );
+
+  it.each([
+    [
+      'a stored Parish suffix',
+      'CALCASIEU',
+      'Calcasieu Parish',
+      'Calcasieu Lake Parish',
+      'CALCASIEU',
+    ],
+    [
+      'a period, sent as a wildcard',
+      'ST. TAMMANY',
+      'St. Tammany Parish',
+      'St Tammany Parish',
+      'ST_%20TAMMANY',
+    ],
+    [
+      'an independent city beside its county',
+      'BALTIMORE',
+      'Baltimore',
+      'Baltimore city',
+      'BALTIMORE',
+    ],
+  ])('handles %s', async (_, county, stored, other, sent) => {
+    const urls = stubFakeDmap(countyTables([tx(1, stored), tx(2, other)]));
+
+    const page = await makeService().searchWaterSystems(
+      { state: 'TX', county },
+      createMockContext(),
+    );
+
+    expect(page.items.map((s) => s.pwsid)).toEqual(['TX0000001']);
+    expect(urls[0]).toContain(`/county_served/contains/${sent}/`);
+  });
+
+  it('pages past rows the county test drops, each system once, in PWSID order', async () => {
+    // PWSID order: 50 Harris systems, 70 Harrison, then 30 more Harris.
+    const systems = Array.from({ length: 150 }, (_, i) =>
+      tx(i + 1, i >= 50 && i < 120 ? 'Harrison' : 'Harris'),
+    );
+    const urls = stubFakeDmap(countyTables(systems));
+    const service = makeService();
+
+    const first = await service.searchWaterSystems(
+      { state: 'TX', county: 'HARRIS', limit: 60 },
+      createMockContext(),
+    );
+    const second = await service.searchWaterSystems(
+      { state: 'TX', county: 'HARRIS', offset: first.nextOffset!, limit: 60 },
+      createMockContext(),
+    );
+
+    // The first page takes Harris 1–50 and 121–130; the 61st match is row 131 (position 130).
+    expect(first.items).toHaveLength(60);
+    expect(first.nextOffset).toBe(130);
+    expect(first).not.toHaveProperty('totalCount');
+    expect(second.items.map((s) => s.pwsid)).toEqual(
+      Array.from({ length: 20 }, (_, i) => `TX${String(i + 131).padStart(7, '0')}`),
+    );
+    expect(second).not.toHaveProperty('nextOffset');
+    const seen = [...first.items, ...second.items].map((s) => s.pwsid);
+    expect(new Set(seen).size).toBe(80);
+    expect(seen).toEqual(seen.toSorted());
+    expect(urls.map(rangeOf)).toEqual(['1:100', '101:200', '131:230']);
+  });
+
+  it('discloses a county walk its page limit ends short, continuing at the next row', async () => {
+    const systems = [
+      tx(1, 'Harris'),
+      ...Array.from({ length: 349 }, (_, i) => tx(i + 2, 'Harrison')),
+    ];
+    stubFakeDmap(countyTables(systems));
+    const ctx = createMockContext();
+
+    const page = await makeService().searchWaterSystems(
+      { state: 'TX', county: 'HARRIS', limit: 5 },
+      ctx,
+    );
+
+    expect(page.items.map((s) => s.pwsid)).toEqual(['TX0000001']);
+    expect(page.nextOffset).toBe(300);
+    expect(getEnrichment(ctx)).toMatchObject({
+      notice:
+        '"HARRIS" was matched as part of a longer value and kept only as a whole entry, and the first 300 rows containing it held 1 match, so more may exist past them. Continue from nextOffset.',
+    });
+  });
+
+  it.each([
+    ['no letter or digit', '...', 'unmatchable_filter'],
+    ['a name too long for one request', 'K'.repeat(4000), 'filter_too_long'],
+  ])('rejects a county with %s before any request', async (_, county, reason) => {
+    const urls = stubFakeDmap(countyTables([tx(1, 'Harris')]));
+
+    await expect(
+      makeService().searchWaterSystems({ state: 'TX', county }, createMockContext()),
+    ).rejects.toMatchObject({ code: JsonRpcErrorCode.ValidationError, data: { reason } });
+    expect(urls).toEqual([]);
+  });
+});
+
+describe('DmapService.searchWaterSystems current violators in a state', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('asks for the state violator list, then reads those rows under the state primacy filter', async () => {
+    // ECHO's WA list also names a system in WA under EPA Region 10 primacy.
+    const regionTen = { pwsid: '105300001', pws_name: 'Tribal System', primacy_agency_code: '10' };
+    const urls = stubFakeDmap({
+      'sdwis.water_system': [waterSystem(1), waterSystem(2), waterSystem(3), regionTen],
+    });
+    const { lookup, scopes } = fakeViolatorLookup([
+      { pwsid: pwsidOf(3) },
+      { pwsid: pwsidOf(1) },
+      { pwsid: '105300001' },
+    ]);
+
+    const page = await makeService().searchWaterSystems(
+      { state: 'WA', currentViolators: lookup },
+      createMockContext(),
+    );
+
+    expect(page).toEqual({
+      items: [
+        expect.objectContaining({ pwsid: pwsidOf(1), hasViolation: true }),
+        expect.objectContaining({ pwsid: pwsidOf(3), hasViolation: true }),
+      ],
+      totalCount: 2,
+    });
+    expect(scopes).toEqual([{ state: 'WA' }]);
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toMatch(
+      /\/sdwis\.water_system\/primacy_agency_code\/equals\/WA\/and\/pwsid\/in\/[^/]+\/1:3\/json$/,
+    );
+    expect(pwsidInFilter(urls[0]!)).toEqual(['105300001', pwsidOf(1), pwsidOf(3)]);
+  });
+
+  it('passes pws_type to the lookup and keeps active_only on the row read', async () => {
+    const urls = stubFakeDmap({
+      'sdwis.water_system': [waterSystem(1, { pws_type_code: 'NTNCWS', pws_activity_code: 'A' })],
+    });
+    const { lookup, scopes } = fakeViolatorLookup([{ pwsid: pwsidOf(1) }]);
+
+    const page = await makeService().searchWaterSystems(
+      { state: 'WA', pwsType: 'non-transient', activeOnly: true, currentViolators: lookup },
+      createMockContext(),
+    );
+
+    expect(page.items.map((s) => s.pwsid)).toEqual([pwsidOf(1)]);
+    expect(scopes).toEqual([{ state: 'WA', systemType: 'non-transient' }]);
+    expect(urls[0]).toContain(
+      '/primacy_agency_code/equals/WA/and/pws_type_code/equals/NTNCWS/and/pws_activity_code/equals/A/and/pwsid/in/',
+    );
+  });
+
+  it('pages by violator-list position across 200-PWSID slices, each system once', async () => {
+    // 450 violators; every third has no row under WA primacy, so the read keeps two of three.
+    const violators = Array.from({ length: 450 }, (_, i) => ({ pwsid: pwsidOf(i + 1) }));
+    const rows = violators.flatMap((_, i) => (i % 3 === 2 ? [] : [waterSystem(i + 1)]));
+    const urls = stubFakeDmap({ 'sdwis.water_system': rows });
+    const { lookup } = fakeViolatorLookup(violators);
+    const service = makeService();
+
+    const pages = [];
+    let offset: number | undefined = 0;
+    while (offset !== undefined) {
+      const page = await service.searchWaterSystems(
+        { state: 'WA', currentViolators: lookup, offset, limit: 150 },
+        createMockContext(),
+      );
+      pages.push(page);
+      offset = page.nextOffset;
+    }
+
+    // Slices 0–199 and 200–399 keep 267 > 150, so the 151st kept system (position 225) is next.
+    expect(pages.map((p) => [p.items.length, p.nextOffset])).toEqual([
+      [150, 225],
+      [150, undefined],
+    ]);
+    expect(pages[0]).not.toHaveProperty('totalCount');
+    const seen = pages.flatMap((p) => p.items.map((s) => s.pwsid));
+    expect(seen).toEqual(rows.map((r) => r.pwsid));
+    const slices = urls.map((u) => pwsidInFilter(u) ?? []);
+    expect(slices.map((ids) => ids.length)).toEqual([200, 200, 200, 25]);
+    expect(slices[2]![0]).toBe(pwsidOf(226));
+  });
+
+  it('reports totalCount beside nextOffset when one slice held the whole list', async () => {
+    const violators = Array.from({ length: 166 }, (_, i) =>
+      i < 40 ? { pwsid: `10${String(i).padStart(7, '0')}` } : { pwsid: pwsidOf(i) },
+    );
+    stubFakeDmap({
+      'sdwis.water_system': [
+        ...violators.slice(0, 40).map((v) => ({ pwsid: v.pwsid, primacy_agency_code: '10' })),
+        ...violators.slice(40).map((v) => waterSystem(Number(v.pwsid.slice(2)))),
+      ],
+    });
+    const { lookup } = fakeViolatorLookup(violators);
+
+    const page = await makeService().searchWaterSystems(
+      { state: 'WA', currentViolators: lookup, limit: 50 },
+      createMockContext(),
+    );
+
+    expect(page.items).toHaveLength(50);
+    expect(page.totalCount).toBe(126);
+    expect(page.nextOffset).toBe(90);
+  });
+
+  it('makes no DMAP request when the lookup reports no violators', async () => {
+    const urls = stubFakeDmap({ 'sdwis.water_system': [waterSystem(1)] });
+    const { lookup } = fakeViolatorLookup([]);
+
+    const page = await makeService().searchWaterSystems(
+      { state: 'WA', currentViolators: lookup },
+      createMockContext(),
+    );
+
+    expect(page).toEqual({ items: [], totalCount: 0 });
+    expect(urls).toEqual([]);
+  });
+
+  it('returns an empty page past the end of the violator list', async () => {
+    const urls = stubFakeDmap({ 'sdwis.water_system': [waterSystem(1)] });
+    const { lookup } = fakeViolatorLookup([{ pwsid: pwsidOf(1) }]);
+
+    const page = await makeService().searchWaterSystems(
+      { state: 'WA', currentViolators: lookup, offset: 5 },
+      createMockContext(),
+    );
+
+    expect(page).toEqual({ items: [] });
+    expect(urls).toEqual([]);
+  });
+});
+
+describe("DmapService.searchWaterSystems current violators among a ZIP's or county's systems", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   const zipSystems = (count: number) =>
-    Array.from({ length: count }, (_, i) => ({
-      pwsid: pwsidOf(i + 1),
-      pws_name: `System ${i + 1}`,
-      zip_code: '98104',
-    }));
-  const violationUrls = (urls: string[]) => urls.filter((u) => u.includes('/sdwis.violation/'));
-  const systemUrls = (urls: string[]) => urls.filter((u) => u.includes('/sdwis.water_system/'));
+    Array.from({ length: count }, (_, i) => waterSystem(i + 1, { zip_code: '98104' }));
 
-  it('without has_violation makes one ZIP request and flags nothing', async () => {
-    const urls = stubSdwisFetch([{ pwsid: pwsidOf(2) }], zipSystems(3));
-
-    const systems = await makeService().searchWaterSystems(
-      { zipCode: '98104', limit: 50 },
-      createMockContext(),
-    );
-
-    expect(systems.map((s) => s.pwsid)).toEqual([pwsidOf(1), pwsidOf(2), pwsidOf(3)]);
-    expect(systems.every((s) => s.hasViolation === undefined)).toBe(true);
-    expect(urls).toHaveLength(1);
-    expect(urls[0]).toContain('/sdwis.water_system/zip_code/equals/98104/1:50/json');
-  });
-
-  it('returns only the ZIP systems with a violation, checked by PWSID', async () => {
+  it("reads the ZIP's systems in one request, then looks them up by PWSID", async () => {
+    const urls = stubFakeDmap({ 'sdwis.water_system': zipSystems(5) });
     // WA0000099 is a violator outside the ZIP; it must not appear.
-    const urls = stubSdwisFetch(
-      [{ pwsid: pwsidOf(2) }, { pwsid: pwsidOf(2) }, { pwsid: pwsidOf(4) }, { pwsid: pwsidOf(99) }],
-      zipSystems(5),
-    );
-    const ctx = createMockContext();
+    const { lookup, scopes } = fakeViolatorLookup([2, 4, 99].map((n) => ({ pwsid: pwsidOf(n) })));
 
-    const systems = await makeService().searchWaterSystems(
-      { zipCode: '98104', hasViolation: true, limit: 50 },
-      ctx,
-    );
-
-    expect(systems).toEqual([
-      expect.objectContaining({ pwsid: pwsidOf(2), hasViolation: true }),
-      expect.objectContaining({ pwsid: pwsidOf(4), hasViolation: true }),
-    ]);
-    expect(systemUrls(urls)).toEqual([
-      expect.stringContaining('/sdwis.water_system/zip_code/equals/98104/1:1000/json'),
-    ]);
-    expect(violationUrls(urls)).toHaveLength(1);
-    expect(pwsidInFilter(violationUrls(urls)[0]!)).toEqual(
-      Array.from({ length: 5 }, (_, i) => pwsidOf(i + 1)),
-    );
-    expect(getEnrichment(ctx)).not.toHaveProperty('notice');
-  });
-
-  it('checks a state + ZIP search by PWSID instead of scanning the state', async () => {
-    const urls = stubSdwisFetch([{ pwsid: pwsidOf(3) }], zipSystems(3));
-
-    const systems = await makeService().searchWaterSystems(
-      { state: 'WA', zipCode: '98104', hasViolation: true, limit: 50 },
+    const page = await makeService().searchWaterSystems(
+      { state: 'WA', zipCode: '98104', currentViolators: lookup },
       createMockContext(),
     );
 
-    expect(systems.map((s) => s.pwsid)).toEqual([pwsidOf(3)]);
-    expect(systemUrls(urls)[0]).toContain(
-      '/primacy_agency_code/equals/WA/and/zip_code/equals/98104/',
-    );
-    expect(violationUrls(urls)).toHaveLength(1);
-    expect(violationUrls(urls)[0]).not.toContain('primacy_agency_code');
-    expect(pwsidInFilter(violationUrls(urls)[0]!)).toHaveLength(3);
+    expect(page).toEqual({
+      items: [
+        expect.objectContaining({ pwsid: pwsidOf(2), hasViolation: true }),
+        expect.objectContaining({ pwsid: pwsidOf(4), hasViolation: true }),
+      ],
+      totalCount: 2,
+    });
+    expect(scopes).toEqual([{ pwsids: [1, 2, 3, 4, 5].map(pwsidOf) }]);
+    expect(urls).toEqual([
+      `${WATER_SYSTEM_URL}/primacy_agency_code/equals/WA/and/zip_code/beginsWith/98104${BY_PWSID_SORT}/1:1000/json`,
+    ]);
   });
 
-  it('walks PWSID chunks of at most 200 and finds a violator in the last one', async () => {
-    const urls = stubSdwisFetch([{ pwsid: pwsidOf(450) }], zipSystems(450));
+  it("checks a county's systems by PWSID after the whole-county test", async () => {
+    const tx = (n: number, county: string) =>
+      waterSystem(n, { pwsid: `TX${n}`, primacy_agency_code: 'TX', county_served: county });
+    const urls = stubFakeDmap(countyTables([tx(1, 'Harris'), tx(2, 'Harrison'), tx(3, 'Harris')]));
+    const { lookup, scopes } = fakeViolatorLookup(['TX1', 'TX2'].map((pwsid) => ({ pwsid })));
 
-    const systems = await makeService().searchWaterSystems(
-      { zipCode: '98104', hasViolation: true, limit: 10 },
+    const page = await makeService().searchWaterSystems(
+      { state: 'TX', county: 'HARRIS', currentViolators: lookup },
       createMockContext(),
     );
 
-    expect(systems.map((s) => s.pwsid)).toEqual([pwsidOf(450)]);
-    const chunks = violationUrls(urls).map((u) => pwsidInFilter(u) ?? []);
-    expect(chunks.map((ids) => ids.length)).toEqual([200, 200, 50]);
-    expect(new Set(chunks.flat()).size).toBe(450);
+    expect(page.items.map((s) => s.pwsid)).toEqual(['TX1']);
+    expect(scopes).toEqual([{ pwsids: ['TX1', 'TX3'] }]);
+    expect(rangeOf(urls[0]!)).toBe('1:1000');
+    expect(urls[0]).toContain('/join/sdwis.geographic_area/');
   });
 
-  it('stops checking chunks once the limit is filled, keeping ZIP order', async () => {
-    const urls = stubSdwisFetch(
+  it('looks up 200 PWSIDs at a time and stops once limit + 1 violators are found', async () => {
+    stubFakeDmap({ 'sdwis.water_system': zipSystems(450) });
+    const { lookup, scopes } = fakeViolatorLookup(
       [5, 150, 250, 300].map((n) => ({ pwsid: pwsidOf(n) })),
-      zipSystems(450),
     );
 
-    const systems = await makeService().searchWaterSystems(
-      { zipCode: '98104', hasViolation: true, limit: 2 },
+    const page = await makeService().searchWaterSystems(
+      { zipCode: '98104', currentViolators: lookup, limit: 2 },
       createMockContext(),
     );
 
-    expect(systems.map((s) => s.pwsid)).toEqual([pwsidOf(5), pwsidOf(150)]);
-    expect(violationUrls(urls)).toHaveLength(1);
+    expect(page.items.map((s) => s.pwsid)).toEqual([pwsidOf(5), pwsidOf(150)]);
+    // The third violator, WA0000250, sits at row position 249.
+    expect(page.nextOffset).toBe(249);
+    expect(page).not.toHaveProperty('totalCount');
+    expect(scopes.map((s) => ('pwsids' in s ? s.pwsids.length : 0))).toEqual([200, 200]);
   });
 
-  it('discloses a ZIP whose systems reach the 1,000-row read', async () => {
-    const urls = stubSdwisFetch([], zipSystems(1200));
+  it('continues a full read that leaves the page short from the next row, with a notice', async () => {
+    const urls = stubFakeDmap({ 'sdwis.water_system': zipSystems(1200) });
+    const { lookup, scopes } = fakeViolatorLookup([{ pwsid: pwsidOf(1100) }]);
     const ctx = createMockContext();
+    const service = makeService();
 
-    const systems = await makeService().searchWaterSystems(
-      { zipCode: '98104', hasViolation: true, limit: 10 },
+    const first = await service.searchWaterSystems(
+      { zipCode: '98104', currentViolators: lookup, limit: 10 },
       ctx,
     );
-
-    expect(systems).toEqual([]);
-    expect(violationUrls(urls)).toHaveLength(5);
-    expect(urls).toHaveLength(6);
-    const { notice } = getEnrichment(ctx) as { notice?: string };
-    expect(notice).toBe(
-      'The violation check read only the first 1,000 water systems in ZIP 98104; systems past that point were not checked.',
-    );
-  });
-
-  it('discloses a PWSID chunk whose violation rows reach the 1,000-row read', async () => {
-    const violations = Array.from({ length: 1000 }, () => ({ pwsid: pwsidOf(1) }));
-    const ctx = createMockContext();
-    stubSdwisFetch(violations, zipSystems(3));
-
-    const systems = await makeService().searchWaterSystems(
-      { zipCode: '98104', hasViolation: true, limit: 10 },
-      ctx,
-    );
-
-    expect(systems.map((s) => s.pwsid)).toEqual([pwsidOf(1)]);
-    const { notice } = getEnrichment(ctx) as { notice?: string };
-    expect(notice).toBe(
-      'The open violation records for a group of up to 200 systems in ZIP 98104 filled the 1,000-row read; records past that point were not read, so these results may not include every system with an open violation in the ZIP.',
-    );
-  });
-
-  it('makes no violation request when the ZIP has no systems', async () => {
-    const urls = stubSdwisFetch([{ pwsid: pwsidOf(1) }], []);
-
-    const systems = await makeService().searchWaterSystems(
-      { zipCode: '00000', hasViolation: true, limit: 10 },
+    const second = await service.searchWaterSystems(
+      { zipCode: '98104', currentViolators: lookup, offset: first.nextOffset!, limit: 10 },
       createMockContext(),
     );
 
-    expect(systems).toEqual([]);
-    expect(urls).toHaveLength(1);
+    expect(first).toEqual({ items: [], nextOffset: 1000 });
+    expect(getEnrichment(ctx)).toMatchObject({
+      notice:
+        'The violation check read 1,000 systems from offset 0 and found 0 with a current violation; systems from offset 1,000 on were not checked in this call.',
+    });
+    expect(second.items.map((s) => s.pwsid)).toEqual([pwsidOf(1100)]);
+    expect(second).not.toHaveProperty('nextOffset');
+    expect(scopes).toHaveLength(6);
+    expect(urls.map(rangeOf)).toEqual(['1:1000', '1001:2000']);
   });
 
-  it('returns nothing when no ZIP system has a violation', async () => {
-    const urls = stubSdwisFetch([{ pwsid: pwsidOf(99) }], zipSystems(3));
+  it('makes no lookup when the ZIP has no systems', async () => {
+    stubFakeDmap({ 'sdwis.water_system': [] });
+    const { lookup, scopes } = fakeViolatorLookup([{ pwsid: pwsidOf(1) }]);
 
-    const systems = await makeService().searchWaterSystems(
-      { zipCode: '98104', hasViolation: true, limit: 10 },
+    const page = await makeService().searchWaterSystems(
+      { zipCode: '00000', currentViolators: lookup },
       createMockContext(),
     );
 
-    expect(systems).toEqual([]);
-    expect(violationUrls(urls)).toHaveLength(1);
-  });
-});
-
-describe('DmapService.searchWaterSystems open-violation filter', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  /**
-   * Live WA codes (sdwis.violation, 2026-10-08): R = returned to compliance (rtc_date set),
-   * I = resolved when the system was deactivated (rtc_date = pws_deactivation_date),
-   * K and O = no rtc_date — still open.
-   */
-  const mixedViolations = [
-    { pwsid: pwsidOf(1), compliance_status_code: 'R', rtc_date: '2004-12-31 00:00:00' },
-    { pwsid: pwsidOf(2), compliance_status_code: 'I', rtc_date: '2016-04-20 00:00:00' },
-    { pwsid: pwsidOf(3), compliance_status_code: 'K', rtc_date: null },
-    { pwsid: pwsidOf(4), compliance_status_code: 'O', rtc_date: null },
-    { pwsid: pwsidOf(5), compliance_status_code: 'R', rtc_date: '2024-03-22 00:00:00' },
-    { pwsid: pwsidOf(5), compliance_status_code: 'K', rtc_date: null },
-  ];
-  const systems = Array.from({ length: 5 }, (_, i) => ({
-    pwsid: pwsidOf(i + 1),
-    pws_name: `System ${i + 1}`,
-  }));
-
-  it('a state scan reads only open (K, O) violations', async () => {
-    const urls = stubSdwisFetch(mixedViolations, systems);
-
-    const result = await makeService().searchWaterSystems(
-      { state: 'WA', hasViolation: true, limit: 50 },
-      createMockContext(),
-    );
-
-    expect(result.map((s) => s.pwsid)).toEqual([pwsidOf(3), pwsidOf(4), pwsidOf(5)]);
-    const violUrl = urls.find((u) => u.includes('/sdwis.violation/'))!;
-    expect(violUrl).toContain(
-      '/sdwis.violation/primacy_agency_code/equals/WA/and/compliance_status_code/in/K%2CO/1:1000/json',
-    );
-  });
-
-  it('a ZIP check reads only open (K, O) violations', async () => {
-    const urls = stubSdwisFetch(mixedViolations, systems);
-
-    const result = await makeService().searchWaterSystems(
-      { zipCode: '98104', hasViolation: true, limit: 50 },
-      createMockContext(),
-    );
-
-    expect(result.map((s) => s.pwsid)).toEqual([pwsidOf(3), pwsidOf(4), pwsidOf(5)]);
-    expect(statusInFilter(urls.find((u) => u.includes('/sdwis.violation/'))!)).toEqual(['K', 'O']);
-  });
-
-  it('returns nothing when every violation on record is resolved', async () => {
-    const urls = stubSdwisFetch(
-      mixedViolations.filter(
-        (v) => v.compliance_status_code === 'R' || v.compliance_status_code === 'I',
-      ),
-      systems,
-    );
-
-    const result = await makeService().searchWaterSystems(
-      { state: 'WA', hasViolation: true, limit: 50 },
-      createMockContext(),
-    );
-
-    expect(result).toEqual([]);
-    expect(urls.filter((u) => u.includes('/sdwis.water_system/'))).toHaveLength(0);
+    expect(page).toEqual({ items: [], totalCount: 0 });
+    expect(scopes).toEqual([]);
   });
 });
 
@@ -2169,7 +2673,7 @@ describe('DmapService one-based row ranges', () => {
     vi.restoreAllMocks();
   });
 
-  it('getTriReleases requests and returns 500 reporting-form rows', async () => {
+  it('getTriReleases requests 501 reporting-form rows and returns 500 with the next offset', async () => {
     const forms = Array.from({ length: 600 }, (_, i) => ({
       tri_facility_id: 'FAC1',
       cas_chem_name: `Chemical ${i + 1}`,
@@ -2177,24 +2681,17 @@ describe('DmapService one-based row ranges', () => {
     }));
     const urls = stubPagedDmapFetch([{ match: '/tri.tri_reporting_form/', table: forms }]);
 
-    const releases = await makeService().getTriReleases(
-      { facilityId: 'FAC1' },
-      createMockContext(),
-    );
+    const page = await makeService().getTriReleases({ facilityId: 'FAC1' }, createMockContext());
 
-    expect(releases).toHaveLength(500);
-    expect(releases.at(-1)?.chemicalName).toBe('Chemical 500');
-    expect(urls[0]).toContain('/1:500/json');
+    expect(page.items).toHaveLength(500);
+    expect(page.items.at(-1)?.chemicalName).toBe('Chemical 500');
+    expect(page.nextOffset).toBe(500);
+    expect(urls[0]).toContain('/1:501/json');
   });
 
   it('fetchReleaseBreakdown reads 30 rows per submission, the last one included', async () => {
     const qty = ['D1', 'D2'].flatMap((doc) =>
-      Array.from({ length: 30 }, () => ({
-        doc_ctrl_num: doc,
-        environmental_medium: 'AIR FUG',
-        total_release: 1,
-        release_na: '0',
-      })),
+      Array.from({ length: 30 }, () => qtyRow(doc, 'AIR FUG', 1)),
     );
     const urls = stubPagedDmapFetch([
       {
@@ -2207,7 +2704,7 @@ describe('DmapService one-based row ranges', () => {
       { match: '/tri.tri_release_qty/', table: qty },
     ]);
 
-    const releases = await makeService().getTriReleases(
+    const { items: releases } = await makeService().getTriReleases(
       { facilityId: 'FAC1' },
       createMockContext(),
     );
@@ -2228,8 +2725,11 @@ describe('DmapService one-based row ranges', () => {
       createMockContext(),
     );
 
-    expect(result.map((s) => s.siteId)).toEqual(['S1', 'S2', 'S3']);
-    expect(urls[0]).toContain('/fk_ref_state_code/equals/WA/1:3/json');
+    expect(result.items.map((s) => s.siteId)).toEqual(['S1', 'S2', 'S3']);
+    expect(result.nextOffset).toBe(3);
+    expect(urls[0]).toContain(
+      '/fk_ref_state_code/equals/WA/sort/sems.envirofacts_site.site_id:asc/1:4/json',
+    );
   });
 
   it('searchSuperfund proximity scans the whole candidate page, its last row included', async () => {
@@ -2248,34 +2748,8 @@ describe('DmapService one-based row ranges', () => {
       createMockContext(),
     );
 
-    expect(result.map((s) => s.siteId)).toEqual(['S20']);
+    expect(result.items.map((s) => s.siteId)).toEqual(['S20']);
     expect(urls[0]).toContain('/1:500/json');
-  });
-
-  it('searchSuperfundById requests exactly one row', async () => {
-    const urls = stubPagedDmapFetch([
-      { match: '/site_id/equals/1000598/', table: [{ site_id: '1000598', name: 'One Site' }] },
-    ]);
-
-    const result = await makeService().searchSuperfundById('1000598', createMockContext());
-
-    expect(urls[0]).toContain('/1:1/json');
-    expect(result).toEqual([expect.objectContaining({ siteId: '1000598', name: 'One Site' })]);
-  });
-
-  it('searchWaterSystems reads all 1,000 violation rows when flagging violators', async () => {
-    const violations = Array.from({ length: 1000 }, (_, i) => ({ pwsid: pwsidOf(i + 1) }));
-    const urls = stubSdwisFetch(violations, [
-      { pwsid: 'WA0001000', pws_name: 'Thousandth Violator' },
-    ]);
-
-    const systems = await makeService().searchWaterSystems(
-      { state: 'WA', hasViolation: true, limit: 5 },
-      createMockContext(),
-    );
-
-    expect(systems).toEqual([expect.objectContaining({ pwsid: 'WA0001000', hasViolation: true })]);
-    expect(urls.find((u) => u.includes('/sdwis.violation/'))).toContain('/1:1000/json');
   });
 });
 
@@ -2305,18 +2779,8 @@ const AK_TABLES = {
     triForm('1324222469734', '99901SCSTG1300S', 'Lead', 2024),
   ],
   'tri.tri_release_qty': [
-    {
-      doc_ctrl_num: '1324222469734',
-      environmental_medium: 'AIR STACK',
-      total_release: 0.5,
-      release_na: '0',
-    },
-    {
-      doc_ctrl_num: '1392060208939',
-      environmental_medium: 'AIR FUG',
-      total_release: 750,
-      release_na: '0',
-    },
+    qtyRow('1324222469734', 'AIR STACK', 0.5),
+    qtyRow('1392060208939', 'AIR FUG', 750),
   ],
 };
 
@@ -2335,7 +2799,7 @@ describe('DmapService.searchTriReleases result order', () => {
   it('without year returns the newest reporting years first, ties by submission number', async () => {
     const urls = stubFakeDmap(AK_TABLES);
 
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'AK', limit: 6 },
       createMockContext(),
     );
@@ -2349,17 +2813,17 @@ describe('DmapService.searchTriReleases result order', () => {
       '1992 99835LSKPLMILE6 Acetone',
     ]);
     expect(urls).toEqual([
-      `https://data.epa.gov/dmapservice/tri.tri_facility/state_abbr/equals/AK${joinPath}${NEWEST_FIRST_SORT}/1:6/json`,
+      `https://data.epa.gov/dmapservice/tri.tri_facility/state_abbr/equals/AK${joinPath}${NEWEST_FIRST_SORT}/1:7/json`,
     ]);
   });
 
   it('a smaller limit returns a prefix of a larger one', async () => {
     stubFakeDmap(AK_TABLES);
-    const first3 = await makeService().searchTriReleases(
+    const { items: first3 } = await makeService().searchTriReleases(
       { state: 'AK', limit: 3 },
       createMockContext(),
     );
-    const all = await makeService().searchTriReleases(
+    const { items: all } = await makeService().searchTriReleases(
       { state: 'AK', limit: 7 },
       createMockContext(),
     );
@@ -2374,40 +2838,40 @@ describe('DmapService.searchTriReleases result order', () => {
 
     // Both borough facilities filed a 2024 lead form; table order puts RED DOG's first, the
     // submission-number tiebreak puts the Coast Guard's first, and limit 1 keeps only one.
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'AK', county: 'BOROUGH', chemicalName: 'lead', limit: 1 },
       createMockContext(),
     );
 
     expect(releases.map(yearDoc)).toEqual(['2024 99901SCSTG1300S Lead']);
     expect(urls).toEqual([
-      `https://data.epa.gov/dmapservice/tri.tri_facility/state_abbr/equals/AK/and/county_name/contains/BOROUGH${joinPath}/and/cas_chem_name/contains/lead${NEWEST_FIRST_SORT}/1:1/json`,
+      `https://data.epa.gov/dmapservice/tri.tri_facility/state_abbr/equals/AK/and/county_name/contains/BOROUGH${joinPath}/and/cas_chem_name/contains/lead${NEWEST_FIRST_SORT}/1:2/json`,
     ]);
   });
 
-  it('with year sends the unsorted request and keeps table order', async () => {
+  it('with year sorts on the submission number instead of keeping table order', async () => {
     const urls = stubFakeDmap(AK_TABLES);
 
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'AK', year: 2024, limit: 5 },
       createMockContext(),
     );
 
     expect(releases.map(yearDoc)).toEqual([
-      '2024 99752RDDGP90MIL Lead compounds',
+      '2024 99901SCSTG1300S Lead',
       '2024 99752RDDGP90MIL Cyanide compounds',
       '2024 99752RDDGP90MIL Ammonia',
-      '2024 99901SCSTG1300S Lead',
+      '2024 99752RDDGP90MIL Lead compounds',
     ]);
     expect(urls).toEqual([
-      `https://data.epa.gov/dmapservice/tri.tri_facility/state_abbr/equals/AK${joinPath}/and/reporting_year/equals/2024/1:5/json`,
+      `https://data.epa.gov/dmapservice/tri.tri_facility/state_abbr/equals/AK${joinPath}/and/reporting_year/equals/2024${NEWEST_FIRST_SORT}/1:6/json`,
     ]);
   });
 
   it('adds the breakdown to the sorted records it keeps', async () => {
     const urls = stubFakeDmap(AK_TABLES);
 
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'AK', limit: 1, includeReleaseBreakdown: true },
       createMockContext(),
     );
@@ -2420,6 +2884,7 @@ describe('DmapService.searchTriReleases result order', () => {
         chemicalName: 'Lead',
         reportingYear: 2024,
         releasesToAirInLbs: 0.5,
+        totalOnSiteReleasesInLbs: 0.5,
       },
     ]);
     expect(urls[1]).toBe(
@@ -2436,12 +2901,363 @@ describe('DmapService.searchTriReleases result order', () => {
     expect(call.isError).toBeFalsy();
     const structured = call.structuredContent as { releases: Array<Record<string, unknown>> };
     expect(structured.releases.map((r) => r.reportingYear)).toEqual([2024, 2024]);
-    const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    const text = textOf(call.content);
     const headings = text.split('\n').filter((line) => line.startsWith('### '));
     expect(headings).toEqual([
       '### Lead — U.S. COAST GUARD BASE KETCHIKAN (99901SCSTG1300S) (2024)',
       '### Cyanide compounds — RED DOG OPERATIONS (99752RDDGP90MIL) (2024)',
     ]);
+  });
+});
+
+describe('DmapService TRI paging', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const joinPath = '/join/tri.tri_reporting_form/tri_facility_id/equals/tri_facility_id';
+  const docsOf = (releases: unknown[], tables: Record<string, DmapRow[]>) =>
+    releases.map((release) => {
+      const { facilityId, chemicalName, reportingYear } = release as Record<string, unknown>;
+      return tables['tri.tri_reporting_form']!.find(
+        (form) =>
+          form.tri_facility_id === facilityId &&
+          form.cas_chem_name === chemicalName &&
+          Number(form.reporting_year) === reportingYear,
+      )?.doc_ctrl_num;
+    });
+  const rangeOf = (url: string) => /\/(\d+:\d+)\/json$/.exec(url)?.[1];
+
+  it('searchTriReleases reads offset+1 through offset+limit+1 and returns nextOffset only while records follow', async () => {
+    const urls = stubFakeDmap(AK_TABLES);
+    const service = makeService();
+    const all = await service.searchTriReleases({ state: 'AK', limit: 7 }, createMockContext());
+    expect(all.items).toHaveLength(7);
+    expect(all).not.toHaveProperty('nextOffset');
+
+    const pages = [];
+    for (const offset of [0, 3, 6, 7, 40]) {
+      pages.push(
+        await service.searchTriReleases({ state: 'AK', offset, limit: 3 }, createMockContext()),
+      );
+    }
+
+    expect(urls.slice(1).map(rangeOf)).toEqual(['1:4', '4:7', '7:10', '8:11', '41:44']);
+    expect(urls[1]).toBe(
+      `https://data.epa.gov/dmapservice/tri.tri_facility/state_abbr/equals/AK${joinPath}${NEWEST_FIRST_SORT}/1:4/json`,
+    );
+    expect(pages.map((page) => page.nextOffset)).toEqual([3, 6, undefined, undefined, undefined]);
+    expect(pages.map((page) => page.items.length)).toEqual([3, 3, 1, 0, 0]);
+    // The walk returns every record once, in the order one larger read returns them.
+    expect(
+      docsOf(
+        pages.flatMap((page) => page.items),
+        AK_TABLES,
+      ),
+    ).toEqual(docsOf(all.items, AK_TABLES));
+  });
+
+  it('searchTriReleases sorts a single-year search on the submission number too', async () => {
+    const urls = stubFakeDmap(AK_TABLES);
+
+    const page = await makeService().searchTriReleases(
+      { state: 'AK', year: 2024, offset: 1, limit: 2 },
+      createMockContext(),
+    );
+
+    expect(urls).toEqual([
+      `https://data.epa.gov/dmapservice/tri.tri_facility/state_abbr/equals/AK${joinPath}/and/reporting_year/equals/2024${NEWEST_FIRST_SORT}/2:4/json`,
+    ]);
+    // 2024 forms by submission number: …469734, …523639, …523641, …523654.
+    expect(docsOf(page.items, AK_TABLES)).toEqual(['1324222523639', '1324222523641']);
+    expect(page.nextOffset).toBe(3);
+  });
+
+  it('getTriReleases pages a facility newest first and reads the breakdown for the page only', async () => {
+    const forms = Array.from({ length: 7 }, (_, n) =>
+      triForm(`D${n}`, '47635RCKPR2791N', `Chemical ${n}`, 2020 + n),
+    );
+    const tables = {
+      'tri.tri_reporting_form': forms,
+      'tri.tri_release_qty': forms.map((form, n) =>
+        qtyRow(form.doc_ctrl_num, 'AIR STACK', n, '0', null),
+      ),
+    };
+    const urls = stubFakeDmap(tables);
+    const service = makeService();
+
+    const first = await service.getTriReleases(
+      { facilityId: '47635RCKPR2791N', limit: 5 },
+      createMockContext(),
+    );
+    const second = await service.getTriReleases(
+      { facilityId: '47635RCKPR2791N', offset: 5, limit: 5 },
+      createMockContext(),
+    );
+    const pastEnd = await service.getTriReleases(
+      { facilityId: '47635RCKPR2791N', offset: 7, limit: 5 },
+      createMockContext(),
+    );
+
+    expect(first.items.map((r) => r.reportingYear)).toEqual([2026, 2025, 2024, 2023, 2022]);
+    expect(first.nextOffset).toBe(5);
+    expect(second.items.map((r) => r.reportingYear)).toEqual([2021, 2020]);
+    expect(second).not.toHaveProperty('nextOffset');
+    expect(pastEnd).toEqual({ items: [] });
+    const formUrls = urls.filter((url) => url.includes('/tri.tri_reporting_form/'));
+    expect(formUrls.map(rangeOf)).toEqual(['1:6', '6:11', '8:13']);
+    expect(formUrls[0]).toContain(`${NEWEST_FIRST_SORT}/1:6/json`);
+    // The sixth row only proves more follow; its breakdown is never requested.
+    expect(breakdownUrlsOf(urls).map(docInFilter)).toEqual([
+      ['D6', 'D5', 'D4', 'D3', 'D2'],
+      ['D1', 'D0'],
+    ]);
+  });
+
+  it('getTriReleases sorts a single-year lookup on the submission number too', async () => {
+    const urls = stubFakeDmap({ 'tri.tri_reporting_form': [], 'tri.tri_release_qty': [] });
+
+    await makeService().getTriReleases({ facilityId: 'FAC', year: 2022 }, createMockContext());
+
+    expect(urls).toEqual([
+      `https://data.epa.gov/dmapservice/tri.tri_reporting_form/tri_facility_id/equals/FAC/and/reporting_year/equals/2022${NEWEST_FIRST_SORT}/1:501/json`,
+    ]);
+  });
+
+  /**
+   * One facility-year in submission order: an exact "C.I." name, 149 wildcard near-variants
+   * (C_I_ also matches CHIC), then two more exact names.
+   */
+  const ciForms = () => [
+    triForm('D000', BOEING, 'C.I. Red', 2023),
+    ...Array.from({ length: 149 }, (_, n) =>
+      triForm(`D${String(n + 1).padStart(3, '0')}`, BOEING, 'CHIC SOLVENT', 2023),
+    ),
+    triForm('D150', BOEING, 'C.I. Blue', 2023),
+    triForm('D151', BOEING, 'C.I. Green', 2023),
+  ];
+
+  it('continues a punctuated filter from the next upstream position, past the rows it dropped', async () => {
+    const urls = stubFakeDmap({ 'tri.tri_reporting_form': ciForms(), 'tri.tri_release_qty': [] });
+    const service = makeService();
+    const lookup = (offset: number) =>
+      service.getTriReleases(
+        { facilityId: BOEING, chemicalName: 'C.I.', offset, limit: 1 },
+        createMockContext(),
+      );
+
+    const first = await lookup(0);
+    const second = await lookup(first.nextOffset!);
+    const third = await lookup(second.nextOffset!);
+
+    expect([first, second, third].map((page) => chemicalsOf(page.items))).toEqual([
+      ['C.I. Red'],
+      ['C.I. Blue'],
+      ['C.I. Green'],
+    ]);
+    expect([first.nextOffset, second.nextOffset, third.nextOffset]).toEqual([150, 151, undefined]);
+    expect(urls.filter((url) => url.includes('/tri.tri_reporting_form/')).map(rangeOf)).toEqual([
+      '1:100',
+      '101:200',
+      '151:250',
+      '152:251',
+    ]);
+  });
+
+  it('a punctuated walk cut short by its page limit returns where it stopped, with the notice', async () => {
+    const forms = [
+      ...Array.from({ length: 400 }, (_, n) =>
+        triForm(`D${String(n).padStart(3, '0')}`, BOEING, 'CHIC SOLVENT', 2023),
+      ),
+      triForm('D400', BOEING, 'C.I. Blue', 2023),
+    ];
+    stubFakeDmap({ 'tri.tri_reporting_form': forms, 'tri.tri_release_qty': [] });
+    const ctx = createMockContext();
+
+    const page = await makeService().getTriReleases(
+      { facilityId: BOEING, chemicalName: 'C.I.', offset: 50, limit: 5 },
+      ctx,
+    );
+
+    expect(page).toEqual({ items: [], nextOffset: 350 });
+    expect(getEnrichment(ctx)).toEqual({
+      notice:
+        '"C.I." was searched with a one-character wildcard in place of punctuation, and the 300 rows matching the wildcard after offset 50 held 0 matches spelled as given, so more may exist past them. Narrow the search with other filters or more of the text.',
+    });
+  });
+
+  it('a punctuated page that finds limit+1 matches stops there and adds no notice', async () => {
+    const forms = Array.from({ length: 600 }, (_, n) =>
+      triForm(`D${String(n).padStart(3, '0')}`, BOEING, `C.I. Dye ${n}`, 2023),
+    );
+    const urls = stubFakeDmap({ 'tri.tri_reporting_form': forms, 'tri.tri_release_qty': [] });
+    const ctx = createMockContext();
+
+    const page = await makeService().getTriReleases(
+      { facilityId: BOEING, chemicalName: 'C.I.' },
+      ctx,
+    );
+
+    expect(page.items).toHaveLength(500);
+    expect(page.nextOffset).toBe(500);
+    expect(urls.filter((url) => url.includes('/tri.tri_reporting_form/')).map(rangeOf)).toEqual([
+      '1:501',
+    ]);
+    expect(getEnrichment(ctx)).toEqual({});
+  });
+});
+
+describe('DmapService TRI release totals and facility identifiers', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('names the one-time quantity oneTimeReleaseInLbs and sums the present media into an on-site total', async () => {
+    stubFakeDmap({
+      'tri.tri_reporting_form': [{ ...ROCKPORT_BARIUM_FORM, one_time_release_qty: 12 }],
+      'tri.tri_release_qty': ROCKPORT_BARIUM_RELEASE_QTY,
+    });
+
+    const { items } = await makeService().getTriReleases(
+      { facilityId: '47635RCKPR2791N', year: 2022 },
+      createMockContext(),
+    );
+
+    expect(items).toEqual([
+      {
+        facilityId: '47635RCKPR2791N',
+        chemicalName: ROCKPORT_BARIUM_FORM.cas_chem_name,
+        reportingYear: 2022,
+        oneTimeReleaseInLbs: 12,
+        releasesToAirInLbs: 552,
+        releasesToWaterInLbs: 1100,
+        releasesToLandInLbs: 955005,
+        // 552 + 1,100 + 955,005; the one-time quantity is already inside these.
+        totalOnSiteReleasesInLbs: 956657,
+      },
+    ]);
+    expect(items[0]).not.toHaveProperty('totalReleasesInLbs');
+  });
+
+  it('sums a gram-reported form after converting each medium, rounded like the media', async () => {
+    stubFakeDmap({
+      'tri.tri_reporting_form': DIOXIN_FACILITY_FORMS,
+      'tri.tri_release_qty': DIOXIN_FACILITY_RELEASE_QTY,
+    });
+
+    const { items } = await makeService().getTriReleases(
+      { facilityId: '96020CLLNS500MA', year: 2022 },
+      createMockContext(),
+    );
+    const dioxin = items.find((r) => r.reportedUnit === 'grams');
+
+    expect(dioxin).toMatchObject({
+      oneTimeReleaseInLbs: 0.0044092452437,
+      releasesToAirInLbs: 0.000162952476471,
+      releasesToLandInLbs: 1.28066528103e-6,
+      // 0.000162952476471 + 0.00000128066528103, to 12 significant digits.
+      totalOnSiteReleasesInLbs: 0.000164233141752,
+    });
+    expect(items.find((r) => r.chemicalName === 'Lead compounds')).toMatchObject({
+      totalOnSiteReleasesInLbs: 28.51,
+    });
+  });
+
+  it('carries no on-site total when no medium has a hard quantity', async () => {
+    stubFakeDmap({
+      'tri.tri_reporting_form': [triForm('D-NA', '47635RCKPR2791N', 'Mercury', 2022)],
+      'tri.tri_release_qty': [
+        qtyRow('D-NA', 'SI 5.5.3A', null, '1', null),
+        qtyRow('D-NA', 'SI 5.5.3B', null, '0', '2'),
+      ],
+    });
+
+    const { items } = await makeService().getTriReleases(
+      { facilityId: '47635RCKPR2791N' },
+      createMockContext(),
+    );
+
+    expect(items).toEqual([
+      { facilityId: '47635RCKPR2791N', chemicalName: 'Mercury', reportingYear: 2022 },
+    ]);
+  });
+
+  it('returns the Registry ID and parent company from the search rows, with no added request', async () => {
+    const urls = stubFakeDmap({
+      'tri.tri_facility': [
+        {
+          ...triFacility('9867WSNRWD1981S', 'WOODLAND USNR LLC', 'WA', 'COWLITZ'),
+          epa_registry_id: '110070322017',
+          standardized_parent_company: 'WOOD TECHNOLOGIES INTERNATIONAL',
+        },
+        {
+          ...triFacility('98421STMPS', 'NO PARENT PLANT', 'WA', 'PIERCE'),
+          epa_registry_id: '110000460402',
+          standardized_parent_company: 'NA',
+        },
+        {
+          ...triFacility('98001OLDPL', 'UNREGISTERED PLANT', 'WA', 'KING'),
+          epa_registry_id: null,
+          standardized_parent_company: null,
+        },
+      ],
+      'tri.tri_reporting_form': [
+        triForm('D1', '9867WSNRWD1981S', 'Chromium', 2022),
+        triForm('D2', '98421STMPS', 'Lead', 2022),
+        triForm('D3', '98001OLDPL', 'Zinc', 2022),
+      ],
+    });
+
+    const { items } = await makeService().searchTriReleases(
+      { state: 'WA', year: 2022 },
+      createMockContext(),
+    );
+
+    expect(urls).toHaveLength(1);
+    expect(items).toEqual([
+      {
+        facilityId: '9867WSNRWD1981S',
+        facilityName: 'WOODLAND USNR LLC',
+        countyName: 'COWLITZ',
+        registryId: '110070322017',
+        parentCompany: 'WOOD TECHNOLOGIES INTERNATIONAL',
+        chemicalName: 'Chromium',
+        reportingYear: 2022,
+      },
+      {
+        facilityId: '98421STMPS',
+        facilityName: 'NO PARENT PLANT',
+        countyName: 'PIERCE',
+        registryId: '110000460402',
+        chemicalName: 'Lead',
+        reportingYear: 2022,
+      },
+      {
+        facilityId: '98001OLDPL',
+        facilityName: 'UNREGISTERED PLANT',
+        countyName: 'KING',
+        chemicalName: 'Zinc',
+        reportingYear: 2022,
+      },
+    ]);
+  });
+
+  it('a search without the breakdown carries no on-site total', async () => {
+    stubFakeDmap({
+      'tri.tri_facility': [triFacility('47635RCKPR2791N', 'ROCKPORT PLANT', 'IN', 'SPENCER')],
+      'tri.tri_reporting_form': [ROCKPORT_BARIUM_FORM],
+      'tri.tri_release_qty': ROCKPORT_BARIUM_RELEASE_QTY,
+    });
+    const service = makeService();
+
+    const without = await service.searchTriReleases({ state: 'IN' }, createMockContext());
+    const withBreakdown = await service.searchTriReleases(
+      { state: 'IN', includeReleaseBreakdown: true },
+      createMockContext(),
+    );
+
+    expect(without.items[0]).not.toHaveProperty('totalOnSiteReleasesInLbs');
+    expect(withBreakdown.items[0]).toMatchObject({ totalOnSiteReleasesInLbs: 956657 });
   });
 });
 
@@ -2483,12 +3299,7 @@ function boeingTables(count = 375): Record<string, DmapRow[]> {
     'tri.tri_reporting_form': forms,
     'tri.tri_release_qty': [
       ...liveQty,
-      ...middle.map((form, n) => ({
-        doc_ctrl_num: form.doc_ctrl_num,
-        environmental_medium: 'AIR STACK',
-        total_release: n + 1,
-        release_na: '0',
-      })),
+      ...middle.map((form, n) => qtyRow(form.doc_ctrl_num, 'AIR STACK', n + 1)),
     ],
   };
 }
@@ -2511,7 +3322,7 @@ describe('DmapService TRI release breakdown under the request-line limit', () =>
     const tables = boeingTables();
     const urls = stubFakeDmap(tables);
 
-    const releases = await makeService().getTriReleases(
+    const { items: releases } = await makeService().getTriReleases(
       { facilityId: BOEING },
       createMockContext(),
     );
@@ -2533,6 +3344,7 @@ describe('DmapService TRI release breakdown under the request-line limit', () =>
       chemicalName: 'Toluene',
       reportingYear: 1997,
       releasesToAirInLbs: 0,
+      totalOnSiteReleasesInLbs: 0,
     });
     // Live 2024 form sorts first; the older form remains in a later breakdown chunk.
     expect(releases[0]).toEqual({
@@ -2541,6 +3353,7 @@ describe('DmapService TRI release breakdown under the request-line limit', () =>
       reportingYear: 2024,
       releasesToAirInLbs: 18.81,
       releasesToWaterInLbs: 0,
+      totalOnSiteReleasesInLbs: 18.81,
     });
     expect(releases.slice(1, -1).map((r) => r.releasesToAirInLbs)).toEqual(
       Array.from({ length: 373 }, (_, n) => n + 1),
@@ -2562,8 +3375,10 @@ describe('DmapService TRI release breakdown under the request-line limit', () =>
       reportingYear: 2024,
       releasesToAirInLbs: 18.81,
       releasesToWaterInLbs: 0,
+      totalOnSiteReleasesInLbs: 18.81,
     });
-    const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    const text = textOf(call.content);
+    expect(text).toContain('**Total On-Site Releases:** 18.81 lbs');
     expect(text).toContain('**Records:** 375');
     const naphthalene = text.split('\n### ').find((s) => s.startsWith('Naphthalene (2024)'));
     expect(naphthalene).toContain('**Air Releases:** 18.81 lbs');
@@ -2575,12 +3390,7 @@ describe('DmapService TRI release breakdown under the request-line limit', () =>
     const forms = Array.from({ length: 500 }, (_, n) =>
       triForm(`D${String(n).padStart(39, '0')}`, BOEING, `Chemical ${n}`, 2010),
     );
-    const releaseQty = forms.map((form, n) => ({
-      doc_ctrl_num: form.doc_ctrl_num,
-      environmental_medium: 'AIR STACK',
-      total_release: n + 1,
-      release_na: '0',
-    }));
+    const releaseQty = forms.map((form, n) => qtyRow(form.doc_ctrl_num, 'AIR STACK', n + 1));
     let inFlight = 0;
     let peak = 0;
     const urls = stubFakeDmap(
@@ -2594,7 +3404,7 @@ describe('DmapService TRI release breakdown under the request-line limit', () =>
       },
     );
 
-    const releases = await makeService().getTriReleases(
+    const { items: releases } = await makeService().getTriReleases(
       { facilityId: BOEING },
       createMockContext(),
     );
@@ -2618,7 +3428,7 @@ describe('DmapService TRI release breakdown under the request-line limit', () =>
       'tri.tri_release_qty': boeingTables(200)['tri.tri_release_qty']!,
     });
 
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'WA', limit: 200, includeReleaseBreakdown: true },
       createMockContext(),
     );
@@ -2644,7 +3454,7 @@ describe('DmapService TRI release breakdown under the request-line limit', () =>
 
     const pending = makeService().getTriReleases({ facilityId: BOEING }, createMockContext());
     await vi.runAllTimersAsync();
-    const releases = await pending;
+    const { items: releases } = await pending;
 
     const lastChunkRequests = breakdownUrlsOf(urls).filter((u) => u.includes('1324222981425'));
     expect(lastChunkRequests).toHaveLength(2);
@@ -2654,11 +3464,7 @@ describe('DmapService TRI release breakdown under the request-line limit', () =>
   it('settles a hung chunk as a Timeout under the 60-second client timeout', async () => {
     vi.useFakeTimers();
     stubFakeDmap(boeingTables(), (url, signal) =>
-      url.includes('/tri.tri_release_qty/')
-        ? new Promise((_, reject) => {
-            signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
-          })
-        : Promise.resolve(),
+      url.includes('/tri.tri_release_qty/') ? hang(signal) : Promise.resolve(),
     );
 
     let settled: unknown;
@@ -2701,7 +3507,7 @@ describe('DmapService TRI release breakdown under the request-line limit', () =>
     expect(call?.structuredContent).toMatchObject({
       error: { code: JsonRpcErrorCode.Timeout, data: { reason: 'retry_deadline_exceeded' } },
     });
-    const text = call?.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    const text = call && textOf(call.content);
     expect(text).toContain('Narrow it with year or chemical_name, or call again later.');
   });
 
@@ -2733,7 +3539,7 @@ describe('DmapService TRI release breakdown under the request-line limit', () =>
     expect(call.structuredContent).toMatchObject({
       error: { code: JsonRpcErrorCode.InternalError },
     });
-    const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    const text = textOf(call.content);
     expect(text).toContain('DMAP returned HTTP 400');
   });
 });
@@ -2781,7 +3587,7 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
   it('matches a chemical name with commas exactly, not just its text before the first comma', async () => {
     const urls = stubFakeDmap(PUNCTUATED_TABLES);
 
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'TX', year: 2022, chemicalName: '1,3-Butadiene', limit: 5 },
       createMockContext(),
     );
@@ -2800,7 +3606,7 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
     async (input, chemical, sent) => {
       const urls = stubFakeDmap(PUNCTUATED_TABLES);
 
-      const releases = await makeService().getTriReleases(
+      const { items: releases } = await makeService().getTriReleases(
         { facilityId: '77001HSTNP100MA', chemicalName: input },
         createMockContext(),
       );
@@ -2814,7 +3620,7 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
   it('keeps only the county spelled as given, dropping a wildcard near-match', async () => {
     const urls = stubFakeDmap(PUNCTUATED_TABLES);
 
-    const releases = await makeService().searchTriReleases(
+    const { items: releases } = await makeService().searchTriReleases(
       { state: 'MD', county: "PRINCE GEORGE'S", year: 2022, limit: 5 },
       createMockContext(),
     );
@@ -2835,17 +3641,18 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
     expect(call.isError).toBeFalsy();
     const structured = call.structuredContent as { releases: Array<Record<string, unknown>> };
     expect(structured.releases.map((r) => r.chemicalName)).toEqual(["Michler's ketone"]);
-    const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    const text = textOf(call.content);
     expect(text).toContain("### Michler's ketone — HOUSTON PLANT (77001HSTNP100MA) (2022)");
   });
 
   it('reads the next page when the exact match drops near-variants from a full page', async () => {
     // Superfund city names carry spelling variants: SEMS lists both COEUR D'ALENE and COEUR D ALENE.
+    // Exact matches carry X ids, which sort after the V near-variants in site ID order.
     const sites = [
       ...Array.from({ length: 99 }, (_, n) => semsSite(`V${n}`, 'COEUR D ALENE')),
-      semsSite('E1', "COEUR D'ALENE"),
-      semsSite('E2', "COEUR D'ALENE"),
-      semsSite('E3', "COEUR D'ALENE"),
+      semsSite('X1', "COEUR D'ALENE"),
+      semsSite('X2', "COEUR D'ALENE"),
+      semsSite('X3', "COEUR D'ALENE"),
     ];
     const urls = stubFakeDmap({ 'sems.envirofacts_site': sites });
 
@@ -2854,15 +3661,16 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
       createMockContext(),
     );
 
-    expect(result.map((s) => s.siteId)).toEqual(['E1', 'E2']);
+    expect(result.items.map((s) => s.siteId)).toEqual(['X1', 'X2']);
+    expect(result.nextOffset).toBe(101);
     expect(urls.map((u) => /\/(\d+:\d+)\/json$/.exec(u)?.[1])).toEqual(['1:100', '101:200']);
     expect(urls[0]).toContain('/city_name/contains/Coeur%20d_Alene/');
   });
 
-  it('reads at most three pages of near-variants, and says more matches may exist', async () => {
+  it('reads at most three pages of near-variants, says more matches may exist, and continues after them', async () => {
     const sites = [
       ...Array.from({ length: 300 }, (_, n) => semsSite(`V${n}`, 'COEUR D ALENE')),
-      semsSite('E1', "COEUR D'ALENE"),
+      semsSite('X1', "COEUR D'ALENE"),
     ];
     const urls = stubFakeDmap({ 'sems.envirofacts_site': sites });
     const ctx = createMockContext();
@@ -2872,7 +3680,7 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
       ctx,
     );
 
-    expect(result).toEqual([]);
+    expect(result).toEqual({ items: [], nextOffset: 300 });
     expect(urls).toHaveLength(3);
     expect(getEnrichment(ctx)).toEqual({ notice: WILDCARD_CAP_NOTICE("Coeur d'Alene", 300, 0) });
   });
@@ -2880,7 +3688,7 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
   it('adds no notice when DMAP runs out of wildcard rows before the page limit', async () => {
     const sites = [
       ...Array.from({ length: 150 }, (_, n) => semsSite(`V${n}`, 'COEUR D ALENE')),
-      semsSite('E1', "COEUR D'ALENE"),
+      semsSite('X1', "COEUR D'ALENE"),
     ];
     stubFakeDmap({ 'sems.envirofacts_site': sites });
     const ctx = createMockContext();
@@ -2890,15 +3698,16 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
       ctx,
     );
 
-    expect(result.map((s) => s.siteId)).toEqual(['E1']);
+    expect(result).toEqual({ items: [expect.objectContaining({ siteId: 'X1' })] });
     expect(getEnrichment(ctx)).not.toHaveProperty('notice');
   });
 
   it('adds no notice when the exact matches fill the limit within the page limit', async () => {
+    // limit 1 reads one match past it, so X2 must also sit within the third page.
     const sites = [
-      ...Array.from({ length: 299 }, (_, n) => semsSite(`V${n}`, 'COEUR D ALENE')),
-      semsSite('E1', "COEUR D'ALENE"),
-      semsSite('E2', "COEUR D'ALENE"),
+      ...Array.from({ length: 298 }, (_, n) => semsSite(`V${n}`, 'COEUR D ALENE')),
+      semsSite('X1', "COEUR D'ALENE"),
+      semsSite('X2', "COEUR D'ALENE"),
     ];
     const urls = stubFakeDmap({ 'sems.envirofacts_site': sites });
     const ctx = createMockContext();
@@ -2908,7 +3717,8 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
       ctx,
     );
 
-    expect(result.map((s) => s.siteId)).toEqual(['E1']);
+    expect(result.items.map((s) => s.siteId)).toEqual(['X1']);
+    expect(result.nextOffset).toBe(299);
     expect(urls).toHaveLength(3);
     expect(getEnrichment(ctx)).not.toHaveProperty('notice');
   });
@@ -2943,14 +3753,15 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
     };
     expect(structured.releases.map((r) => r.chemicalName)).toEqual(['C.I. Food Red 15']);
     expect(structured.notice).toBe(notice);
-    const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    const text = textOf(call.content);
     expect(text).toContain(notice);
     expect(text).toContain('### C.I. Food Red 15 — HOUSTON PLANT (77001HSTNP100MA) (2024)');
   });
 
   it('epa_tri_get_facility_releases discloses a wildcard walk cut short on both surfaces', async () => {
     initDmapService({} as AppConfig, {} as StorageService);
-    const forms = Array.from({ length: 1500 }, (_, n) =>
+    // A 500-filing page walks 501-row pages; 1,600 near-variants outlast all three.
+    const forms = Array.from({ length: 1600 }, (_, n) =>
       triForm(`1322230${String(n).padStart(6, '0')}`, BOEING, 'CHIC SOLVENT', 2023),
     );
     const urls = stubFakeDmap({ 'tri.tri_reporting_form': forms, 'tri.tri_release_qty': [] });
@@ -2962,15 +3773,17 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
 
     expect(call.isError).toBeFalsy();
     expect(urls.map((u) => /\/(\d+:\d+)\/json$/.exec(u)?.[1])).toEqual([
-      '1:500',
-      '501:1000',
-      '1001:1500',
+      '1:501',
+      '502:1002',
+      '1003:1503',
     ]);
-    const notice = WILDCARD_CAP_NOTICE('C.I.', 1500, 0);
+    const notice = WILDCARD_CAP_NOTICE('C.I.', 1503, 0);
     const structured = call.structuredContent as { releases: unknown[]; notice?: string };
     expect(structured.releases).toEqual([]);
     expect(structured.notice).toBe(notice);
-    const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    // The walk stopped before DMAP ran out, so the next page starts where it stopped.
+    expect(structured).toMatchObject({ nextOffset: 1503 });
+    const text = textOf(call.content);
     expect(text).toContain(notice);
     expect(text).toContain('No TRI releases found');
   });
@@ -2979,7 +3792,7 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
     initDmapService({} as AppConfig, {} as StorageService);
     const sites = [
       ...Array.from({ length: 300 }, (_, n) => semsSite(`V${n}`, 'COEUR D ALENE')),
-      semsSite('E1', "COEUR D'ALENE"),
+      semsSite('X1', "COEUR D'ALENE"),
     ];
     stubFakeDmap({ 'sems.envirofacts_site': sites });
 
@@ -2991,11 +3804,20 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
 
     expect(call.isError).toBeFalsy();
     const notice = WILDCARD_CAP_NOTICE("Coeur d'Alene", 300, 0);
-    const structured = call.structuredContent as { sites: unknown[]; notice?: string };
+    const structured = call.structuredContent as {
+      sites: unknown[];
+      notice?: string;
+      nextOffset?: number;
+      effectiveQuery?: string;
+    };
     expect(structured.sites).toEqual([]);
     expect(structured.notice).toBe(notice);
-    const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    // The walk stopped before DMAP ran out, so the next page starts where it stopped.
+    expect(structured.nextOffset).toBe(300);
+    expect(structured.effectiveQuery).toBe("state=ID; city contains Coeur d'Alene");
+    const text = textOf(call.content);
     expect(text).toContain(notice);
+    expect(text).toContain('No Superfund sites found.');
   });
 
   it('matches a literal underscore as written, not as a one-character wildcard', async () => {
@@ -3008,7 +3830,7 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
     };
     const urls = stubFakeDmap(tables);
 
-    const releases = await makeService().getTriReleases(
+    const { items: releases } = await makeService().getTriReleases(
       { facilityId: '77001HSTNP100MA', chemicalName: 'C_12' },
       createMockContext(),
     );
@@ -3017,7 +3839,7 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
     expect(urls[0]).toContain('/cas_chem_name/contains/C_12/');
   });
 
-  it('sends a plain text filter unchanged, in one request ranged to the limit', async () => {
+  it('sends a plain text filter unchanged, in one sorted request ranged one row past the limit', async () => {
     const urls = stubFakeDmap({
       'sems.envirofacts_site': [
         semsSite('K1', 'KALISPELL', 'MT'),
@@ -3030,9 +3852,9 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
       createMockContext(),
     );
 
-    expect(result.map((s) => s.siteId)).toEqual(['K1']);
+    expect(result).toEqual({ items: [expect.objectContaining({ siteId: 'K1' })], nextOffset: 1 });
     expect(urls).toEqual([
-      'https://data.epa.gov/dmapservice/sems.envirofacts_site/fk_ref_state_code/equals/MT/and/city_name/contains/Kalispell/1:1/json',
+      'https://data.epa.gov/dmapservice/sems.envirofacts_site/fk_ref_state_code/equals/MT/and/city_name/contains/Kalispell/sort/sems.envirofacts_site.site_id:asc/1:2/json',
     ]);
   });
 
@@ -3065,7 +3887,7 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
       await expect(call()).rejects.toMatchObject({
         code: JsonRpcErrorCode.ValidationError,
         message: expect.stringContaining(`"${character}"`),
-        data: { character },
+        data: { reason: 'unmatchable_filter', character },
       });
       expect(urls).toEqual([]);
     },
@@ -3075,14 +3897,18 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
     initDmapService({} as AppConfig, {} as StorageService);
     const urls = stubFakeDmap(PUNCTUATED_TABLES);
 
-    const call = await runToolContract(superfundSearchSitesTool, { zip_code: '98104,98101' });
+    const call = await runToolContract(triGetFacilityReleasesTool, { facility_id: 'A,B' });
 
     expect(call.isError).toBe(true);
     expect(urls).toEqual([]);
     const message =
-      '"98104,98101" contains ",", a character EPA\'s DMAP service cannot match in an exact-value filter. Pass one value per call.';
+      '"A,B" contains ",", a character EPA\'s DMAP service cannot match in an exact-value filter. Pass one value per call.';
     expect(call.structuredContent).toMatchObject({
-      error: { code: JsonRpcErrorCode.ValidationError, message },
+      error: {
+        code: JsonRpcErrorCode.ValidationError,
+        message,
+        data: { reason: 'unmatchable_filter' },
+      },
     });
     expect(JSON.stringify(call.content)).toContain('Pass one value per call.');
   });
@@ -3094,10 +3920,13 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
   ])('reads a TRI facility ID with %s slash as DMAP does, as the bare ID', async (_, id) => {
     const urls = stubFakeDmap(boeingTables(3));
 
-    const releases = await makeService().getTriReleases({ facilityId: id }, createMockContext());
+    const { items: releases } = await makeService().getTriReleases(
+      { facilityId: id },
+      createMockContext(),
+    );
 
     expect(urls[0]).toBe(
-      `https://data.epa.gov/dmapservice/tri.tri_reporting_form/tri_facility_id/equals/${BOEING}${NEWEST_FIRST_SORT}/1:500/json`,
+      `https://data.epa.gov/dmapservice/tri.tri_reporting_form/tri_facility_id/equals/${BOEING}${NEWEST_FIRST_SORT}/1:501/json`,
     );
     expect(releases.map((r) => r.chemicalName)).toEqual(['Naphthalene', 'Chemical 1', 'Toluene']);
   });
@@ -3105,27 +3934,37 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
   it.each([
     [
       'a water-system ZIP',
-      () => makeService().searchWaterSystems({ zipCode: '98104/' }, createMockContext()),
-      '/sdwis.water_system/zip_code/equals/98104/1:50/json',
+      async () =>
+        (await makeService().searchWaterSystems({ zipCode: '98104/' }, createMockContext())).items,
+      '/sdwis.water_system/zip_code/beginsWith/98104/sort/sdwis.water_system.pwsid:asc/1:51/json',
     ],
     [
       'a Superfund ZIP',
-      () => makeService().searchSuperfund({ zipCode: '/98104' }, createMockContext()),
-      '/sems.envirofacts_site/zip_code/equals/98104/1:50/json',
+      async () =>
+        (await makeService().searchSuperfund({ zipCode: '/98104' }, createMockContext())).items,
+      '/sems.envirofacts_site/zip_code/beginsWith/98104/sort/sems.envirofacts_site.site_id:asc/1:51/json',
     ],
     [
       'a Superfund city',
-      () => makeService().searchSuperfund({ state: 'WA', city: 'Seattle/' }, createMockContext()),
-      '/sems.envirofacts_site/fk_ref_state_code/equals/WA/and/city_name/contains/Seattle/1:50/json',
+      async () =>
+        (
+          await makeService().searchSuperfund(
+            { state: 'WA', city: 'Seattle/' },
+            createMockContext(),
+          )
+        ).items,
+      '/sems.envirofacts_site/fk_ref_state_code/equals/WA/and/city_name/contains/Seattle/sort/sems.envirofacts_site.site_id:asc/1:51/json',
     ],
     [
       'a TRI chemical name',
-      () =>
-        makeService().getTriReleases(
-          { facilityId: BOEING, chemicalName: 'Toluene/' },
-          createMockContext(),
-        ),
-      `/tri_facility_id/equals/98108THBNG7500E/and/cas_chem_name/contains/Toluene${NEWEST_FIRST_SORT}/1:500/json`,
+      async () =>
+        (
+          await makeService().getTriReleases(
+            { facilityId: BOEING, chemicalName: 'Toluene/' },
+            createMockContext(),
+          )
+        ).items,
+      `/tri_facility_id/equals/98108THBNG7500E/and/cas_chem_name/contains/Toluene${NEWEST_FIRST_SORT}/1:501/json`,
     ],
   ])('sends %s with a slash at an end as the bare value', async (_, call, path) => {
     const urls = stubFakeDmap({
@@ -3151,7 +3990,10 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
     for (const facilityId of ['98108THBNG7500E/X', '/', '//']) {
       await expect(
         makeService().getTriReleases({ facilityId }, createMockContext()),
-      ).rejects.toMatchObject({ code: JsonRpcErrorCode.ValidationError, data: { character: '/' } });
+      ).rejects.toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        data: { reason: 'unmatchable_filter', character: '/' },
+      });
     }
     expect(urls).toEqual([]);
   });
@@ -3160,9 +4002,9 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
     initDmapService({} as AppConfig, {} as StorageService);
     const urls = stubFakeDmap({ 'sems.envirofacts_site': [semsSite('S1', 'SEATTLE', 'WA')] });
 
-    // 4,029 letters at limit 1 make a 4,105-byte request line, which DMAP counts as 4,094.
+    // 3,990 letters at limit 1 make a 4,105-byte sorted request line, which DMAP counts as 4,094.
     const call = await runToolContract(superfundSearchSitesTool, {
-      city: 'a'.repeat(4029),
+      city: 'a'.repeat(3990),
       limit: 1,
     });
 
@@ -3172,14 +4014,14 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
     const structured = call.structuredContent as { sites: unknown[]; message?: string };
     expect(structured.sites).toEqual([]);
     expect(structured.message).toContain('No Superfund sites found');
-    const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    const text = textOf(call.content);
     expect(text).toContain('No Superfund sites found');
   });
 
   it('sends an all-years chemical filter through the sorted request-line boundary', async () => {
     const urls = stubFakeDmap(boeingTables(3));
 
-    const releases = await makeService().getTriReleases(
+    const { items: releases } = await makeService().getTriReleases(
       { facilityId: 'X', chemicalName: 'a'.repeat(3905) },
       createMockContext(),
     );
@@ -3198,7 +4040,10 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
           { facilityId: 'X', chemicalName: 'a'.repeat(length) },
           createMockContext(),
         ),
-      ).rejects.toMatchObject({ code: JsonRpcErrorCode.ValidationError });
+      ).rejects.toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        data: { reason: 'filter_too_long' },
+      });
       expect(urls).toEqual([]);
     },
   );
@@ -3207,8 +4052,13 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
     const urls = stubFakeDmap({ 'sems.envirofacts_site': [] });
 
     await expect(
-      makeService().searchSuperfund({ city: 'a'.repeat(4030), limit: 1 }, createMockContext()),
-    ).rejects.toMatchObject({ code: JsonRpcErrorCode.ValidationError });
+      makeService().searchSuperfund({ city: 'a'.repeat(3991), limit: 1 }, createMockContext()),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      message:
+        "The search filters are too long for EPA's DMAP service: the request would be 4095 bytes, over its 4094-byte limit. Shorten the text filters.",
+      data: { reason: 'filter_too_long', requestLineBytes: 4095 },
+    });
     expect(urls).toEqual([]);
   });
 
@@ -3217,7 +4067,12 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
 
     await expect(
       makeService().searchTriReleases({ state: 'TX', chemicalName: "'" }, createMockContext()),
-    ).rejects.toMatchObject({ code: JsonRpcErrorCode.ValidationError });
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      message:
+        '"\'" has no letter or digit to search on. EPA\'s DMAP service matches text by its letters, digits, spaces, and hyphens.',
+      data: { reason: 'unmatchable_filter', value: "'" },
+    });
     expect(urls).toEqual([]);
   });
 
@@ -3226,32 +4081,13 @@ describe('DmapService text filters DMAP cannot carry in a URL path', () => {
 
     await expect(
       makeService().getTriReleases({ facilityId: 'A'.repeat(5000) }, createMockContext()),
-    ).rejects.toMatchObject({ code: JsonRpcErrorCode.ValidationError });
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      data: { reason: 'filter_too_long' },
+    });
     expect(urls).toEqual([]);
   });
 });
-
-/** Hold a request until its signal aborts, then reject with the abort reason. */
-function hang(signal: AbortSignal | undefined): Promise<never> {
-  return new Promise((_, reject) => {
-    signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
-  });
-}
-
-/** Answer a request after `ms`, or reject with the abort reason if its signal aborts first. */
-function respondAfter(ms: number, signal: AbortSignal | undefined): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer);
-        reject(signal.reason);
-      },
-      { once: true },
-    );
-  });
-}
 
 /** Run `call` under fake timers for `ms` and return how it settled (undefined while pending). */
 async function settleWithin(call: () => Promise<unknown>, ms: number): Promise<unknown> {
@@ -3294,7 +4130,7 @@ describe('DmapService water-system and Superfund call deadline', () => {
       },
     });
     expect(result.structuredContent).not.toHaveProperty('sites');
-    expect(result.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n')).toContain(
+    expect(textOf(result.content)).toContain(
       'DMAP did not finish the Superfund site search within 50 seconds',
     );
     expect(urls).toHaveLength(1);
@@ -3313,9 +4149,7 @@ describe('DmapService water-system and Superfund call deadline', () => {
     expect(result.structuredContent).toMatchObject({
       error: { code: JsonRpcErrorCode.RequestCancelled },
     });
-    expect(result.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n')).toMatch(
-      /operation was aborted/,
-    );
+    expect(textOf(result.content)).toMatch(/operation was aborted/);
     expect(urls).toHaveLength(1);
   });
 
@@ -3332,9 +4166,9 @@ describe('DmapService water-system and Superfund call deadline', () => {
     let requests = 0;
     const urls = stubFakeDmap({ 'sems.envirofacts_site': [] }, async (_url, signal) => {
       requests++;
-      if (requests === 1) return respondAfter(30_000, signal);
+      if (requests === 1) return answerAfter(30_000, signal, () => undefined);
       if (requests === 2) {
-        await respondAfter(10_000, signal);
+        await answerAfter(10_000, signal, () => undefined);
         return new Response('temporary outage', { status: 503 });
       }
       return hang(signal);
@@ -3358,14 +4192,13 @@ describe('DmapService water-system and Superfund call deadline', () => {
 
   it('settles a ZIP violation check against a hung DMAP as a Timeout under 60 seconds', async () => {
     vi.useFakeTimers();
-    stubFakeDmap({ 'sdwis.water_system': zipSystems(5), 'sdwis.violation': [] }, (url, signal) =>
-      url.includes('/sdwis.violation/') ? hang(signal) : Promise.resolve(),
-    );
+    stubFakeDmap({ 'sdwis.water_system': zipSystems(5) }, (_url, signal) => hang(signal));
+    const { lookup, scopes } = fakeViolatorLookup([{ pwsid: pwsidOf(1) }]);
 
     const settled = await settleWithin(
       () =>
         makeService().searchWaterSystems(
-          { zipCode: '59901', hasViolation: true, limit: 10 },
+          { zipCode: '59901', currentViolators: lookup, limit: 10 },
           createMockContext(),
         ),
       55_000,
@@ -3375,54 +4208,34 @@ describe('DmapService water-system and Superfund call deadline', () => {
       code: JsonRpcErrorCode.Timeout,
       data: { reason: 'retry_deadline_exceeded' },
     });
+    expect(scopes).toEqual([]);
   });
 
-  it('shares one deadline across the whole ZIP chain, not one per request', async () => {
-    vi.useFakeTimers();
-    // 1,000 systems: the ZIP read, then five 200-PWSID violation requests of 12 s each — 60 s in
-    // all, so only a deadline shared across the chain settles the call by 55 s.
-    stubFakeDmap(
-      { 'sdwis.water_system': zipSystems(1000), 'sdwis.violation': [] },
-      (url, signal) =>
-        url.includes('/sdwis.violation/') ? respondAfter(12_000, signal) : Promise.resolve(),
-    );
-
-    const settled = await settleWithin(
-      () =>
-        makeService().searchWaterSystems(
-          { zipCode: '59901', hasViolation: true, limit: 10 },
-          createMockContext(),
-        ),
-      55_000,
-    );
-
-    expect(settled).toMatchObject({ code: JsonRpcErrorCode.Timeout });
-  });
-
-  const waterNarrowing =
-    'DMAP did not finish the water system search within 50 seconds. Narrow it with zip_code or pws_type, or call again later.';
+  const waterNarrowing = (upstream: string) =>
+    `${upstream} did not finish the water system search within 50 seconds. Narrow it with zip_code, county, pws_type, or active_only, or call again later.`;
 
   it.each([
     [
-      'a state violation scan',
+      'a state violation search',
       () =>
-        makeService().searchWaterSystems({ state: 'MT', hasViolation: true }, createMockContext()),
-      waterNarrowing,
+        makeService().searchWaterSystems(
+          {
+            state: 'MT',
+            currentViolators: fakeViolatorLookup([{ pwsid: 'MT0000001', state: 'MT' }]).lookup,
+          },
+          createMockContext(),
+        ),
+      waterNarrowing('DMAP and ECHO'),
     ],
     [
       'a plain water-system search',
       () => makeService().searchWaterSystems({ state: 'MT' }, createMockContext()),
-      waterNarrowing,
+      waterNarrowing('DMAP'),
     ],
     [
       'a Superfund search',
       () => makeService().searchSuperfund({ state: 'MT' }, createMockContext()),
       'DMAP did not finish the Superfund site search within 50 seconds. Narrow it with radius_miles, zip_code, city, or npl_status, or call again later.',
-    ],
-    [
-      'a Superfund site lookup',
-      () => makeService().searchSuperfundById('0800040', createMockContext()),
-      'DMAP did not finish the Superfund site lookup within 50 seconds. Call again later.',
     ],
     [
       'a TRI search',
@@ -3445,18 +4258,376 @@ describe('DmapService water-system and Superfund call deadline', () => {
     },
   );
 
-  it('rejects with the cancellation when the caller aborts mid-chain', async () => {
+  it('rejects with the cancellation when the caller aborts during the ZIP read', async () => {
     const controller = new AbortController();
-    const abort = abortWhileInFlight(controller);
-    stubFakeDmap({ 'sdwis.water_system': zipSystems(5), 'sdwis.violation': [] }, (url, signal) =>
-      url.includes('/sdwis.violation/') ? abort(url, signal) : Promise.resolve(),
-    );
+    stubFakeDmap({ 'sdwis.water_system': zipSystems(5) }, abortWhileInFlight(controller));
+    const { lookup, scopes } = fakeViolatorLookup([{ pwsid: pwsidOf(1) }]);
 
     await expect(
       makeService().searchWaterSystems(
-        { zipCode: '59901', hasViolation: true, limit: 10 },
+        { zipCode: '59901', currentViolators: lookup, limit: 10 },
         createMockContext({ signal: controller.signal }),
       ),
     ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(scopes).toEqual([]);
+  });
+});
+
+const ECHO_URL = 'https://echodata.epa.gov/echo/';
+const echoUrls = (urls: string[]) => urls.filter((u) => u.startsWith(ECHO_URL));
+
+/** A system ECHO reports with a current violation, under the `p_st` it files the system in. */
+type EchoViolator = { pwsid: string; st: string; type?: string };
+
+/**
+ * Answer ECHO sdw_rest_services the way the live service answers a current-violation lookup
+ * (2026-11-01): get_systems with `p_cs=H,M,O,P,S` and `p_st` (narrowed by `p_systyp`) or `p_pid`
+ * answers QueryRows and a QueryID and echoes no parameters; get_qid pages that query's systems,
+ * every row with CurrVioFlag "1".
+ */
+function echoSdwResponse(url: URL, violators: EchoViolator[], queries: Map<string, string[]>) {
+  const p = url.searchParams;
+  const endpoint = url.pathname.split('/').at(-1);
+  if (endpoint === 'sdw_rest_services.get_systems') {
+    if (p.get('p_cs') !== 'H,M,O,P,S') throw new Error(`Lookup without p_cs: ${url}`);
+    const pids = p.get('p_pid')?.split(',');
+    const found = violators
+      .filter((v) =>
+        pids
+          ? pids.includes(v.pwsid)
+          : v.st === p.get('p_st') && (!p.get('p_systyp') || v.type === p.get('p_systyp')),
+      )
+      .map((v) => v.pwsid);
+    const qid = String(queries.size + 1);
+    queries.set(qid, found);
+    const rows = String(found.length);
+    return Response.json({
+      Results: { Message: 'Success', QueryRows: rows, CVRows: rows, QueryID: qid },
+    });
+  }
+  if (endpoint === 'sdw_rest_services.get_qid') {
+    const found = queries.get(p.get('qid') ?? '') ?? [];
+    const pageno = Number(p.get('pageno'));
+    const page = found.slice((pageno - 1) * 1000, pageno * 1000);
+    return Response.json({
+      Results: {
+        PageNo: String(pageno),
+        QueryRows: String(found.length),
+        WaterSystems: page.map((id) => ({ PWSId: id, PWSName: id, CurrVioFlag: '1' })),
+      },
+    });
+  }
+  throw new Error(`Fake ECHO has no endpoint ${endpoint}`);
+}
+
+/**
+ * Stub fetch with the fake DMAP over `tables` and the fake ECHO SDW lookup over `violators`,
+ * recording every URL. `beforeResponse` can hold, fail, or answer any request first.
+ */
+function stubWaterUpstreams(
+  tables: Record<string, DmapRow[]>,
+  violators: EchoViolator[],
+  beforeResponse?: (url: string, signal: AbortSignal | undefined) => Promise<unknown>,
+): string[] {
+  const urls: string[] = [];
+  const queries = new Map<string, string[]>();
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const url = String(input);
+    urls.push(url);
+    const held = await beforeResponse?.(url, init?.signal ?? undefined);
+    if (held instanceof Response) return held;
+    if (url.startsWith(ECHO_URL)) return echoSdwResponse(new URL(url), violators, queries);
+    return Response.json(evaluateDmapUrl(url, tables));
+  });
+  return urls;
+}
+
+describe('epa_water_search_systems current violations from ECHO', () => {
+  beforeEach(() => {
+    initDmapService({} as AppConfig, {} as StorageService);
+    initEchoService(
+      { pkg: { name: 'epa-mcp-server', version: '0.0.0' } } as AppConfig,
+      {} as StorageService,
+    );
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  /**
+   * Live WA shapes (2026-11-01): WA5300484 and WA5300552 carry unresolved (K) SDWIS violations
+   * ECHO reports as no current violation; WA5301483 has a current violation; 105300009 is a
+   * system ECHO files under p_st=WA that is under EPA Region 10 primacy.
+   */
+  const waTables = {
+    'sdwis.water_system': [
+      waterSystem(0, { pwsid: 'WA5300484', pws_type_code: 'CWS' }),
+      waterSystem(0, { pwsid: 'WA5300552', pws_type_code: 'CWS' }),
+      waterSystem(0, { pwsid: 'WA5301483', pws_type_code: 'NTNCWS' }),
+      { pwsid: '105300009', pws_name: 'Tribal System', primacy_agency_code: '10' },
+    ],
+    'sdwis.violation': ['WA5300484', 'WA5300552', 'WA5301483'].map((pwsid) => ({
+      pwsid,
+      primacy_agency_code: 'WA',
+      compliance_status_code: 'K',
+    })),
+  };
+  const waViolators: EchoViolator[] = [
+    { pwsid: 'WA5301483', st: 'WA', type: 'NTNCWS' },
+    { pwsid: '105300009', st: 'WA', type: 'CWS' },
+  ];
+
+  it('returns the systems ECHO flags, not every system SDWIS lists as unresolved', async () => {
+    stubWaterUpstreams(waTables, waViolators);
+
+    const call = await runToolContract(waterSearchSystemsTool, {
+      state: 'WA',
+      has_violation: true,
+    });
+
+    expect(call.isError).toBeFalsy();
+    expect(call.structuredContent).toMatchObject({
+      systems: [{ pwsid: 'WA5301483', hasViolation: true }],
+      totalCount: 1,
+      effectiveQuery: 'state=WA; has_violation=true, current SDWA violation per ECHO',
+    });
+    const text = textOf(call.content);
+    expect(text).toContain('### System 0 ⚠️ CURRENT VIOLATION');
+    expect(text).toContain('**Current Violation:** Yes');
+    expect(text).not.toContain('WA5300484');
+  });
+
+  it('sends exactly the ECHO lookup parameters, p_systyp=NTNCWS for non-transient', async () => {
+    const urls = stubWaterUpstreams(waTables, waViolators);
+
+    const call = await runToolContract(waterSearchSystemsTool, {
+      state: 'WA',
+      has_violation: true,
+      pws_type: 'non-transient',
+    });
+
+    expect(call.structuredContent).toMatchObject({ systems: [{ pwsid: 'WA5301483' }] });
+    const [lookup, page] = echoUrls(urls).map((u) => new URL(u));
+    expect(lookup!.pathname).toBe('/echo/sdw_rest_services.get_systems');
+    expect(Object.fromEntries(lookup!.searchParams)).toEqual({
+      output: 'JSON',
+      responseset: '1000',
+      p_cs: 'H,M,O,P,S',
+      p_st: 'WA',
+      p_systyp: 'NTNCWS',
+    });
+    expect(page!.pathname).toBe('/echo/sdw_rest_services.get_qid');
+  });
+
+  it('makes no ECHO request without has_violation', async () => {
+    const urls = stubWaterUpstreams(waTables, waViolators);
+
+    const call = await runToolContract(waterSearchSystemsTool, { state: 'WA' });
+
+    expect(echoUrls(urls)).toEqual([]);
+    expect(call.structuredContent).toMatchObject({ totalCount: 3 });
+  });
+
+  it('returns the systems a ZIP stores as ZIP+4 beside its five-digit ones', async () => {
+    // Live 98104 (2026-11-01): WA5302462 is stored as 98104-3122, WA5359090 as 98104-2017.
+    stubWaterUpstreams(
+      {
+        'sdwis.water_system': [
+          waterSystem(0, { pwsid: 'WA5302462', zip_code: '98104-3122' }),
+          waterSystem(0, { pwsid: 'WA5307390', zip_code: '98104' }),
+          waterSystem(0, { pwsid: 'WA5359090', zip_code: '98104-2017' }),
+          waterSystem(0, { pwsid: 'WA5377050', zip_code: '98134' }),
+        ],
+      },
+      [],
+    );
+
+    const call = await runToolContract(waterSearchSystemsTool, { zip_code: '98104' });
+
+    const { systems } = call.structuredContent as { systems: Array<{ pwsid: string }> };
+    expect(systems.map((s) => s.pwsid)).toEqual(['WA5302462', 'WA5307390', 'WA5359090']);
+  });
+
+  it('returns only systems serving the county, for every spelling of its name', async () => {
+    const tables = countyTables([
+      waterSystem(1, { county_served: 'King' }),
+      waterSystem(2, { county_served: 'Kingston' }),
+      waterSystem(3, { county_served: 'Pierce,King' }),
+    ]);
+    stubWaterUpstreams(tables, []);
+
+    for (const county of ['King', 'KING', 'king', 'King County']) {
+      const call = await runToolContract(waterSearchSystemsTool, { state: 'WA', county });
+      expect(call.structuredContent).toMatchObject({
+        systems: [{ pwsid: pwsidOf(1) }, { pwsid: pwsidOf(3) }],
+        totalCount: 2,
+        effectiveQuery: 'state=WA; county=KING',
+      });
+    }
+  });
+
+  it("checks a ZIP's systems with one p_pid batch", async () => {
+    const urls = stubWaterUpstreams(
+      {
+        'sdwis.water_system': [1, 2, 3].map((n) =>
+          waterSystem(n, { pwsid: `MT000000${n}`, primacy_agency_code: 'MT', zip_code: '59901' }),
+        ),
+      },
+      [
+        { pwsid: 'MT0000002', st: 'MT' },
+        { pwsid: 'MT0000009', st: 'MT' },
+      ],
+    );
+
+    const call = await runToolContract(waterSearchSystemsTool, {
+      zip_code: '59901',
+      has_violation: true,
+    });
+
+    expect(call.structuredContent).toMatchObject({
+      systems: [{ pwsid: 'MT0000002', hasViolation: true }],
+      totalCount: 1,
+    });
+    const lookup = new URL(echoUrls(urls)[0]!);
+    expect(lookup.searchParams.get('p_pid')).toBe('MT0000001,MT0000002,MT0000003');
+    expect(lookup.searchParams.has('p_st')).toBe(false);
+  });
+
+  it('fails the call when ECHO fails, never reading as no violations', async () => {
+    vi.useFakeTimers();
+    stubWaterUpstreams(waTables, waViolators, async (url) =>
+      url.startsWith(ECHO_URL) ? new Response('upstream busy', { status: 503 }) : undefined,
+    );
+
+    const pending = runToolContract(waterSearchSystemsTool, { state: 'WA', has_violation: true });
+    await vi.advanceTimersByTimeAsync(55_000);
+    const call = await pending;
+
+    expect(call.isError).toBe(true);
+    expect(call.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.ServiceUnavailable },
+    });
+    expect(call.structuredContent).not.toHaveProperty('systems');
+  });
+
+  it('shares one 50-second deadline across the DMAP read and every ECHO lookup', async () => {
+    vi.useFakeTimers();
+    // 1,000 ZIP systems: the DMAP read, then five 200-PWSID ECHO lookups of 12 s each — 60 s in
+    // all, so only a deadline shared across both upstreams settles the call by 55 s.
+    const urls = stubWaterUpstreams(
+      {
+        'sdwis.water_system': Array.from({ length: 1000 }, (_, i) =>
+          waterSystem(i + 1, { zip_code: '59901' }),
+        ),
+      },
+      [],
+      (url, signal) =>
+        url.startsWith(ECHO_URL) ? answerAfter(12_000, signal, () => undefined) : Promise.resolve(),
+    );
+
+    const pending = runToolContract(waterSearchSystemsTool, {
+      zip_code: '59901',
+      has_violation: true,
+    });
+    await vi.advanceTimersByTimeAsync(55_000);
+    const call = await pending;
+
+    expect(call.structuredContent).toMatchObject({
+      error: {
+        code: JsonRpcErrorCode.Timeout,
+        data: { reason: 'retry_deadline_exceeded', deadlineMs: 50_000 },
+      },
+    });
+    expect(textOf(call.content)).toContain(
+      'DMAP and ECHO did not finish the water system search within 50 seconds',
+    );
+    expect(echoUrls(urls)).toHaveLength(5);
+  });
+
+  it('renders cancellation during an ECHO lookup as RequestCancelled', async () => {
+    const controller = new AbortController();
+    const abort = abortWhileInFlight(controller);
+    stubWaterUpstreams(waTables, waViolators, (url, signal) =>
+      url.startsWith(ECHO_URL) ? abort(url, signal) : Promise.resolve(),
+    );
+
+    const call = await runToolContract(
+      waterSearchSystemsTool,
+      { state: 'WA', has_violation: true },
+      { context: { signal: controller.signal } },
+    );
+
+    expect(call.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.RequestCancelled },
+    });
+  });
+});
+
+/** A 200 response whose body stream fails after its first bytes, as a dropped connection does. */
+function truncatedBody(): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('[{"pwsid":'));
+        controller.error(new TypeError('terminated'));
+      },
+    }),
+  );
+}
+
+describe('DmapService.fetchTable retry classification', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  const system = { pwsid: 'WA5377050', pws_name: 'SEATTLE PUBLIC UTILITIES' };
+
+  it.each([
+    ['a rejected fetch', () => Promise.reject(new TypeError('fetch failed'))],
+    ['a body read that fails mid-stream', async () => truncatedBody()],
+    ['an HTTP 503', async () => new Response('upstream busy', { status: 503 })],
+    ['an HTTP 429', async () => new Response('slow down', { status: 429 })],
+    [
+      'an HTML page in place of JSON',
+      async () => new Response('<!DOCTYPE html><html><body>Busy</body></html>'),
+    ],
+  ])('retries %s and returns the next attempt', async (_, firstAttempt) => {
+    vi.useFakeTimers();
+    let attempts = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
+      attempts++;
+      return attempts === 1 ? firstAttempt() : Promise.resolve(Response.json([system]));
+    });
+
+    const pending = makeService().searchWaterSystems({ state: 'WA' }, createMockContext());
+    await vi.runAllTimersAsync();
+
+    expect((await pending).items).toEqual([
+      { pwsid: 'WA5377050', name: 'SEATTLE PUBLIC UTILITIES' },
+    ]);
+    expect(attempts).toBe(2);
+  });
+
+  it('fails a fully read malformed body once as a SerializationError carrying the parse error', async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => new Response('{ broken'));
+
+    const pending = makeService()
+      .searchWaterSystems({ state: 'WA' }, createMockContext())
+      .catch((error: unknown) => error);
+    await vi.runAllTimersAsync();
+    const error = await pending;
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(error).toMatchObject({
+      code: JsonRpcErrorCode.SerializationError,
+      message: 'EPA DMAP returned a response that is not JSON. Call again later.',
+    });
+    expect((error as Error).cause).toBeInstanceOf(SyntaxError);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

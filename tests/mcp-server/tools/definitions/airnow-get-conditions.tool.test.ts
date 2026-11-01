@@ -9,6 +9,7 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { airnowGetConditionsTool } from '@/mcp-server/tools/definitions/airnow-get-conditions.tool.js';
+import { textOf } from '../../../helpers.js';
 
 const mockGetCurrent = vi.fn();
 const mockGetForecast = vi.fn();
@@ -74,8 +75,6 @@ const forecastAreas = [
 
 const ctx = () =>
   createMockContext({ errors: airnowGetConditionsTool.errors, tenantId: 'test-tenant' });
-const textOf = (blocks: { type: string; text?: string }[]) =>
-  blocks.map((block) => block.text ?? '').join('\n');
 
 describe('airnowGetConditionsTool', () => {
   it('preserves valid ZIP precedence over valid coordinates on both surfaces', async () => {
@@ -159,6 +158,59 @@ describe('airnowGetConditionsTool', () => {
     );
   });
 
+  it.each(['98108-1234', '981081234', ' 98108-1234 '])(
+    'searches the first five digits of the ZIP+4 %j',
+    async (zip) => {
+      mockGetCurrent.mockResolvedValue({ areas: [seattleObservation] });
+      const call = await runToolContract(airnowGetConditionsTool, { zip_code: zip });
+      expect(call.isError).toBeFalsy();
+      expect(mockGetCurrent).toHaveBeenCalledWith(
+        { kind: 'zip', zipCode: '98108' },
+        expect.anything(),
+      );
+    },
+  );
+
+  it.each(['9810', '2134', 'abcde'])(
+    'rejects zip_code %j at the schema naming the 5-digit form, before any lookup',
+    async (zip) => {
+      const call = await runToolContract(airnowGetConditionsTool, { zip_code: zip });
+      expect(call.structuredContent).toMatchObject({
+        error: { code: JsonRpcErrorCode.InvalidParams },
+      });
+      expect(textOf(call.content)).toContain('5-digit ZIP code');
+      expect(mockGetCurrent).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['11/02/2026', '2026-02-30'])(
+    'rejects forecast_date %j at the schema, before any lookup',
+    async (date) => {
+      const call = await runToolContract(airnowGetConditionsTool, {
+        zip_code: '98101',
+        mode: 'forecast',
+        forecast_date: date,
+      });
+      expect(call.structuredContent).toMatchObject({
+        error: { code: JsonRpcErrorCode.InvalidParams },
+      });
+      expect(textOf(call.content)).toContain('YYYY-MM-DD');
+      expect(mockGetForecast).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps forecast_date_needs_forecast_mode for a padded date in current mode', async () => {
+    const call = await runToolContract(airnowGetConditionsTool, {
+      zip_code: '98101',
+      forecast_date: ' 2026-11-02 ',
+    });
+    expect(call.structuredContent).toMatchObject({
+      error: { data: { reason: 'forecast_date_needs_forecast_mode' } },
+    });
+    expect(textOf(call.content)).toContain('forecast_date "2026-11-02" only filters forecasts');
+    expect(mockGetCurrent).not.toHaveBeenCalled();
+  });
+
   it('falls through to latitude/longitude when zip_code is whitespace only', async () => {
     mockGetCurrent.mockResolvedValue({ areas: [seattleObservation] });
     await airnowGetConditionsTool.handler(
@@ -218,6 +270,21 @@ describe('airnowGetConditionsTool', () => {
     ]);
     // Attribution credits only the agencies behind what is returned.
     expect(onlyFirst.attribution).not.toContain('Tacoma Agency');
+  });
+
+  it('trims a padded forecast_date before filtering', async () => {
+    mockGetForecast.mockResolvedValue({ areas: forecastAreas });
+    const result = await airnowGetConditionsTool.handler(
+      airnowGetConditionsTool.input.parse({
+        zip_code: '98101',
+        mode: 'forecast',
+        forecast_date: ' 2026-10-08 ',
+      }),
+      ctx(),
+    );
+    expect(result.observations).toEqual([
+      { ...forecastAreas[0], readings: [forecastReading('2026-10-08')] },
+    ]);
   });
 
   it('lists the issued dates when forecast_date matches nothing', async () => {
@@ -297,7 +364,7 @@ describe('airnowGetConditionsTool', () => {
     expect(result.structuredContent).toMatchObject({
       error: { code: JsonRpcErrorCode.InvalidParams, data: { reason: 'invalid_arguments' } },
     });
-    expect(textOf(result.content as { type: string; text?: string }[])).toContain('distance_miles');
+    expect(textOf(result.content)).toContain('distance_miles');
     expect(mockGetCurrent).not.toHaveBeenCalled();
   });
 

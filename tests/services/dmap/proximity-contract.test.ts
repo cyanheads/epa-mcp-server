@@ -2,6 +2,7 @@
  * @fileoverview Superfund proximity planning, input and coverage contracts at the fetch boundary.
  * @module tests/services/dmap/proximity-contract.test
  */
+
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
@@ -9,9 +10,8 @@ import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testi
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { superfundSearchSitesTool as tool } from '@/mcp-server/tools/definitions/superfund-search-sites.tool.js';
 import { DmapService, initDmapService } from '@/services/dmap/dmap-service.js';
+import { textOf } from '../../helpers.js';
 
-const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
-  result.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n');
 const coverage =
   'Proximity searches match only sites with usable coordinates. Administrative searches can also find sites without coordinates.';
 describe('Superfund proximity contracts', () => {
@@ -22,7 +22,7 @@ describe('Superfund proximity contracts', () => {
     expect(result.structuredContent).toMatchObject({
       error: { code: JsonRpcErrorCode.InvalidParams },
     });
-    expect(textOf(result)).toContain('longitude');
+    expect(textOf(result.content)).toContain('longitude');
     expect(fetch).not.toHaveBeenCalled();
     expect(timer).not.toHaveBeenCalled();
   });
@@ -51,8 +51,8 @@ describe('Superfund proximity contracts', () => {
           },
         },
       });
-      expect(textOf(result)).toContain('incomplete_proximity');
-      expect(textOf(result)).toContain('radius_miles');
+      expect(textOf(result.content)).toContain('incomplete_proximity');
+      expect(textOf(result.content)).toContain('radius_miles');
     }
     expect(fetch).not.toHaveBeenCalled();
     expect(timer).not.toHaveBeenCalled();
@@ -80,7 +80,7 @@ describe('Superfund proximity contracts', () => {
     });
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toMatchObject({ notice: expect.stringContaining(coverage) });
-    expect(textOf(result)).toContain(coverage);
+    expect(textOf(result.content)).toContain(coverage);
   });
   it('uses bounded latitude partitions for broad searches and awaits all work', async () => {
     let active = 0;
@@ -100,57 +100,60 @@ describe('Superfund proximity contracts', () => {
         { latitude: 39.5, longitude: -98.35, radiusMiles: 500 },
         createMockContext(),
       ),
-    ).toEqual([]);
+    ).toEqual({ items: [], totalCount: 0 });
     expect(urls).toHaveLength(15);
     expect(urls.every((url) => !url.includes('/primary_longitude_decimal_val/'))).toBe(true);
     expect(peak).toBeGreaterThan(1);
     expect(peak).toBeLessThanOrEqual(8);
     expect(active).toBe(0);
   });
-  it.each([400, 429, 503, 'malformed'] as const)(
-    'settles sibling requests after fatal upstream %s',
-    async (status) => {
-      vi.useFakeTimers();
-      let attempts = 0,
-        active = 0,
-        aborted = 0;
-      vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
-        attempts++;
-        if (attempts === 1)
-          return status === 'malformed' ? new Response('{') : new Response('failure', { status });
-        active++;
-        try {
-          await new Promise<void>((_resolve, reject) =>
-            init!.signal!.addEventListener(
-              'abort',
-              () => {
-                aborted++;
-                reject(init!.signal!.reason);
-              },
-              { once: true },
-            ),
-          );
-        } finally {
-          active--;
-        }
-        return Response.json([]);
-      });
-      initDmapService({} as AppConfig, {} as StorageService);
-      const pending = runToolContract(tool, {
-        latitude: 39.5,
-        longitude: -98.35,
-        radius_miles: 500,
-      });
-      await vi.advanceTimersByTimeAsync(55_000);
-      const result = await pending;
-      expect(result.isError).toBe(true);
-      expect(result.structuredContent).not.toHaveProperty('sites');
-      expect(textOf(result)).toContain('Error');
-      expect(active).toBe(0);
-      expect(aborted).toBeGreaterThan(0);
-      expect(attempts).toBeLessThanOrEqual(11);
-    },
-  );
+  it.each([
+    [400, JsonRpcErrorCode.InternalError],
+    [429, JsonRpcErrorCode.Timeout],
+    [503, JsonRpcErrorCode.Timeout],
+    ['malformed', JsonRpcErrorCode.SerializationError],
+  ] as const)('settles sibling requests after fatal upstream %s', async (status, code) => {
+    vi.useFakeTimers();
+    let attempts = 0,
+      active = 0,
+      aborted = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      attempts++;
+      if (attempts === 1)
+        return status === 'malformed' ? new Response('{') : new Response('failure', { status });
+      active++;
+      try {
+        await new Promise<void>((_resolve, reject) =>
+          init!.signal!.addEventListener(
+            'abort',
+            () => {
+              aborted++;
+              reject(init!.signal!.reason);
+            },
+            { once: true },
+          ),
+        );
+      } finally {
+        active--;
+      }
+      return Response.json([]);
+    });
+    initDmapService({} as AppConfig, {} as StorageService);
+    const pending = runToolContract(tool, {
+      latitude: 39.5,
+      longitude: -98.35,
+      radius_miles: 500,
+    });
+    await vi.advanceTimersByTimeAsync(55_000);
+    const result = await pending;
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({ error: { code } });
+    expect(result.structuredContent).not.toHaveProperty('sites');
+    expect(textOf(result.content)).toContain('Error');
+    expect(active).toBe(0);
+    expect(aborted).toBeGreaterThan(0);
+    expect(attempts).toBeLessThanOrEqual(11);
+  });
   it('exhausts broad pages before ranking, including an empty page past the end', async () => {
     const urls: string[] = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
@@ -185,12 +188,17 @@ describe('Superfund proximity contracts', () => {
       limit: 1,
     });
     expect(result.isError).toBeFalsy();
+    const page =
+      'Showing site 1 of 2,000 matching Superfund sites within the radius, nearest first.';
     expect(result.structuredContent).toMatchObject({
       sites: [{ siteId: 'N0' }],
-      notice: expect.stringContaining('nearest 1 of 2000'),
+      totalCount: 2000,
+      nextOffset: 1,
+      notice: expect.stringContaining(page),
     });
-    expect(textOf(result)).toContain('nearest 1 of 2000');
-    expect(textOf(result)).toContain(coverage);
+    expect(textOf(result.content)).toContain(page);
+    expect(textOf(result.content)).toContain('**Total Found:** 2000 | **Returned:** 1');
+    expect(textOf(result.content)).toContain(coverage);
     expect(
       urls.filter((url) => url.includes('/beginsWith/39/')).map((url) => url.split('/').at(-2)),
     ).toEqual(['1:2000', '2001:4000', '4001:6000']);
@@ -227,7 +235,7 @@ describe('Superfund proximity contracts', () => {
       error: { code: JsonRpcErrorCode.RequestCancelled },
     });
     expect(result.structuredContent).not.toHaveProperty('sites');
-    expect(textOf(result)).toMatch(/abort/i);
+    expect(textOf(result.content)).toMatch(/abort/i);
     expect(starts).toBe(8);
     expect(aborted).toBe(8);
     expect(active).toBe(0);

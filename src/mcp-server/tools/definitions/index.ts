@@ -4,6 +4,7 @@
  */
 
 export { airnowGetConditionsTool } from './airnow-get-conditions.tool.js';
+export { echoGetCaseTool } from './echo-get-case.tool.js';
 export { echoGetFacilityTool } from './echo-get-facility.tool.js';
 export { echoSearchFacilitiesTool } from './echo-search-facilities.tool.js';
 export { echoSearchViolationsTool } from './echo-search-violations.tool.js';
@@ -15,6 +16,7 @@ export { triSearchReleasesTool } from './tri-search-releases.tool.js';
 export { waterSearchSystemsTool } from './water-search-systems.tool.js';
 
 import { airnowGetConditionsTool } from './airnow-get-conditions.tool.js';
+import { echoGetCaseTool } from './echo-get-case.tool.js';
 import { echoGetFacilityTool } from './echo-get-facility.tool.js';
 import { echoSearchFacilitiesTool } from './echo-search-facilities.tool.js';
 import { echoSearchViolationsTool } from './echo-search-violations.tool.js';
@@ -33,6 +35,7 @@ export const coreToolDefinitions = [
   echoSearchFacilitiesTool,
   echoGetFacilityTool,
   echoSearchViolationsTool,
+  echoGetCaseTool,
   triGetFacilityReleasesTool,
   triSearchReleasesTool,
   superfundSearchSitesTool,

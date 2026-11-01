@@ -1,8 +1,8 @@
 /**
  * @fileoverview EJScreen (EJAM API) response and normalized domain types.
- * Data is EJScreen v2.2 (2022) served via the community-maintained EJAM API
- * (api.ejanalysis.com, Public Environmental Data Partners), which rehosts
- * EJScreen after EPA discontinued public access in 2025.
+ * Data is EJAM's ACS 2018–2022 release (EJScreen 2.3 method) served via the
+ * community-maintained EJAM API (api.ejanalysis.com, Public Environmental Data
+ * Partners), which rehosts EJScreen after EPA discontinued public access in 2025.
  * @module services/ejscreen/types
  */
 
@@ -39,16 +39,16 @@ export interface EjDemographicIndicator {
 /** A composite index value (Demographic Index / Supplemental Demographic Index). */
 export interface EjIndexValue {
   statePercentile?: number;
+  /** National average of the index (`avg.<code>`). */
+  usAverage?: number;
   usPercentile?: number;
   value: number;
 }
 
 /** Normalized EJScreen result for a point + buffer. Mirrors the tool output schema. */
 export interface EjscreenResult {
-  coverage: {
-    valid: boolean;
-    note?: string;
-  };
+  /** Indicators were returned, or the note says why not. */
+  coverage: { valid: true } | { valid: false; note: string };
   dataSource: string;
   demographic: EjDemographicIndicator[];
   demographicIndex?: EjIndexValue;

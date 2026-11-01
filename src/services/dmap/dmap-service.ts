@@ -17,8 +17,10 @@ import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { httpErrorFromResponse, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
 import { type CallBudget, callBudget } from '@/services/call-budget.js';
+import { bareCountyName } from '@/services/county-name.js';
+import type { SdwViolatorScope, WaterSystemType } from '@/services/echo/echo-service.js';
+import { type Page, slicePage } from '@/services/page.js';
 import type {
-  RawSdwisViolation,
   RawSdwisWaterSystem,
   RawSemsSite,
   RawTriFacility,
@@ -27,14 +29,33 @@ import type {
   SuperfundSite,
   SuperfundSiteDetail,
   TriRelease,
+  TriSearchRelease,
   WaterSystem,
 } from './types.js';
 
 /**
  * One DMAP URL filter: `{column}/{operator}/{value}`. `literal` is set on a `contains` filter
  * whose value had characters replaced by DMAP's wildcard (containsFilter); rows must contain it.
+ * `keep`, set with `literal`, replaces that containment check with its own test of the cell.
  */
-type DmapFilter = { column: string; operator: string; value: string; literal?: string };
+type DmapFilter = {
+  column: string;
+  operator: string;
+  value: string;
+  literal?: string;
+  keep?: (cell: string) => boolean;
+};
+
+/** A filter fetchMatchingRows checks each returned row against. */
+type CheckedFilter = DmapFilter & { literal: string };
+
+/** Whether `row` passes every checked filter: its `keep` test, or containing its literal text. */
+function passesChecks(row: Record<string, unknown>, checked: CheckedFilter[]): boolean {
+  return checked.every((f) => {
+    const cell = String(row[f.column] ?? '');
+    return f.keep ? f.keep(cell) : cell.toLowerCase().includes(f.literal.toLowerCase());
+  });
+}
 
 /**
  * Characters DMAP reads literally in a `contains` value. Live (2026-10-16), its path parser
@@ -81,7 +102,7 @@ function containsFilter(column: string, text: string): DmapFilter {
   if (!/[A-Za-z0-9]/.test(pattern)) {
     throw validationError(
       `"${value}" has no letter or digit to search on. EPA's DMAP service matches text by its letters, digits, spaces, and hyphens.`,
-      { value },
+      { reason: 'unmatchable_filter', value },
     );
   }
   return { column, operator: 'contains', value: pattern, literal: value };
@@ -101,7 +122,7 @@ function exactFilter(filter: DmapFilter): DmapFilter {
         const recovery = character === ',' ? 'Pass one value per call.' : 'Remove it and retry.';
         throw validationError(
           `"${value}" contains "${character}", a character EPA's DMAP service cannot match in an exact-value filter. ${recovery}`,
-          { value, character },
+          { reason: 'unmatchable_filter', value, character },
         );
       }
     }
@@ -118,6 +139,14 @@ const EXACT_TEXT_PAGE_ROWS = 100;
  */
 const EXACT_TEXT_MAX_PAGES = 3;
 
+/** The rows fetchMatchingRows kept, each with its zero-based upstream position. */
+interface MatchedRows<T> {
+  positions: number[];
+  rows: T[];
+  /** Upstream position where the read stopped; absent when DMAP ran out of rows first. */
+  scanEnd?: number;
+}
+
 /** DMAP's front end refuses a longer request line with HTTP 400 "Request Line is too large". */
 const DMAP_REQUEST_LINE_LIMIT = 4094;
 
@@ -132,14 +161,22 @@ type DmapSortKey = { column: string; direction: 'asc' | 'desc' };
 
 /**
  * Newest reporting year first, then submission number, so a row range pages deterministically.
- * Keys must be table-qualified: DMAP resolves a bare column against the first table of a join
- * (`reporting_year` there is HTTP 500). Without the doc_ctrl_num tiebreak, AK rows `1:50` and
- * `51:100` shared 36 records.
+ * Every TRI form read sends it, a single-year one included, so paging rests on the unique
+ * doc_ctrl_num rather than DMAP's unsorted order. Keys must be table-qualified: DMAP resolves a
+ * bare column against the first table of a join (`reporting_year` there is HTTP 500). Without the
+ * doc_ctrl_num tiebreak, AK rows `1:50` and `51:100` shared 36 records.
  */
 const NEWEST_FIRST: DmapSortKey[] = [
   { column: 'tri.tri_reporting_form.reporting_year', direction: 'desc' },
   { column: 'tri.tri_reporting_form.doc_ctrl_num', direction: 'asc' },
 ];
+
+/**
+ * SEMS site ID order, so a Superfund row range pages deterministically on SEMS's unique site key
+ * rather than DMAP's unsorted order. Live (2026-11-01), NJ's 2,217 rows carry 2,217 distinct
+ * site IDs, and the sort costs nothing measurable on a 201-row page (3.09 s sorted, 3.11 s not).
+ */
+const BY_SITE_ID: DmapSortKey[] = [{ column: 'sems.envirofacts_site.site_id', direction: 'asc' }];
 
 /** SEMS seq repeats across chemicals; the full exposed association tuple orders pages. */
 const CONTAMINANT_ORDER: DmapSortKey[] = [
@@ -236,15 +273,16 @@ function normalizeTriRelease(raw: RawTriReportingForm): TriRelease {
     reportingYear: Number(raw.reporting_year ?? 0),
     ...(inGrams && { reportedUnit: 'grams' as const }),
   };
-  // one_time_release_qty is the only release qty in tri_reporting_form; the per-medium routine
-  // breakdown lives in tri.tri_release_qty and is merged in by the callers through
-  // fetchReleaseBreakdown (always for getTriReleases, opt-in for searchTriReleases).
+  // one_time_release_qty is the only release qty in tri_reporting_form; the per-medium breakdown
+  // lives in tri.tri_release_qty and is merged in by the callers through fetchReleaseBreakdown
+  // (always for getTriReleases, opt-in for searchTriReleases).
   const oneTime = parseNum(raw.one_time_release_qty);
-  if (oneTime !== undefined) result.totalReleasesInLbs = inGrams ? gramsToPounds(oneTime) : oneTime;
+  if (oneTime !== undefined)
+    result.oneTimeReleaseInLbs = inGrams ? gramsToPounds(oneTime) : oneTime;
   return result;
 }
 
-/** Per-medium routine-release sums for one TRI submission, in the unit the form was reported in. */
+/** Per-medium on-site release sums for one TRI submission, in the unit the form was reported in. */
 type MediumBreakdown = Pick<
   TriRelease,
   | 'releasesToAirInLbs'
@@ -253,27 +291,37 @@ type MediumBreakdown = Pick<
   | 'releasesToUndergroundInjectionInLbs'
 >;
 
-/** Merge a submission's per-medium sums into its release, converting a gram-reported form to pounds. */
+/**
+ * Merge a submission's per-medium sums into its release, converting a gram-reported form to
+ * pounds, and total the media present (Form R Sections 5.1–5.5.4). A range-coded medium is in
+ * neither the fields nor the total; TRI's published on-site total counts it at its midpoint.
+ */
 function withBreakdown<T extends TriRelease>(
   release: T,
   breakdown: MediumBreakdown | undefined,
 ): T {
   if (!breakdown) return release;
-  if (release.reportedUnit !== 'grams') return { ...release, ...breakdown };
-  const pounds: MediumBreakdown = {};
-  for (const [field, grams] of Object.entries(breakdown) as Array<
-    [keyof MediumBreakdown, number]
-  >) {
-    pounds[field] = gramsToPounds(grams);
+  let pounds = breakdown;
+  if (release.reportedUnit === 'grams') {
+    pounds = {};
+    for (const [field, grams] of Object.entries(breakdown) as Array<
+      [keyof MediumBreakdown, number]
+    >) {
+      pounds[field] = gramsToPounds(grams);
+    }
   }
-  return { ...release, ...pounds };
+  const total = Object.values(pounds).reduce((sum, lbs) => sum + lbs, 0);
+  return { ...release, ...pounds, totalOnSiteReleasesInLbs: roundQuantity(total) };
 }
 
 /**
  * Map each tri.tri_release_qty environmental_medium code to the TriRelease field its quantity
  * rolls up into, following EPA's on-site release taxonomy: air (fugitive + stack), water, land
- * (landfills / treatment / impoundment / other disposal), and underground injection. Codes absent
- * from this map (non-release sub-metrics, unknown codes) contribute nothing.
+ * (landfills / treatment / impoundment / other disposal), and underground injection. These are
+ * every code the table holds (live, 2026-11-01); an unknown code contributes nothing. Form R
+ * replaced its one surface impoundment line (SURF IMP, 5.5.3) with two siblings in RY2003 —
+ * SI 5.5.3A (RCRA Subtitle C) and SI 5.5.3B (other) — and no submission carries a quantity on
+ * both forms of the line.
  */
 const RELEASE_FIELD_BY_MEDIUM: Record<string, keyof MediumBreakdown> = {
   'AIR FUG': 'releasesToAirInLbs',
@@ -283,6 +331,8 @@ const RELEASE_FIELD_BY_MEDIUM: Record<string, keyof MediumBreakdown> = {
   'OTH LANDF': 'releasesToLandInLbs',
   'LAND TREA': 'releasesToLandInLbs',
   'SURF IMP': 'releasesToLandInLbs',
+  'SI 5.5.3A': 'releasesToLandInLbs',
+  'SI 5.5.3B': 'releasesToLandInLbs',
   'OTH DISP': 'releasesToLandInLbs',
   LANDF8795: 'releasesToLandInLbs',
   'UNINJ I': 'releasesToUndergroundInjectionInLbs',
@@ -290,37 +340,71 @@ const RELEASE_FIELD_BY_MEDIUM: Record<string, keyof MediumBreakdown> = {
   UNINJ8795: 'releasesToUndergroundInjectionInLbs',
 };
 
-/** sdwis.violation rows read to find a state's violating water systems. */
-const VIOLATION_SCAN_ROWS = 1000;
-
 /**
- * sdwis.violation compliance_status_code values for a violation still open. Live rows carry four
- * codes: K and O have no rtc_date (unresolved); R has an rtc_date and resolving enforcement
- * (returned to compliance); I has rtc_date equal to the system's pws_deactivation_date (resolved
- * when the system closed).
+ * PWSIDs per `pwsid in` request (a ~2,500-character URL), and per ECHO current-violation lookup
+ * of a ZIP's or county's systems, so one lookup is one get_systems request.
  */
-const OPEN_VIOLATION_FILTER: DmapFilter = {
-  column: 'compliance_status_code',
-  operator: 'in',
-  value: 'K,O',
-};
-
-/** PWSIDs per `pwsid in` request — a ~2,500-character URL. */
 const PWSID_CHUNK_SIZE = 200;
 
 /**
- * sdwis.water_system rows read for a ZIP violation check. Live ZIPs hold well under 200 systems
- * (98104: 8, 59901: 194), so one read covers the ZIP and a check is at most
- * 1 + ZIP_SYSTEM_SCAN_ROWS / PWSID_CHUNK_SIZE = 6 requests.
+ * sdwis.water_system rows one ZIP or county violation check reads, in one request. Measured ZIPs
+ * hold 10 (98104) and 194 (59901) systems and King County 519, so one read covers most; a check
+ * is one DMAP read plus at most VIOLATION_CHECK_ROWS / PWSID_CHUNK_SIZE ECHO lookups, and a larger
+ * match continues from the next row on the following call.
  */
-const ZIP_SYSTEM_SCAN_ROWS = 1000;
+const VIOLATION_CHECK_ROWS = 1000;
 
-/** The distinct PWSIDs named by a set of sdwis.violation rows. */
-function pwsidSet(violations: RawSdwisViolation[]): Set<string> {
-  return new Set(
-    violations.map((r) => r.pwsid).filter((id): id is string => typeof id === 'string'),
-  );
+/**
+ * PWSID order, so a water-system row range pages deterministically on SDWIS's unique system key.
+ * Table-qualified, because a county search joins sdwis.geographic_area, which also has `pwsid`.
+ */
+const BY_PWSID: DmapSortKey[] = [{ column: 'sdwis.water_system.pwsid', direction: 'asc' }];
+
+/** SDWIS pws_type_code per system type, the codes ECHO's p_systyp takes as well. */
+const WATER_TYPE_CODES = {
+  community: 'CWS',
+  'non-transient': 'NTNCWS',
+  transient: 'TNCWS',
+} as const satisfies Record<WaterSystemType, string>;
+
+/**
+ * Looks up the systems in `scope` that ECHO reports with a current SDWA violation
+ * (EchoService.findCurrentSdwViolators bound to the request context). Every request it makes takes
+ * its deadline from `budget`, and a failed request rejects: it never reads as "no violations".
+ */
+export type CurrentViolatorLookup = (
+  scope: SdwViolatorScope,
+  budget: CallBudget,
+) => Promise<{ pwsids: ReadonlySet<string> }>;
+
+/**
+ * The `county_served` filter for `county`, a bare uppercase name (bareCountyName). SDWIS stores
+ * one comma-joined value per system ("Dallas,Johnson"), bare in most states and suffixed in
+ * others ("Calcasieu Parish"), and DMAP's `equals` cannot carry a period ("St. Tammany"), so the
+ * filter matches by `contains` (wildcarded through containsFilter) and keeps a row only when one
+ * of its entries, suffix dropped, is the county itself: HARRIS keeps no Harrison row, BALTIMORE no
+ * "Baltimore city" row. DMAP's `contains` is case-insensitive.
+ */
+function countyServedFilter(county: string): CheckedFilter {
+  return {
+    ...containsFilter('county_served', county),
+    literal: county,
+    keep: (cell) => cell.split(',').some((entry) => bareCountyName(entry) === county),
+  };
 }
+
+/**
+ * The SEMS npl_status_code values each npl_status choice sends: `listed` covers sites on the final
+ * NPL (F) and sites that are part of an NPL site (A). `all` sends no filter.
+ */
+export const NPL_STATUS_CODES: ReadonlyMap<string, string> = new Map([
+  ['listed', 'F,A'],
+  ['not-listed', 'N'],
+  ['proposed', 'P'],
+  ['deleted', 'D'],
+  ['removed', 'R'],
+  ['withdrawn', 'W'],
+]);
 
 /** Normalize a raw SEMS envirofacts_site record. */
 function normalizeSemsSite(raw: RawSemsSite): SuperfundSite {
@@ -349,15 +433,17 @@ function normalizeSemsSite(raw: RawSemsSite): SuperfundSite {
   };
 }
 
-/** Normalize a raw SDWIS water system record. */
+/**
+ * Normalize a raw SDWIS water system record. `currentViolation` marks a has_violation result,
+ * which holds only systems ECHO reports with a current violation.
+ */
 function normalizeSdwisWaterSystem(
   raw: RawSdwisWaterSystem,
-  violatingPwsids?: Set<string>,
+  currentViolation = false,
 ): WaterSystem {
   const pop = parseNum(raw.population_served_count);
-  const pwsid = raw.pwsid ?? '';
   return {
-    pwsid,
+    pwsid: raw.pwsid ?? '',
     name: raw.pws_name ?? '',
     ...(raw.primacy_agency_code && { state: raw.primacy_agency_code as string }),
     // actual field is city_name, not city_served
@@ -366,7 +452,7 @@ function normalizeSdwisWaterSystem(
     ...(raw.pws_type_code && { type: raw.pws_type_code as string }),
     ...(raw.primary_source_code && { primarySourceCode: raw.primary_source_code as string }),
     ...(pop !== undefined && { populationServed: pop }),
-    ...(violatingPwsids !== undefined && { hasViolation: violatingPwsids.has(pwsid) }),
+    ...(currentViolation && { hasViolation: true }),
     // actual field is pws_activity_code, not active_flag; 'A' = active
     ...(raw.pws_activity_code !== undefined && { isActive: raw.pws_activity_code === 'A' }),
   };
@@ -460,8 +546,8 @@ export class DmapService {
    * With `sort`, `/sort/{column}:{asc|desc},…` follows the filters and join, before the range.
    *
    * An `equals` or `in` value goes through exactFilter, so one carrying a character DMAP cannot
-   * match throws a ValidationError naming it; `contains` values arrive already rewritten by
-   * containsFilter.
+   * match throws a ValidationError naming it (reason `unmatchable_filter`); `contains` values
+   * arrive already rewritten by containsFilter.
    */
   private buildTableUrl(
     schema: string,
@@ -497,10 +583,11 @@ export class DmapService {
    *
    * A request line DMAP would count past DMAP_REQUEST_LINE_LIMIT is never sent: batched `in`
    * lists are chunked to fit, so only caller-supplied filter text can push one over, and it fails
-   * as a ValidationError. DMAP answers HTTP 400 only from its front end, for a request it cannot
-   * parse, never for a filter value — those are HTTP 500. A 400 that still arrives is a request
-   * this server built wrong, not the caller's input, and maps to InternalError rather than the
-   * default InvalidParams.
+   * as a ValidationError with reason `filter_too_long`. DMAP answers HTTP 400 only from its front
+   * end, for a request it cannot parse, never for a filter value — those are HTTP 500. A 400 that
+   * still arrives is a request this server built wrong, not the caller's input, and maps to
+   * InternalError rather than the default InvalidParams. A fully read 200 body that is not JSON
+   * fails once as a SerializationError; transport and HTTP failures keep their retries.
    */
   private fetchTable<T>(url: string, ctx: Context, budget: CallBudget): Promise<T[]> {
     const countedBytes = requestLineBytes(url) - DMAP_UNCOUNTED_BYTES;
@@ -508,7 +595,7 @@ export class DmapService {
       return Promise.reject(
         validationError(
           `The search filters are too long for EPA's DMAP service: the request would be ${countedBytes} bytes, over its ${DMAP_REQUEST_LINE_LIMIT}-byte limit. Shorten the text filters.`,
-          { requestLineBytes: countedBytes },
+          { reason: 'filter_too_long', requestLineBytes: countedBytes },
         ),
       );
     }
@@ -527,7 +614,17 @@ export class DmapService {
             'DMAP API returned HTML instead of JSON — likely rate-limited or unavailable.',
           );
         }
-        const parsed = JSON.parse(text) as unknown;
+        // A fully read body that does not parse fails once: withRetry would retry a bare SyntaxError.
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(text);
+        } catch (cause) {
+          throw serializationError(
+            'EPA DMAP returned a response that is not JSON. Call again later.',
+            undefined,
+            { cause },
+          );
+        }
         if (Array.isArray(parsed)) return parsed as T[];
         const [firstKey] = Object.keys(parsed as object);
         if (firstKey === undefined) return [] as T[];
@@ -543,44 +640,53 @@ export class DmapService {
   }
 
   /**
-   * Fetch up to `wanted` rows. Without a wildcarded filter (containsFilter) that is one request
-   * ranged `1:wanted`. With one, DMAP's rows can include near-variants that match only through the
-   * wildcard, so pages of at least EXACT_TEXT_PAGE_ROWS are read and narrowed to rows containing
-   * the text as given, until `wanted` are found, DMAP runs out, or EXACT_TEXT_MAX_PAGES are read.
-   * A walk the page limit ends short of `wanted` carries a notice that more matches may exist.
+   * Fetch up to `wanted` matching rows from zero-based upstream position `offset`. Without a
+   * checked filter (`literal` set) that is one request ranged `offset+1:offset+wanted`. With one,
+   * DMAP's rows can include near-variants that match only through the wildcard, or a `keep`
+   * test drops, so pages of at least EXACT_TEXT_PAGE_ROWS are read and narrowed (passesChecks),
+   * until `wanted` are found, DMAP runs out, or EXACT_TEXT_MAX_PAGES are read. A walk the page
+   * limit ends short of `wanted` carries a notice that more matches may exist.
    */
   private async fetchMatchingRows<T extends Record<string, unknown>>(
     urlForRange: (range: { first: number; last: number }) => string,
     filters: DmapFilter[],
+    offset: number,
     wanted: number,
     ctx: Context,
     budget: CallBudget,
-  ): Promise<T[]> {
-    const wildcarded = filters.filter(
-      (f): f is DmapFilter & { literal: string } => f.literal !== undefined,
-    );
+  ): Promise<MatchedRows<T>> {
+    const wildcarded = filters.filter((f): f is CheckedFilter => f.literal !== undefined);
     if (wildcarded.length === 0) {
-      return this.fetchTable<T>(urlForRange({ first: 1, last: wanted }), ctx, budget);
-    }
-    const pageRows = Math.max(wanted, EXACT_TEXT_PAGE_ROWS);
-    const matches: T[] = [];
-    let exhausted = false;
-    for (let page = 0; page < EXACT_TEXT_MAX_PAGES && matches.length < wanted; page++) {
-      const first = page * pageRows + 1;
       const rows = await this.fetchTable<T>(
-        urlForRange({ first, last: first + pageRows - 1 }),
+        urlForRange({ first: offset + 1, last: offset + wanted }),
         ctx,
         budget,
       );
-      matches.push(
-        ...rows.filter((row) =>
-          wildcarded.every((f) =>
-            String(row[f.column] ?? '')
-              .toLowerCase()
-              .includes(f.literal.toLowerCase()),
-          ),
-        ),
+      return {
+        rows,
+        positions: rows.map((_, i) => offset + i),
+        ...(rows.length === wanted && { scanEnd: offset + wanted }),
+      };
+    }
+    const pageRows = Math.max(wanted, EXACT_TEXT_PAGE_ROWS);
+    const matches: T[] = [];
+    const positions: number[] = [];
+    let scanned = 0;
+    let exhausted = false;
+    for (let page = 0; page < EXACT_TEXT_MAX_PAGES && matches.length < wanted; page++) {
+      const start = offset + scanned;
+      const rows = await this.fetchTable<T>(
+        urlForRange({ first: start + 1, last: start + pageRows }),
+        ctx,
+        budget,
       );
+      rows.forEach((row, i) => {
+        if (passesChecks(row, wildcarded) && matches.length < wanted) {
+          matches.push(row);
+          positions.push(start + i);
+        }
+      });
+      scanned += pageRows;
       if (rows.length < pageRows) {
         exhausted = true;
         break;
@@ -589,22 +695,63 @@ export class DmapService {
     if (!exhausted && matches.length < wanted) {
       const texts = wildcarded.map((f) => `"${f.literal}"`).join(' and ');
       const kept = `${matches.length} ${matches.length === 1 ? 'match' : 'matches'}`;
+      const verb = wildcarded.length === 1 ? 'was' : 'were';
+      const kind = wildcarded.some((f) => f.keep) ? 'containing it' : 'matching the wildcard';
+      const span = scanned.toLocaleString('en-US');
+      const read =
+        offset === 0
+          ? `the first ${span} rows ${kind}`
+          : `the ${span} rows ${kind} after offset ${offset.toLocaleString('en-US')}`;
       ctx.enrich.notice(
-        `${texts} ${wildcarded.length === 1 ? 'was' : 'were'} searched with a one-character wildcard in place of punctuation, and the first ${(EXACT_TEXT_MAX_PAGES * pageRows).toLocaleString('en-US')} rows matching the wildcard held ${kept} spelled as given, so more may exist past them. Narrow the search with other filters or more of the text.`,
+        wildcarded.some((f) => f.keep)
+          ? `${texts} ${verb} matched as part of a longer value and kept only as a whole entry, and ${read} held ${kept}, so more may exist past them. Continue from nextOffset.`
+          : `${texts} ${verb} searched with a one-character wildcard in place of punctuation, and ${read} held ${kept} spelled as given, so more may exist past them. Narrow the search with other filters or more of the text.`,
       );
     }
-    return matches.slice(0, wanted);
+    return { rows: matches, positions, ...(!exhausted && { scanEnd: offset + scanned }) };
   }
 
-  /** Get up to 500 TRI filings for a facility, newest first unless a year is supplied. */
+  /**
+   * One page of `limit` matching rows from upstream position `offset`. It reads one match more
+   * than it returns, so `nextOffset` is exact: the position of that extra match, which can skip
+   * rows a wildcard pass dropped. A wildcard walk its page limit ends with no extra match
+   * continues from where the walk stopped.
+   */
+  private async fetchPage<T extends Record<string, unknown>>(
+    urlForRange: (range: { first: number; last: number }) => string,
+    filters: DmapFilter[],
+    { offset, limit }: { offset: number; limit: number },
+    ctx: Context,
+    budget: CallBudget,
+  ): Promise<Page<T>> {
+    const { rows, positions, scanEnd } = await this.fetchMatchingRows<T>(
+      urlForRange,
+      filters,
+      offset,
+      limit + 1,
+      ctx,
+      budget,
+    );
+    if (rows.length > limit) {
+      return { items: rows.slice(0, limit), nextOffset: positions[limit] as number };
+    }
+    return { items: rows, ...(scanEnd !== undefined && { nextOffset: scanEnd }) };
+  }
+
+  /**
+   * One page of a facility's TRI filings, newest reporting year first, then by submission number;
+   * `limit` defaults to 500 and `offset` to 0.
+   */
   async getTriReleases(
     params: {
       facilityId: string;
       year?: number;
       chemicalName?: string;
+      offset?: number;
+      limit?: number;
     },
     ctx: Context,
-  ): Promise<TriRelease[]> {
+  ): Promise<Page<TriRelease>> {
     const filters: DmapFilter[] = [
       { column: 'tri_facility_id', operator: 'equals', value: params.facilityId },
     ];
@@ -622,30 +769,25 @@ export class DmapService {
     );
     ctx.log.debug('DMAP TRI releases query', { facilityId: params.facilityId, year: params.year });
 
-    const rows = await this.fetchMatchingRows<RawTriReportingForm>(
+    const page = await this.fetchPage<RawTriReportingForm>(
       (range) =>
-        this.buildTableUrl('tri', 'tri_reporting_form', filters, range, {
-          ...(params.year === undefined && { sort: NEWEST_FIRST }),
-        }),
+        this.buildTableUrl('tri', 'tri_reporting_form', filters, range, { sort: NEWEST_FIRST }),
       filters,
-      500,
+      { offset: params.offset ?? 0, limit: params.limit ?? 500 },
       ctx,
       budget,
     );
-    if (rows.length >= 500) {
-      // Keep punctuation-scan notices intact; cap guidance has its own enrichment field.
-      ctx.enrich({
-        truncated: true,
-        shown: rows.length,
-        cap: 500,
-        guidance: `The lookup returned its 500-filing cap; more may exist. Narrow with ${params.year === undefined ? 'year or chemical_name' : 'chemical_name'}.`,
-      });
-    }
-    return this.withReleaseBreakdown(rows, rows.map(normalizeTriRelease), ctx, budget);
+    const items = await this.withReleaseBreakdown(
+      page.items,
+      page.items.map(normalizeTriRelease),
+      ctx,
+      budget,
+    );
+    return { ...page, items };
   }
 
   /**
-   * Add each release's per-medium routine breakdown (tri.tri_release_qty, joined on doc_ctrl_num).
+   * Add each release's per-medium on-site breakdown (tri.tri_release_qty, joined on doc_ctrl_num).
    * `releases[i]` is the normalized form of `rows[i]`.
    */
   private async withReleaseBreakdown<T extends TriRelease>(
@@ -670,7 +812,7 @@ export class DmapService {
   }
 
   /**
-   * Fetch the per-medium routine releases (tri.tri_release_qty) for a set of TRI submissions and
+   * Fetch the per-medium on-site releases (tri.tri_release_qty) for a set of TRI submissions and
    * roll them up into air/water/land/underground-injection sums keyed by doc_ctrl_num.
    * getTriReleases does this on every call; searchTriReleases only when includeReleaseBreakdown
    * is set — an uncached tri_release_qty request takes ~18 s upstream.
@@ -754,11 +896,12 @@ export class DmapService {
    * Search TRI releases by state, optionally filtered by county, year, or chemical.
    * tri.tri_reporting_form carries no state, so one request joins it to tri.tri_facility: the
    * state and county filters bind to the facility table, the year and chemical filters to the
-   * forms, and the row range caps the joined rows at `limit`. Without `year` the joined rows are
-   * sorted newest reporting year first, so `limit` keeps the most recent filings; with `year` the
-   * request is unsorted (table order already pages deterministically). However sparse the
-   * filters, the search is one request; with includeReleaseBreakdown, fetchReleaseBreakdown adds
-   * the per-medium routine releases to every kept record (one request at the 200-record cap).
+   * forms, and the row range selects one page of joined rows. The joined rows are sorted newest
+   * reporting year first, then by submission number, so `offset` and `limit` page the most recent
+   * filings first and every page is a slice of one order. However sparse the filters, a page is
+   * one request (more only for a punctuated text filter's walk); with includeReleaseBreakdown,
+   * fetchReleaseBreakdown adds the per-medium on-site releases to every kept record (one request at
+   * the 200-record cap). The facility's Registry ID and parent company ride in the joined rows.
    */
   async searchTriReleases(
     params: {
@@ -766,13 +909,12 @@ export class DmapService {
       county?: string;
       year?: number;
       chemicalName?: string;
+      offset?: number;
       limit?: number;
       includeReleaseBreakdown?: boolean;
     },
     ctx: Context,
-  ): Promise<(TriRelease & { facilityName?: string; countyName?: string })[]> {
-    const limit = params.limit ?? 50;
-
+  ): Promise<Page<TriSearchRelease>> {
     const facilityFilters: DmapFilter[] = [
       { column: 'state_abbr', operator: 'equals', value: params.state },
     ];
@@ -806,7 +948,7 @@ export class DmapService {
     });
 
     // Joined rows carry both tables' columns, so the exact pass reads county and chemical alike.
-    const rows = await this.fetchMatchingRows<RawTriReportingForm & RawTriFacility>(
+    const page = await this.fetchPage<RawTriReportingForm & RawTriFacility>(
       (range) =>
         this.buildTableUrl('tri', 'tri_facility', facilityFilters, range, {
           join: {
@@ -814,26 +956,39 @@ export class DmapService {
             on: { left: 'tri_facility_id', right: 'tri_facility_id' },
             filters: formFilters,
           },
-          ...(params.year === undefined && { sort: NEWEST_FIRST }),
+          sort: NEWEST_FIRST,
         }),
       [...facilityFilters, ...formFilters],
-      limit,
+      { offset: params.offset ?? 0, limit: params.limit ?? 50 },
       ctx,
       budget,
     );
-    const kept = rows.slice(0, limit);
-    const releases = kept.map((row) => ({
-      ...normalizeTriRelease(row),
-      facilityName: row.facility_name ?? '',
-      ...(row.county_name && { countyName: row.county_name }),
-    }));
+    const releases = page.items.map((row): TriSearchRelease => {
+      const parent = row.standardized_parent_company;
+      return {
+        ...normalizeTriRelease(row),
+        facilityName: row.facility_name ?? '',
+        ...(row.county_name && { countyName: row.county_name }),
+        ...(row.epa_registry_id && { registryId: row.epa_registry_id }),
+        // TRI writes NA for a facility that reported no parent company.
+        ...(parent && parent.trim() !== 'NA' && { parentCompany: parent }),
+      };
+    });
 
-    return params.includeReleaseBreakdown
-      ? this.withReleaseBreakdown(kept, releases, ctx, budget)
+    const items = params.includeReleaseBreakdown
+      ? await this.withReleaseBreakdown(page.items, releases, ctx, budget)
       : releases;
+    return { ...page, items };
   }
 
-  /** Search Superfund sites by state or coordinates + radius. */
+  /**
+   * One page of Superfund sites by state, city, or ZIP, or by coordinates + radius; `limit`
+   * defaults to 50 and `offset` to 0. An administrative search reads its row range in site ID
+   * order (fetchPage), so `nextOffset` is an upstream position and `totalCount` stays absent:
+   * DMAP reports no match count. A proximity search scans every candidate on each call, ranks the
+   * matches nearest first with a site ID tiebreak, and slices the page from that order, so its
+   * `totalCount` is the full match and `nextOffset` a position in it.
+   */
   async searchSuperfund(
     params: {
       state?: string;
@@ -844,10 +999,12 @@ export class DmapService {
       radiusMiles?: number;
       nplStatus?: string;
       excludeArchived?: boolean;
+      offset?: number;
       limit?: number;
     },
     ctx: Context,
-  ): Promise<SuperfundSite[]> {
+  ): Promise<Page<SuperfundSite>> {
+    const offset = params.offset ?? 0;
     const limit = params.limit ?? 50;
     const filters: DmapFilter[] = [];
 
@@ -858,25 +1015,16 @@ export class DmapService {
       filters.push(containsFilter('city_name', params.city));
     }
     if (params.zipCode) {
-      filters.push({ column: 'zip_code', operator: 'equals', value: params.zipCode });
+      // SEMS stores a ZIP+4 for some sites ("07631-2720"), so a 5-digit ZIP matches by prefix.
+      filters.push({ column: 'zip_code', operator: 'beginsWith', value: params.zipCode });
     }
-    if (params.nplStatus && params.nplStatus !== 'all') {
-      const nplMap = new Map([
-        ['listed', 'F,A'],
-        ['not-listed', 'N'],
-        ['proposed', 'P'],
-        ['deleted', 'D'],
-        ['removed', 'R'],
-        ['withdrawn', 'W'],
-      ]);
-      const nplCode = nplMap.get(params.nplStatus);
-      if (nplCode) {
-        filters.push({
-          column: 'npl_status_code',
-          operator: params.nplStatus === 'listed' ? 'in' : 'equals',
-          value: nplCode,
-        });
-      }
+    const nplCode = params.nplStatus && NPL_STATUS_CODES.get(params.nplStatus);
+    if (nplCode) {
+      filters.push({
+        column: 'npl_status_code',
+        operator: nplCode.includes(',') ? 'in' : 'equals',
+        value: nplCode,
+      });
     }
     if (params.excludeArchived) {
       filters.push({ column: 'archived_ind', operator: 'equals', value: 'N' });
@@ -888,7 +1036,7 @@ export class DmapService {
     // A coordinate search supplies its own latitude-prefix filter below.
     if (filters.length === 0 && !proximity) {
       ctx.log.debug('DMAP Superfund query: no filters, returning empty');
-      return [];
+      return { items: [] };
     }
 
     ctx.log.debug('DMAP Superfund query', { state: params.state, lat: params.latitude });
@@ -896,151 +1044,135 @@ export class DmapService {
       'Superfund site search',
       'Narrow it with radius_miles, zip_code, city, or npl_status, or call again later.',
     );
-    let rows: RawSemsSite[];
-    if (proximity) {
-      const candidates = new Map<string, RawSemsSite>();
-      const prefixes = proximityPrefixes(latitude, longitude, radiusMiles);
-      /** Broad circles avoid multiplying latitude bands by many mostly empty longitude bins. */
-      const broad = prefixes.longitudes.length > 4;
-      const partitions = prefixes.latitudes.flatMap((latPrefix) =>
-        (broad ? [undefined] : prefixes.longitudes).map((lonPrefix) => ({ latPrefix, lonPrefix })),
-      );
-      const pageRows = broad ? 2000 : 500;
-      const siblings = new AbortController();
-      const signal = AbortSignal.any([ctx.signal, siblings.signal]);
-      const scanContext = { ...ctx, signal };
-      const pendingPartitions = partitions.values();
-      const scan = async () => {
-        while (!signal.aborted) {
-          const partition = pendingPartitions.next();
-          if (partition.done) return;
-          const { latPrefix, lonPrefix } = partition.value;
-          const seen = new Set<string>();
-          for (let first = 1; ; first += pageRows) {
-            const page = await this.fetchTable<RawSemsSite>(
-              this.buildTableUrl(
-                'sems',
-                'envirofacts_site',
-                [
-                  ...filters,
-                  {
-                    column: 'primary_latitude_decimal_val',
-                    operator: 'beginsWith',
-                    value: latPrefix,
-                  },
-                  ...(lonPrefix === undefined
-                    ? []
-                    : [
-                        {
-                          column: 'primary_longitude_decimal_val',
-                          operator: 'beginsWith' as const,
-                          value: lonPrefix,
-                        },
-                      ]),
-                ],
-                { first, last: first + pageRows - 1 },
-                { sort: [{ column: 'sems.envirofacts_site.site_id', direction: 'asc' }] },
-              ),
-              scanContext,
-              budget,
-            );
-            if (
-              page.length > 0 &&
-              page.every((row) => seen.has(row.site_id || JSON.stringify(row)))
-            ) {
-              throw serviceUnavailable(
-                'EPA DMAP repeated a Superfund candidate page. The proximity search could not be completed. Narrow the radius or add city, zip_code, or npl_status filters and retry.',
-              );
-            }
-            for (const row of page) seen.add(row.site_id || JSON.stringify(row));
-            for (const row of page) {
-              if (
-                filters.every(
-                  (f) =>
-                    f.literal === undefined ||
-                    String(row[f.column] ?? '')
-                      .toLowerCase()
-                      .includes(f.literal.toLowerCase()),
-                )
-              ) {
-                const site = normalizeSemsSite(row);
-                if (
-                  site.latitude !== undefined &&
-                  site.longitude !== undefined &&
-                  haversineDistanceMiles(latitude, longitude, site.latitude, site.longitude) <=
-                    radiusMiles
-                ) {
-                  candidates.set(row.site_id || JSON.stringify(row), row);
-                }
-              }
-            }
-            if (page.length < pageRows) break;
-          }
-        }
-      };
-      const workers = Array.from(
-        { length: broad ? Math.min(8, partitions.length) : 1 },
-        async () => {
-          try {
-            await scan();
-          } catch (error) {
-            if (!siblings.signal.aborted) siblings.abort(error);
-            throw error;
-          }
-        },
-      );
-      await Promise.allSettled(workers);
-      ctx.signal.throwIfAborted();
-      if (siblings.signal.aborted) throw siblings.signal.reason;
-      rows = [...candidates.values()];
-    } else {
-      rows = await this.fetchMatchingRows<RawSemsSite>(
-        (range) => this.buildTableUrl('sems', 'envirofacts_site', filters, range),
+    if (!proximity) {
+      const page = await this.fetchPage<RawSemsSite>(
+        (range) =>
+          this.buildTableUrl('sems', 'envirofacts_site', filters, range, { sort: BY_SITE_ID }),
         filters,
-        limit,
+        { offset, limit },
         ctx,
         budget,
       );
+      return { ...page, items: page.items.map(normalizeSemsSite) };
     }
-    let sites = rows.map(normalizeSemsSite);
 
-    if (proximity) {
-      const coverage =
-        'Proximity searches match only sites with usable coordinates. Administrative searches can also find sites without coordinates.';
-      sites = sites
-        .flatMap((site) => {
-          if (site.latitude === undefined || site.longitude === undefined) return [];
-          const distance = haversineDistanceMiles(
-            latitude,
-            longitude,
-            site.latitude,
-            site.longitude,
+    const candidates = new Map<string, RawSemsSite>();
+    const prefixes = proximityPrefixes(latitude, longitude, radiusMiles);
+    /** Broad circles avoid multiplying latitude bands by many mostly empty longitude bins. */
+    const broad = prefixes.longitudes.length > 4;
+    const partitions = prefixes.latitudes.flatMap((latPrefix) =>
+      (broad ? [undefined] : prefixes.longitudes).map((lonPrefix) => ({ latPrefix, lonPrefix })),
+    );
+    const pageRows = broad ? 2000 : 500;
+    const siblings = new AbortController();
+    const signal = AbortSignal.any([ctx.signal, siblings.signal]);
+    const scanContext = { ...ctx, signal };
+    const pendingPartitions = partitions.values();
+    const scan = async () => {
+      while (!signal.aborted) {
+        const partition = pendingPartitions.next();
+        if (partition.done) return;
+        const { latPrefix, lonPrefix } = partition.value;
+        const seen = new Set<string>();
+        for (let first = 1; ; first += pageRows) {
+          const page = await this.fetchTable<RawSemsSite>(
+            this.buildTableUrl(
+              'sems',
+              'envirofacts_site',
+              [
+                ...filters,
+                {
+                  column: 'primary_latitude_decimal_val',
+                  operator: 'beginsWith',
+                  value: latPrefix,
+                },
+                ...(lonPrefix === undefined
+                  ? []
+                  : [
+                      {
+                        column: 'primary_longitude_decimal_val',
+                        operator: 'beginsWith' as const,
+                        value: lonPrefix,
+                      },
+                    ]),
+              ],
+              { first, last: first + pageRows - 1 },
+              { sort: BY_SITE_ID },
+            ),
+            scanContext,
+            budget,
           );
-          return distance <= radiusMiles ? [{ site, distance }] : [];
-        })
-        .sort((a, b) => a.distance - b.distance || a.site.siteId.localeCompare(b.site.siteId))
-        .map(({ site }) => site);
-      if (sites.length > limit) {
-        ctx.enrich.notice(
-          `${coverage} Showing the nearest ${limit} of ${sites.length} matching Superfund sites within the radius. ${limit < 200 ? 'Increase limit (maximum 200) or narrow the radius or other filters to retrieve more.' : 'Narrow the radius or add city, zip_code, or npl_status filters to retrieve a smaller set.'}`,
-        );
-      } else {
-        ctx.enrich.notice(coverage);
+          if (
+            page.length > 0 &&
+            page.every((row) => seen.has(row.site_id || JSON.stringify(row)))
+          ) {
+            throw serviceUnavailable(
+              'EPA DMAP repeated a Superfund candidate page. The proximity search could not be completed. Narrow the radius or add city, zip_code, or npl_status filters and retry.',
+            );
+          }
+          for (const row of page) seen.add(row.site_id || JSON.stringify(row));
+          for (const row of page) {
+            if (
+              filters.every(
+                (f) =>
+                  f.literal === undefined ||
+                  String(row[f.column] ?? '')
+                    .toLowerCase()
+                    .includes(f.literal.toLowerCase()),
+              )
+            ) {
+              const site = normalizeSemsSite(row);
+              if (
+                site.latitude !== undefined &&
+                site.longitude !== undefined &&
+                haversineDistanceMiles(latitude, longitude, site.latitude, site.longitude) <=
+                  radiusMiles
+              ) {
+                candidates.set(row.site_id || JSON.stringify(row), row);
+              }
+            }
+          }
+          if (page.length < pageRows) break;
+        }
       }
-    }
+    };
+    const workers = Array.from({ length: broad ? Math.min(8, partitions.length) : 1 }, async () => {
+      try {
+        await scan();
+      } catch (error) {
+        if (!siblings.signal.aborted) siblings.abort(error);
+        throw error;
+      }
+    });
+    await Promise.allSettled(workers);
+    ctx.signal.throwIfAborted();
+    if (siblings.signal.aborted) throw siblings.signal.reason;
 
-    return sites.slice(0, limit);
+    // Every call rescans the whole match, so each page is a slice of one nearest-first order.
+    const ranked = [...candidates.values()]
+      .map(normalizeSemsSite)
+      .flatMap((site) => {
+        if (site.latitude === undefined || site.longitude === undefined) return [];
+        const distance = haversineDistanceMiles(latitude, longitude, site.latitude, site.longitude);
+        return distance <= radiusMiles ? [{ site, distance }] : [];
+      })
+      .sort((a, b) => a.distance - b.distance || a.site.siteId.localeCompare(b.site.siteId))
+      .map(({ site }) => site);
+    const page = slicePage(ranked, { limit, offset });
+    const { items } = page;
+    const coverage =
+      'Proximity searches match only sites with usable coordinates. Administrative searches can also find sites without coordinates.';
+    const position =
+      items.length === 1 ? `site ${offset + 1}` : `sites ${offset + 1}–${offset + items.length}`;
+    ctx.enrich.notice(
+      items.length > 0 && items.length < ranked.length
+        ? `${coverage} Showing ${position} of ${ranked.length.toLocaleString('en-US')} matching Superfund sites within the radius, nearest first.`
+        : coverage,
+    );
+    return page;
   }
 
   /** Fetch a single Superfund site by exact SEMS site ID. */
-  searchSuperfundById(siteId: string, ctx: Context): Promise<SuperfundSite[]> {
-    return this.fetchSuperfundById(
-      siteId,
-      ctx,
-      dmapBudget('Superfund site lookup', 'Call again later.'),
-    );
-  }
-
   private async fetchSuperfundById(
     siteId: string,
     ctx: Context,
@@ -1102,17 +1234,37 @@ export class DmapService {
     return { site, contaminants };
   }
 
-  /** Search drinking water systems by state or ZIP code. */
+  /**
+   * One page of drinking water systems by state, ZIP, or county served, in PWSID order; `limit`
+   * defaults to 50 and `offset` to 0. `state` is the primacy agency (primacy_agency_code).
+   * `zipCode` matches the address of record by prefix, so a stored ZIP+4 matches its five-digit
+   * ZIP. `county`, a bare uppercase name (bareCountyName), joins sdwis.geographic_area and keeps
+   * the systems that serve it (countyServedFilter). `activeOnly` keeps pws_activity_code A.
+   *
+   * With `currentViolators`, the page holds only systems it reports with a current violation: a
+   * state search asks it for the state's violators first (pageCurrentViolatorsInState), a ZIP or
+   * county search reads its systems first and asks about them by PWSID
+   * (pageCurrentViolatorsAmong). Its requests and DMAP's share one deadline. Without it, no ECHO
+   * request is made.
+   *
+   * `nextOffset` is an upstream position — a row in the PWSID-ordered match, or for a state
+   * violation search a place in the violator list — so it can skip rows a check dropped.
+   * `totalCount` is set only when the call saw the whole match: offset 0 and nothing past it.
+   */
   async searchWaterSystems(
     params: {
       state?: string;
       zipCode?: string;
-      hasViolation?: boolean;
-      pwsType?: string;
+      county?: string;
+      pwsType?: WaterSystemType;
+      activeOnly?: boolean;
+      currentViolators?: CurrentViolatorLookup;
+      offset?: number;
       limit?: number;
     },
     ctx: Context,
-  ): Promise<WaterSystem[]> {
+  ): Promise<Page<WaterSystem>> {
+    const offset = params.offset ?? 0;
     const limit = params.limit ?? 50;
     const filters: DmapFilter[] = [];
 
@@ -1120,156 +1272,193 @@ export class DmapService {
       filters.push({ column: 'primacy_agency_code', operator: 'equals', value: params.state });
     }
     if (params.zipCode) {
-      filters.push({ column: 'zip_code', operator: 'equals', value: params.zipCode });
+      // SDWIS stores ZIP+4 and nine-digit forms beside five-digit ZIPs (98104-3122, 985093400).
+      filters.push({ column: 'zip_code', operator: 'beginsWith', value: params.zipCode });
     }
     if (params.pwsType) {
-      const typeMap: Record<string, string> = {
-        community: 'CWS',
-        'non-transient': 'NTNCWS',
-        transient: 'TNCWS',
-      };
-      const typeCode = typeMap[params.pwsType] ?? params.pwsType;
-      filters.push({ column: 'pws_type_code', operator: 'equals', value: typeCode });
+      filters.push({
+        column: 'pws_type_code',
+        operator: 'equals',
+        value: WATER_TYPE_CODES[params.pwsType],
+      });
     }
+    if (params.activeOnly) {
+      filters.push({ column: 'pws_activity_code', operator: 'equals', value: 'A' });
+    }
+    const county = params.county === undefined ? undefined : countyServedFilter(params.county);
+    if (filters.length === 0 && !county) return { items: [] };
 
-    if (filters.length === 0) return [];
-
-    const budget = dmapBudget(
+    const lookup = params.currentViolators;
+    const budget = callBudget(
+      lookup ? 'DMAP and ECHO' : 'DMAP',
       'water system search',
-      'Narrow it with zip_code or pws_type, or call again later.',
+      CALL_DEADLINE_MS,
+      'Narrow it with zip_code, county, pws_type, or active_only, or call again later.',
     );
-    // sdwis.violation has no zip column: a ZIP's systems are checked by PWSID, a state is scanned.
-    if (params.hasViolation && params.zipCode) {
-      return this.searchViolatingWaterSystemsInZip(params.zipCode, filters, limit, ctx, budget);
-    }
-    if (params.hasViolation && params.state) {
-      return this.searchViolatingWaterSystems(params.state, filters, limit, ctx, budget);
-    }
+    const checked = county ? [county] : [];
+    const urlForRange = (range: { first: number; last: number }) =>
+      this.buildTableUrl('sdwis', 'water_system', filters, range, {
+        ...(county && {
+          join: {
+            table: 'sdwis.geographic_area',
+            on: { left: 'pwsid', right: 'pwsid' },
+            filters: checked,
+          },
+        }),
+        sort: BY_PWSID,
+      });
+    ctx.log.debug('DMAP water systems query', {
+      state: params.state,
+      zipCode: params.zipCode,
+      county: params.county,
+      offset,
+    });
 
-    const url = this.buildTableUrl('sdwis', 'water_system', filters, { first: 1, last: limit });
-    ctx.log.debug('DMAP water systems query', { state: params.state });
-
-    const rows = await this.fetchTable<RawSdwisWaterSystem>(url, ctx, budget);
-    return rows.slice(0, limit).map((r) => normalizeSdwisWaterSystem(r));
+    if (lookup && params.state && !params.zipCode && !county) {
+      return this.pageCurrentViolatorsInState(
+        { state: params.state, pwsType: params.pwsType, filters, lookup },
+        { offset, limit },
+        ctx,
+        budget,
+      );
+    }
+    if (lookup) {
+      return this.pageCurrentViolatorsAmong(
+        urlForRange,
+        checked,
+        lookup,
+        { offset, limit },
+        ctx,
+        budget,
+      );
+    }
+    const page = await this.fetchPage<RawSdwisWaterSystem>(
+      urlForRange,
+      checked,
+      { offset, limit },
+      ctx,
+      budget,
+    );
+    const items = page.items.map((row) => normalizeSdwisWaterSystem(row));
+    return {
+      items,
+      ...(page.nextOffset !== undefined
+        ? { nextOffset: page.nextOffset }
+        : offset === 0 && { totalCount: items.length }),
+    };
   }
 
   /**
-   * Water systems in `state` with an open violation. water_system has no violation flag, so this
-   * reads the first VIOLATION_SCAN_ROWS open rows of sdwis.violation, then looks up the systems
-   * those rows name, PWSID_CHUNK_SIZE IDs per `pwsid in` request, until `limit` is filled. That is
-   * at most 1 + VIOLATION_SCAN_ROWS / PWSID_CHUNK_SIZE requests. A state with more open violation
-   * rows than the scan reads can have violators it never sees; the result then carries a notice.
+   * One page of `state`'s systems with a current violation. The violator list comes first, in
+   * PWSID order: ECHO's `p_st` (the system's location; an EPA region code or NN selects that
+   * primacy agency's systems) narrowed by `p_systyp`. Each PWSID_CHUNK_SIZE slice of it from
+   * `offset` is then read whole with `pwsid in` and the search's own filters, which keep `state`
+   * a primacy-agency filter (WA's list also names systems in WA under EPA Region 10 primacy, and
+   * those drop out here) and apply active_only. The walk stops once `limit + 1` systems are kept;
+   * `nextOffset` is the list position of the first one left over. `totalCount` is exact when the
+   * walk read the whole list from position 0: WA's 166 violators are one slice.
    */
-  private async searchViolatingWaterSystems(
-    state: string,
-    filters: DmapFilter[],
-    limit: number,
+  private async pageCurrentViolatorsInState(
+    search: {
+      state: string;
+      pwsType: WaterSystemType | undefined;
+      filters: DmapFilter[];
+      lookup: CurrentViolatorLookup;
+    },
+    { offset, limit }: { offset: number; limit: number },
     ctx: Context,
     budget: CallBudget,
-  ): Promise<WaterSystem[]> {
-    const violUrl = this.buildTableUrl(
-      'sdwis',
-      'violation',
-      [{ column: 'primacy_agency_code', operator: 'equals', value: state }, OPEN_VIOLATION_FILTER],
-      { first: 1, last: VIOLATION_SCAN_ROWS },
-    );
-    ctx.log.debug('DMAP SDWIS violation query', { state });
-    const violRows = await this.fetchTable<RawSdwisViolation>(violUrl, ctx, budget);
-    const violatingPwsids = pwsidSet(violRows);
-
-    if (violRows.length >= VIOLATION_SCAN_ROWS) {
-      ctx.enrich.notice(
-        `The violation check stopped at the first ${VIOLATION_SCAN_ROWS.toLocaleString('en-US')} of ${state}'s open SDWIS violation records, which name ${violatingPwsids.size} distinct systems. Records past that point were not read, so these results may not include every system with an open violation in the state.`,
-      );
-    }
-
-    const ids = [...violatingPwsids];
-    const systems: WaterSystem[] = [];
-    for (let i = 0; i < ids.length && systems.length < limit; i += PWSID_CHUNK_SIZE) {
-      const chunk = ids.slice(i, i + PWSID_CHUNK_SIZE);
+  ): Promise<Page<WaterSystem>> {
+    const { state, pwsType, filters, lookup } = search;
+    const { pwsids } = await lookup({ state, ...(pwsType && { systemType: pwsType }) }, budget);
+    const violators = [...pwsids];
+    const kept: KeptSystem[] = [];
+    let start = offset;
+    for (; start < violators.length && kept.length <= limit; start += PWSID_CHUNK_SIZE) {
+      const chunk = violators.slice(start, start + PWSID_CHUNK_SIZE);
       const url = this.buildTableUrl(
         'sdwis',
         'water_system',
         [...filters, { column: 'pwsid', operator: 'in', value: chunk.join(',') }],
-        { first: 1, last: limit - systems.length },
+        { first: 1, last: chunk.length },
       );
-      ctx.log.debug('DMAP water systems query', { state, chunkStart: i, chunkSize: chunk.length });
+      ctx.log.debug('DMAP water systems lookup', { state, start, chunkSize: chunk.length });
       const rows = await this.fetchTable<RawSdwisWaterSystem>(url, ctx, budget);
-      for (const row of rows.slice(0, limit - systems.length)) {
-        systems.push(normalizeSdwisWaterSystem(row, violatingPwsids));
+      const byPwsid = new Map(rows.map((row) => [row.pwsid, row]));
+      for (const [i, pwsid] of chunk.entries()) {
+        const row = byPwsid.get(pwsid);
+        if (row) kept.push({ row, position: start + i });
       }
     }
-    return systems;
+    return violatorPage(kept, limit, offset === 0 && start >= violators.length);
   }
 
   /**
-   * Water systems in `zipCode` with an open violation. sdwis.violation has no zip column, so this
-   * reads the ZIP's systems (up to ZIP_SYSTEM_SCAN_ROWS), then asks sdwis.violation for their open
-   * rows PWSID_CHUNK_SIZE IDs at a time, in ZIP order, until `limit` violators are found. A ZIP
-   * past the system read, or a chunk whose violation rows fill VIOLATION_SCAN_ROWS, can hide
-   * violators; the result then carries a notice.
+   * One page of a ZIP's or county's systems with a current violation. It reads
+   * VIOLATION_CHECK_ROWS rows of the PWSID-ordered match from `offset` in one request, keeps the
+   * rows passing `checked` (the county test), and looks them up PWSID_CHUNK_SIZE at a time until
+   * `limit + 1` violators are found; `nextOffset` is the row position of the first one left over.
+   * A full read that leaves the page short has rows past it unchecked, so `nextOffset` is the
+   * next row and a notice says so. `totalCount` is exact when every row from position 0 was
+   * checked.
    */
-  private async searchViolatingWaterSystemsInZip(
-    zipCode: string,
-    filters: DmapFilter[],
-    limit: number,
+  private async pageCurrentViolatorsAmong(
+    urlForRange: (range: { first: number; last: number }) => string,
+    checked: CheckedFilter[],
+    lookup: CurrentViolatorLookup,
+    { offset, limit }: { offset: number; limit: number },
     ctx: Context,
     budget: CallBudget,
-  ): Promise<WaterSystem[]> {
-    const url = this.buildTableUrl('sdwis', 'water_system', filters, {
-      first: 1,
-      last: ZIP_SYSTEM_SCAN_ROWS,
-    });
-    ctx.log.debug('DMAP water systems query', { zipCode });
-    const zipRows = await this.fetchTable<RawSdwisWaterSystem>(url, ctx, budget);
-
-    const notices: string[] = [];
-    if (zipRows.length >= ZIP_SYSTEM_SCAN_ROWS) {
-      notices.push(
-        `The violation check read only the first ${ZIP_SYSTEM_SCAN_ROWS.toLocaleString('en-US')} water systems in ZIP ${zipCode}; systems past that point were not checked.`,
-      );
-    }
-
-    const candidates = zipRows.filter(
-      (r): r is RawSdwisWaterSystem & { pwsid: string } => typeof r.pwsid === 'string',
+  ): Promise<Page<WaterSystem>> {
+    const rows = await this.fetchTable<RawSdwisWaterSystem>(
+      urlForRange({ first: offset + 1, last: offset + VIOLATION_CHECK_ROWS }),
+      ctx,
+      budget,
     );
-    const systems: WaterSystem[] = [];
-    let truncatedChunk = false;
-    for (let i = 0; i < candidates.length && systems.length < limit; i += PWSID_CHUNK_SIZE) {
-      const chunk = candidates.slice(i, i + PWSID_CHUNK_SIZE);
-      const violUrl = this.buildTableUrl(
-        'sdwis',
-        'violation',
-        [
-          { column: 'pwsid', operator: 'in', value: chunk.map((r) => r.pwsid).join(',') },
-          OPEN_VIOLATION_FILTER,
-        ],
-        { first: 1, last: VIOLATION_SCAN_ROWS },
-      );
-      ctx.log.debug('DMAP SDWIS violation query', {
-        zipCode,
-        chunkStart: i,
-        chunkSize: chunk.length,
-      });
-      const violRows = await this.fetchTable<RawSdwisViolation>(violUrl, ctx, budget);
-      if (violRows.length >= VIOLATION_SCAN_ROWS) truncatedChunk = true;
-      const violatingPwsids = pwsidSet(violRows);
-      for (const row of chunk) {
-        if (systems.length >= limit) break;
-        if (violatingPwsids.has(row.pwsid)) {
-          systems.push(normalizeSdwisWaterSystem(row, violatingPwsids));
-        }
-      }
+    const candidates = rows.flatMap((row, i) =>
+      row.pwsid !== undefined && passesChecks(row, checked)
+        ? [{ row, pwsid: row.pwsid, position: offset + i }]
+        : [],
+    );
+    const kept: KeptSystem[] = [];
+    let start = 0;
+    for (; start < candidates.length && kept.length <= limit; start += PWSID_CHUNK_SIZE) {
+      const batch = candidates.slice(start, start + PWSID_CHUNK_SIZE);
+      const { pwsids } = await lookup({ pwsids: batch.map((c) => c.pwsid) }, budget);
+      kept.push(...batch.filter((c) => pwsids.has(c.pwsid)));
     }
-
-    if (truncatedChunk) {
-      notices.push(
-        `The open violation records for a group of up to ${PWSID_CHUNK_SIZE} systems in ZIP ${zipCode} filled the ${VIOLATION_SCAN_ROWS.toLocaleString('en-US')}-row read; records past that point were not read, so these results may not include every system with an open violation in the ZIP.`,
-      );
-    }
-    if (notices.length > 0) ctx.enrich.notice(notices.join(' '));
-    return systems;
+    const fullRead = rows.length === VIOLATION_CHECK_ROWS;
+    const page = violatorPage(kept, limit, offset === 0 && !fullRead && start >= candidates.length);
+    if (page.nextOffset !== undefined || !fullRead) return page;
+    const next = offset + VIOLATION_CHECK_ROWS;
+    ctx.enrich.notice(
+      `The violation check read ${VIOLATION_CHECK_ROWS.toLocaleString('en-US')} systems from offset ${offset.toLocaleString('en-US')} and found ${kept.length} with a current violation; systems from offset ${next.toLocaleString('en-US')} on were not checked in this call.`,
+    );
+    return { ...page, nextOffset: next };
   }
+}
+
+/** A water system a violation check kept, with its upstream position. */
+interface KeptSystem {
+  position: number;
+  row: RawSdwisWaterSystem;
+}
+
+/**
+ * The page a violation check returns: the first `limit` kept systems, `nextOffset` at the first
+ * one past them, and `totalCount` when `sawWholeMatch`.
+ */
+function violatorPage(
+  kept: KeptSystem[],
+  limit: number,
+  sawWholeMatch: boolean,
+): Page<WaterSystem> {
+  const next = kept[limit];
+  return {
+    items: kept.slice(0, limit).map(({ row }) => normalizeSdwisWaterSystem(row, true)),
+    ...(next && { nextOffset: next.position }),
+    ...(sawWholeMatch && { totalCount: kept.length }),
+  };
 }
 
 // --- Init/accessor pattern ---

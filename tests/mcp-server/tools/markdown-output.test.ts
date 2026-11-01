@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { allToolDefinitions } from '@/mcp-server/tools/definitions/index.js';
 import { formatLocationLines } from '@/mcp-server/tools/format-location.js';
 import { formatNotice } from '@/mcp-server/tools/format-notice.js';
+import { textOf } from '../../helpers.js';
 
 const markdown = new MarkdownIt();
 const value = 'A *plant* [name](https://example.com) <b>raw</b>\n# second line';
@@ -17,7 +18,7 @@ const message = { message: value };
 const programs = { air: false, water: false, rcra: false, tri: false, sdwa: false };
 const cases: Record<string, unknown> = {
   epa_echo_search_facilities: {
-    facilities: [{ name: value, registryId: '1', programs }],
+    facilities: [{ name: value, registryId: '1', programs, triFacilityIds: [value] }],
     totalCount: 1,
     ...message,
   },
@@ -26,12 +27,44 @@ const cases: Record<string, unknown> = {
     registryId: '1',
     programs,
     triFacilityIds: [],
+    naics: [{ code: '3364', description: value }],
     programCompliance: [],
     inspections: [],
     inspectionsTotal: 0,
     formalActions: [],
+    drinkingWaterViolations: [
+      { contaminantName: value, enforcementActions: [{ description: value }] },
+    ],
+    drinkingWaterViolationsTotal: 1,
   },
   epa_echo_search_violations: { cases: [{ caseName: value }], totalCount: 1, ...message },
+  epa_echo_get_case: {
+    caseId: '1',
+    caseName: value,
+    summary: value,
+    lawsAndSections: [{ law: value }],
+    facilities: [
+      {
+        registryId: '1',
+        name: value,
+        naicsCodes: [],
+        sicCodes: [],
+        programIds: [{ id: value }],
+      },
+    ],
+    defendants: [{ name: value }],
+    pollutants: [{ name: value }],
+    milestones: [{ event: value }],
+    enforcementConclusions: [
+      {
+        name: value,
+        registryIds: ['1'],
+        complyingActions: [{ description: value }],
+        pollutantReductions: [{ pollutant: value }],
+        supplementalProjects: [{ text: value }],
+      },
+    ],
+  },
   epa_airnow_get_conditions: {
     mode: 'current',
     observations: [{ reportingArea: value, readings: [] }],
@@ -128,9 +161,7 @@ describe('literal upstream Markdown', () => {
     });
     const result = await runToolContract(definition, {});
     expect(result.structuredContent).toEqual({ notice });
-    const source = result.content
-      .flatMap((block) => (block.type === 'text' ? [block.text] : []))
-      .join('\n');
+    const source = textOf(result.content);
     const tokens = markdown.parse(source, {});
     expect(tokens.filter((token) => token.type === 'blockquote_open')).toHaveLength(1);
     expect(tokens.some((token) => token.type === 'bullet_list_open')).toBe(false);

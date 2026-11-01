@@ -3,33 +3,42 @@
  * @module tests/mcp-server/tools/definitions/tri-get-facility-releases.tool.test
  */
 
+import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
+import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { triGetFacilityReleasesTool } from '@/mcp-server/tools/definitions/tri-get-facility-releases.tool.js';
+import { DmapService } from '@/services/dmap/dmap-service.js';
+import { expectValidationRejection, textOf } from '../../../helpers.js';
 
 const mockGetTriReleases = vi.fn();
 
-vi.mock('@/services/dmap/dmap-service.js', () => ({
-  getDmapService: () => ({
-    getTriReleases: mockGetTriReleases,
-    searchTriReleases: vi.fn(),
-    searchSuperfund: vi.fn(),
-    searchWaterSystems: vi.fn(),
-  }),
+/** When set, getDmapService() returns this real service instead of the stub. */
+const liveService: { current: DmapService | undefined } = { current: undefined };
+
+vi.mock('@/services/dmap/dmap-service.js', async (importActual) => ({
+  ...(await importActual<typeof import('@/services/dmap/dmap-service.js')>()),
+  getDmapService: () =>
+    liveService.current ?? {
+      getTriReleases: mockGetTriReleases,
+      searchTriReleases: vi.fn(),
+      searchSuperfund: vi.fn(),
+      searchWaterSystems: vi.fn(),
+    },
 }));
 
 const benzeneRelease = {
   facilityId: 'WA0001234',
   chemicalName: 'BENZENE',
   reportingYear: 2022,
-  totalReleasesInLbs: 1240,
+  oneTimeReleaseInLbs: 1240,
 };
 
 const fullBreakdownRelease = {
   facilityId: 'WA0005678',
   chemicalName: 'TOLUENE',
   reportingYear: 2021,
-  totalReleasesInLbs: 0,
+  oneTimeReleaseInLbs: 0,
   releasesToAirInLbs: 15000,
   releasesToWaterInLbs: 200,
   releasesToLandInLbs: 3400,
@@ -42,16 +51,19 @@ describe('triGetFacilityReleasesTool', () => {
   });
 
   it('returns TRI releases for valid facility ID', async () => {
-    mockGetTriReleases.mockResolvedValue([benzeneRelease]);
+    mockGetTriReleases.mockResolvedValue({ items: [benzeneRelease] });
     const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
     const input = triGetFacilityReleasesTool.input.parse({ facility_id: 'WA0001234' });
     const result = await triGetFacilityReleasesTool.handler(input, ctx);
     expect(result).toEqual({ releases: [benzeneRelease], facilityId: 'WA0001234' });
-    expect(mockGetTriReleases).toHaveBeenCalledWith({ facilityId: 'WA0001234' }, ctx);
+    expect(mockGetTriReleases).toHaveBeenCalledWith(
+      { facilityId: 'WA0001234', offset: 0, limit: 500 },
+      ctx,
+    );
   });
 
   it('passes year and chemical_name filters to service', async () => {
-    mockGetTriReleases.mockResolvedValue([benzeneRelease]);
+    mockGetTriReleases.mockResolvedValue({ items: [benzeneRelease] });
     const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
     const input = triGetFacilityReleasesTool.input.parse({
       facility_id: 'WA0001234',
@@ -60,13 +72,13 @@ describe('triGetFacilityReleasesTool', () => {
     });
     await triGetFacilityReleasesTool.handler(input, ctx);
     expect(mockGetTriReleases).toHaveBeenCalledWith(
-      { facilityId: 'WA0001234', year: 2022, chemicalName: 'BENZENE' },
+      { facilityId: 'WA0001234', year: 2022, chemicalName: 'BENZENE', offset: 0, limit: 500 },
       expect.anything(),
     );
   });
 
   it('returns message when no releases found', async () => {
-    mockGetTriReleases.mockResolvedValue([]);
+    mockGetTriReleases.mockResolvedValue({ items: [] });
     const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
     const input = triGetFacilityReleasesTool.input.parse({ facility_id: 'NOFACILITY' });
     const result = await triGetFacilityReleasesTool.handler(input, ctx);
@@ -78,7 +90,7 @@ describe('triGetFacilityReleasesTool', () => {
   });
 
   it('includes year in no-results message when year filter provided', async () => {
-    mockGetTriReleases.mockResolvedValue([]);
+    mockGetTriReleases.mockResolvedValue({ items: [] });
     const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
     const input = triGetFacilityReleasesTool.input.parse({ facility_id: 'WA0001234', year: 2019 });
     const result = await triGetFacilityReleasesTool.handler(input, ctx);
@@ -88,7 +100,7 @@ describe('triGetFacilityReleasesTool', () => {
   });
 
   it('includes chemical name in no-results message when filter provided', async () => {
-    mockGetTriReleases.mockResolvedValue([]);
+    mockGetTriReleases.mockResolvedValue({ items: [] });
     const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
     const input = triGetFacilityReleasesTool.input.parse({
       facility_id: 'WA0001234',
@@ -101,7 +113,7 @@ describe('triGetFacilityReleasesTool', () => {
   });
 
   it('trims whitespace from facility_id and chemical_name', async () => {
-    mockGetTriReleases.mockResolvedValue([benzeneRelease]);
+    mockGetTriReleases.mockResolvedValue({ items: [benzeneRelease] });
     const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
     const input = triGetFacilityReleasesTool.input.parse({
       facility_id: '  WA0001234  ',
@@ -109,7 +121,7 @@ describe('triGetFacilityReleasesTool', () => {
     });
     await triGetFacilityReleasesTool.handler(input, ctx);
     expect(mockGetTriReleases).toHaveBeenCalledWith(
-      { facilityId: 'WA0001234', chemicalName: 'benzene' },
+      { facilityId: 'WA0001234', chemicalName: 'benzene', offset: 0, limit: 500 },
       expect.anything(),
     );
   });
@@ -126,7 +138,7 @@ describe('triGetFacilityReleasesTool', () => {
           '',
           '### BENZENE (2022)',
           '**Facility ID:** WA0001234',
-          '**One-Time / Non-Routine Release:** 1,240 lbs',
+          '**One-Time Release:** 1,240 lbs',
         ].join('\n'),
       },
     ]);
@@ -157,7 +169,7 @@ describe('triGetFacilityReleasesTool', () => {
           facilityId: '36701GLBMTOLDMO',
           chemicalName: 'Dioxin and dioxin-like compounds',
           reportingYear: 2022,
-          totalReleasesInLbs: 0.00062,
+          oneTimeReleaseInLbs: 0.00062,
           // AIR STACK 0.000894 + AIR FUG 0.000014, as the breakdown rollup sums them.
           releasesToAirInLbs: 0.000894 + 0.000014,
           releasesToWaterInLbs: 0.0000001,
@@ -169,7 +181,7 @@ describe('triGetFacilityReleasesTool', () => {
     };
     const text = (triGetFacilityReleasesTool.format!(output)[0] as { type: string; text: string })
       .text;
-    expect(text).toContain('**One-Time / Non-Routine Release:** 0.00062 lbs');
+    expect(text).toContain('**One-Time Release:** 0.00062 lbs');
     expect(text).toContain('**Air Releases:** 0.000908 lbs');
     expect(text).toContain('**Water Releases:** 0.0000001 lbs');
     expect(text).toContain('**Land Releases:** 0.0005809 lbs');
@@ -212,7 +224,7 @@ describe('triGetFacilityReleasesTool', () => {
     });
 
     it('empty-result message points at epa_tri_search_releases', async () => {
-      mockGetTriReleases.mockResolvedValue([]);
+      mockGetTriReleases.mockResolvedValue({ items: [] });
       const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
       const input = triGetFacilityReleasesTool.input.parse({
         facility_id: '110070322017',
@@ -227,7 +239,7 @@ describe('triGetFacilityReleasesTool', () => {
     });
 
     it('regression #31: every source pointer also names epa_echo_get_facility triFacilityIds', async () => {
-      mockGetTriReleases.mockResolvedValue([]);
+      mockGetTriReleases.mockResolvedValue({ items: [] });
       const input = triGetFacilityReleasesTool.input.parse({ facility_id: '110070322017' });
       const result = await triGetFacilityReleasesTool.handler(
         input,
@@ -260,7 +272,7 @@ describe('triGetFacilityReleasesTool', () => {
   });
 
   it('carries every per-medium field through the output schema to structuredContent', async () => {
-    mockGetTriReleases.mockResolvedValue([fullBreakdownRelease]);
+    mockGetTriReleases.mockResolvedValue({ items: [fullBreakdownRelease] });
     const call = await runToolContract(triGetFacilityReleasesTool, { facility_id: 'WA0005678' });
     expect(call.isError).toBeFalsy();
     expect(call.structuredContent).toEqual({
@@ -273,7 +285,7 @@ describe('triGetFacilityReleasesTool', () => {
     const output = { releases: [fullBreakdownRelease], facilityId: 'WA0005678' };
     const text = (triGetFacilityReleasesTool.format!(output)[0] as { type: string; text: string })
       .text;
-    // one_time_release_qty is a separate TRI category, rendered after the routine media.
+    // one_time_release_qty is a separate TRI category, rendered after the per-medium releases.
     expect(text.split('\n').slice(3)).toEqual([
       '### TOLUENE (2021)',
       '**Facility ID:** WA0005678',
@@ -281,7 +293,7 @@ describe('triGetFacilityReleasesTool', () => {
       '**Water Releases:** 200 lbs',
       '**Land Releases:** 3,400 lbs',
       '**Underground Injection:** 90,000 lbs',
-      '**One-Time / Non-Routine Release:** 0 lbs',
+      '**One-Time Release:** 0 lbs',
     ]);
   });
 
@@ -296,7 +308,7 @@ describe('triGetFacilityReleasesTool', () => {
     };
 
     it('carries reportedUnit and the converted pounds on both surfaces', async () => {
-      mockGetTriReleases.mockResolvedValue([dioxin, benzeneRelease]);
+      mockGetTriReleases.mockResolvedValue({ items: [dioxin, benzeneRelease] });
       const call = await runToolContract(triGetFacilityReleasesTool, {
         facility_id: '96020CLLNS500MA',
         year: 2022,
@@ -304,7 +316,7 @@ describe('triGetFacilityReleasesTool', () => {
       expect(call.isError).toBeFalsy();
       const structured = call.structuredContent as { releases: Array<Record<string, unknown>> };
       expect(structured.releases).toEqual([dioxin, benzeneRelease]);
-      const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+      const text = textOf(call.content);
       expect(text).toContain(
         '**Reported Unit:** grams — any quantities shown are converted to pounds (1 lb = 453.59237 g)',
       );
@@ -342,6 +354,179 @@ describe('triGetFacilityReleasesTool', () => {
     });
   });
 
+  describe('paging', () => {
+    it('defaults to 500 filings from offset 0 and passes limit and offset to the service', async () => {
+      mockGetTriReleases.mockResolvedValue({ items: [benzeneRelease] });
+
+      await runToolContract(triGetFacilityReleasesTool, { facility_id: 'WA0001234' });
+      await runToolContract(triGetFacilityReleasesTool, {
+        facility_id: 'WA0001234',
+        offset: 5,
+        limit: 5,
+      });
+
+      expect(mockGetTriReleases.mock.calls.map(([params]) => params)).toEqual([
+        { facilityId: 'WA0001234', offset: 0, limit: 500 },
+        { facilityId: 'WA0001234', offset: 5, limit: 5 },
+      ]);
+    });
+
+    it('continues a capped lookup with nextOffset and guidance on both surfaces', async () => {
+      mockGetTriReleases.mockResolvedValue({ items: [benzeneRelease], nextOffset: 501 });
+
+      const call = await runToolContract(triGetFacilityReleasesTool, {
+        facility_id: 'WA0001234',
+        offset: 500,
+        limit: 1,
+      });
+
+      expect(call.structuredContent).toMatchObject({
+        nextOffset: 501,
+        truncated: true,
+        shown: 1,
+        cap: 1,
+        guidance: 'More records follow; call again with offset 501 to continue.',
+      });
+      const text = textOf(call.content);
+      expect(text).toContain('**Next offset:** 501');
+      expect(text).toContain('More records follow; call again with offset 501 to continue.');
+      expect(text.toLowerCase()).not.toContain('raise');
+    });
+
+    it('clamps a limit above 500 to 500 with a notice', async () => {
+      mockGetTriReleases.mockResolvedValue({ items: [benzeneRelease] });
+
+      const call = await runToolContract(triGetFacilityReleasesTool, {
+        facility_id: 'WA0001234',
+        limit: 600,
+      });
+
+      expect(call.isError).toBeFalsy();
+      expect(mockGetTriReleases.mock.calls[0]![0]).toMatchObject({ limit: 500 });
+      const notice = (call.structuredContent as { limitNotice?: string }).limitNotice;
+      expect(notice).toContain('limit 600');
+      expect(textOf(call.content)).toContain(`> ${notice}`);
+    });
+
+    it('says an empty page past the end is past the end', async () => {
+      mockGetTriReleases.mockResolvedValue({ items: [] });
+
+      const call = await runToolContract(triGetFacilityReleasesTool, {
+        facility_id: 'WA0001234',
+        offset: 40,
+      });
+
+      const structured = call.structuredContent as { releases: unknown[]; message: string };
+      expect(structured.message).toBe(
+        'No TRI releases found for facility "WA0001234" at offset 40: the lookup has no records past it. Lower offset, or start again at offset 0.',
+      );
+      expect(structured).not.toHaveProperty('nextOffset');
+      expect(structured).not.toHaveProperty('truncated');
+    });
+
+    it('stays a lookup: no effectiveQuery echo', async () => {
+      mockGetTriReleases.mockResolvedValue({ items: [benzeneRelease] });
+
+      const call = await runToolContract(triGetFacilityReleasesTool, {
+        facility_id: 'WA0001234',
+        year: 2022,
+      });
+
+      expect(call.isError).toBeFalsy();
+      expect(call.structuredContent).toMatchObject({ releases: [benzeneRelease] });
+      expect(call.structuredContent).not.toHaveProperty('effectiveQuery');
+    });
+  });
+
+  describe('release totals', () => {
+    it('carries the one-time quantity and the on-site total on both surfaces', async () => {
+      const release = {
+        ...fullBreakdownRelease,
+        oneTimeReleaseInLbs: 25,
+        totalOnSiteReleasesInLbs: 108600,
+      };
+      mockGetTriReleases.mockResolvedValue({ items: [release] });
+
+      const call = await runToolContract(triGetFacilityReleasesTool, { facility_id: 'WA0005678' });
+
+      expect((call.structuredContent as { releases: unknown[] }).releases).toEqual([release]);
+      const text = textOf(call.content);
+      expect(text).toContain('**Total On-Site Releases:** 108,600 lbs');
+      expect(text).toContain('**One-Time Release:** 25 lbs');
+    });
+
+    it('describes the fields without calling the media routine or the tool a ranking', () => {
+      const item = triGetFacilityReleasesTool.output.shape.releases.element.shape;
+      expect(item).not.toHaveProperty('totalReleasesInLbs');
+      expect(item.oneTimeReleaseInLbs.description).toContain('already counted');
+      expect(item.totalOnSiteReleasesInLbs.description).toContain('midpoint');
+      for (const text of [
+        triGetFacilityReleasesTool.description,
+        ...Object.values(item).map((field) => field.description ?? ''),
+      ]) {
+        expect(text).not.toMatch(/routine/i);
+        expect(text).not.toMatch(/top (polluters|emitters)/i);
+        expect(text).not.toContain('NOT the sum');
+      }
+    });
+  });
+
+  describe('DMAP input rejections through the real service', () => {
+    beforeEach(() => {
+      liveService.current = new DmapService({} as AppConfig, {} as StorageService);
+    });
+    afterEach(() => {
+      liveService.current = undefined;
+      vi.restoreAllMocks();
+    });
+
+    const unmatchableHint =
+      'Pass one 15-character TRI facility ID from epa_tri_search_releases, and include a letter or digit in chemical_name.';
+    const tooLongHint =
+      'Pass one 15-character TRI facility ID and shorten chemical_name to a distinctive part of the name.';
+
+    it.each([
+      [
+        'a comma-joined facility_id',
+        { facility_id: 'A,B' },
+        'unmatchable_filter',
+        unmatchableHint,
+        'Pass one value per call.',
+      ],
+      [
+        'a chemical_name with no letter or digit',
+        { facility_id: '98108THBNG7500E', chemical_name: "'''" },
+        'unmatchable_filter',
+        unmatchableHint,
+        'has no letter or digit',
+      ],
+      [
+        'a facility_id past the request line',
+        { facility_id: 'A'.repeat(5000) },
+        'filter_too_long',
+        tooLongHint,
+        'too long',
+      ],
+      [
+        'a chemical_name past the request line',
+        { facility_id: '98108THBNG7500E', chemical_name: 'a'.repeat(4000) },
+        'filter_too_long',
+        tooLongHint,
+        'too long',
+      ],
+    ])(
+      'rejects %s with its declared reason and recovery on both surfaces, before any request',
+      async (_, args, reason, hint, message) => {
+        const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+        const call = await runToolContract(triGetFacilityReleasesTool, args);
+
+        expectValidationRejection(call, { reason, hint, message });
+        expect(fetchSpy).not.toHaveBeenCalled();
+      },
+    );
+  });
+
   it('omits absent media in format without fabricating zero', () => {
     const airOnly = {
       releases: [
@@ -360,6 +545,6 @@ describe('triGetFacilityReleasesTool', () => {
     expect(text).not.toContain('Water Releases');
     expect(text).not.toContain('Land Releases');
     expect(text).not.toContain('Underground Injection');
-    expect(text).not.toContain('One-Time / Non-Routine Release');
+    expect(text).not.toContain('One-Time Release');
   });
 });

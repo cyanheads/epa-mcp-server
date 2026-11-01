@@ -7,6 +7,7 @@ import { JsonRpcErrorCode, notFound } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { superfundSiteResource } from '@/mcp-server/resources/definitions/superfund-site.resource.js';
+import { rpcResponse, startHttpServer } from '../../../helpers.js';
 
 const mockGetSuperfundSite = vi.fn();
 
@@ -106,4 +107,52 @@ describe('superfundSiteResource', () => {
     const result = await superfundSiteResource.handler(params, ctx);
     expect(result).toMatchObject({ siteId: 'WA1890090003', contaminants: [{ name: 'ARSENIC' }] });
   });
+});
+
+describe('epa://superfund/{site_id} over JSON-RPC', () => {
+  it('rejects a site_id DMAP cannot carry with its declared reason and recovery, before any upstream request', async () => {
+    // An unreachable DMAP base URL: a request that escaped the pre-request checks fails loudly.
+    const { origin, stop } = await startHttpServer({
+      EPA_DMAP_BASE_URL: 'http://127.0.0.1:9/dmapservice',
+      LOGS_DIR: '/tmp/epa-superfund-resource-test-logs',
+    });
+    try {
+      const read = async (uri: string) => {
+        const response = await fetch(`${origin}/mcp`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json, text/event-stream',
+            'MCP-Protocol-Version': '2025-11-25',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'resources/read',
+            params: { uri },
+          }),
+        });
+        return rpcResponse(await response.text());
+      };
+      const hint = 'Pass one SEMS site ID exactly as epa_superfund_search_sites returns it.';
+
+      expect(await read('epa://superfund/A.B')).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.ValidationError,
+          message:
+            '"A.B" contains ".", a character EPA\'s DMAP service cannot match in an exact-value filter. Remove it and retry.',
+          data: { reason: 'unmatchable_filter', character: '.', recovery: { hint } },
+        },
+      });
+      expect(await read(`epa://superfund/${'A'.repeat(5000)}`)).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.ValidationError,
+          message: expect.stringContaining("too long for EPA's DMAP service"),
+          data: { reason: 'filter_too_long', recovery: { hint } },
+        },
+      });
+    } finally {
+      await stop();
+    }
+  }, 15_000);
 });

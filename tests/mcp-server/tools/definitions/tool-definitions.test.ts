@@ -12,6 +12,7 @@ import {
 } from '@/mcp-server/tools/definitions/index.js';
 
 const KEYLESS_TOOL_NAMES = [
+  'epa_echo_get_case',
   'epa_echo_get_facility',
   'epa_echo_search_facilities',
   'epa_echo_search_violations',
@@ -24,7 +25,7 @@ const KEYLESS_TOOL_NAMES = [
 ];
 
 describe('tool definition sets', () => {
-  it('core set has the 9 keyless tools and excludes the AirNow-gated air quality tool', () => {
+  it('core set has the 10 keyless tools and excludes the AirNow-gated air quality tool', () => {
     expect(coreToolDefinitions.map((t) => t.name).sort()).toEqual(KEYLESS_TOOL_NAMES);
     expect(coreToolDefinitions).not.toContain(airnowGetConditionsTool);
   });

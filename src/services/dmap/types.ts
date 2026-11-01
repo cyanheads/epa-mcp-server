@@ -8,14 +8,18 @@ export interface RawTriFacility {
   city_name?: string;
   /** County name as the state reported it — usually bare and uppercase ("KING"), sometimes suffixed ("CALCASIEU PARISH") */
   county_name?: string;
+  /** 12-digit EPA Facility Registry Service ID — the registry_id epa_echo_get_facility takes */
+  epa_registry_id?: string | null;
   fac_latitude?: string | number;
   fac_longitude?: string | number;
   facility_name?: string;
+  /** Parent company as TRI standardizes it; "NA" when the facility reported none */
+  standardized_parent_company?: string | null;
   state_abbr?: string;
   street_address?: string;
   tri_facility_id?: string;
   zip_code?: string;
-  [key: string]: string | number | undefined;
+  [key: string]: string | number | null | undefined;
 }
 
 /** Raw row from tri.tri_reporting_form table. */
@@ -25,8 +29,10 @@ export interface RawTriReportingForm {
   /** Submission control number — join key to tri.tri_release_qty for the per-medium breakdown */
   doc_ctrl_num?: string;
   /**
-   * One-time / non-routine release quantity (spills, accidents) — a distinct TRI category,
-   * not a rollup of the per-medium routine releases carried in tri.tri_release_qty.
+   * Form R Section 8.8 one-time release quantity: releases from remedial actions, catastrophic
+   * events, or one-time events not associated with production. Section 8.8 reports it separately,
+   * but it is already counted in the Section 5 per-medium releases (tri.tri_release_qty) and the
+   * off-site transfers.
    */
   one_time_release_qty?: string | number;
   reporting_year?: string | number;
@@ -43,7 +49,7 @@ export interface RawTriReportingForm {
 
 /**
  * Raw row from tri.tri_release_qty table — one row per (doc_ctrl_num, environmental_medium).
- * Carries the routine per-medium release quantities that tri_reporting_form lacks.
+ * Carries the per-medium on-site release quantities that tri_reporting_form lacks.
  */
 export interface RawTriReleaseQty {
   /** Join key back to tri_reporting_form.doc_ctrl_num */
@@ -83,10 +89,16 @@ export interface RawSemsSite {
   [key: string]: string | number | null | undefined;
 }
 
-/** Raw row from sdwis.water_system table. */
+/**
+ * Raw row from sdwis.water_system table. A county search's rows also carry the joined
+ * sdwis.geographic_area columns; DMAP prefixes the ones both tables have
+ * (`sdwis.geographic_area.pwsid`), so the water_system columns keep their names.
+ */
 export interface RawSdwisWaterSystem {
   /** Actual city field — city_served does not exist */
   city_name?: string;
+  /** sdwis.geographic_area: the counties served, comma-joined ("Dallas,Johnson") */
+  county_served?: string;
   population_served_count?: string | number;
   primacy_agency_code?: string;
   primary_source_code?: string;
@@ -99,39 +111,44 @@ export interface RawSdwisWaterSystem {
   [key: string]: string | number | undefined;
 }
 
-/** Raw row from sdwis.violation table (used for has_violation filtering). */
-export interface RawSdwisViolation {
-  primacy_agency_code?: string;
-  pwsid?: string;
-  [key: string]: string | number | undefined;
-}
-
 /**
  * Normalized TRI chemical release record.
- * `totalReleasesInLbs` is TRI's one-time / non-routine release quantity (from
- * tri_reporting_form.one_time_release_qty) — a distinct category, NOT the sum of the
- * per-medium routine releases. The `releasesTo*InLbs` fields are the routine on-site
- * releases rolled up from tri.tri_release_qty by doc_ctrl_num, each omitted when the submission
- * reported no hard quantity for that medium; searchTriReleases fills them only when its caller
- * opts into the breakdown. Every quantity is in pounds: a chemical TRI has facilities report in
- * grams is converted, and `reportedUnit` says so.
+ * `oneTimeReleaseInLbs` is the Form R Section 8.8 one-time quantity
+ * (tri_reporting_form.one_time_release_qty), already counted in the per-medium releases and the
+ * off-site transfers. The `releasesTo*InLbs` fields are the on-site releases rolled up from
+ * tri.tri_release_qty by doc_ctrl_num, each omitted when the submission reported no hard quantity
+ * for that medium, and `totalOnSiteReleasesInLbs` sums the ones present; searchTriReleases fills
+ * them only when its caller opts into the breakdown. Every quantity is in pounds: a chemical TRI
+ * has facilities report in grams is converted, and `reportedUnit` says so.
  */
 export interface TriRelease {
   chemicalName: string;
   facilityId: string;
-  /** On-site routine air releases (AIR FUG + AIR STACK) in lbs, summed per submission */
+  /** Form R Section 8.8 one-time release quantity (one_time_release_qty) in lbs */
+  oneTimeReleaseInLbs?: number;
+  /** On-site air releases (AIR FUG + AIR STACK) in lbs, summed per submission */
   releasesToAirInLbs?: number;
-  /** On-site routine land releases (landfills, land treatment, surface impoundment, other disposal) in lbs */
+  /** On-site land releases (landfills, land treatment, surface impoundment, other disposal) in lbs */
   releasesToLandInLbs?: number;
-  /** On-site routine releases via underground injection wells in lbs, summed per submission */
+  /** On-site releases via underground injection wells in lbs, summed per submission */
   releasesToUndergroundInjectionInLbs?: number;
-  /** On-site routine releases to surface water in lbs, summed across outfalls per submission */
+  /** On-site releases to surface water in lbs, summed across outfalls per submission */
   releasesToWaterInLbs?: number;
   /** 'grams' when TRI had the facility report this chemical in grams (dioxin and dioxin-like compounds); the *InLbs quantities are converted. Absent for pound-reported chemicals. */
   reportedUnit?: 'grams';
   reportingYear: number;
-  /** One-time / non-routine release quantity (from one_time_release_qty) — a distinct TRI category */
-  totalReleasesInLbs?: number;
+  /** Sum of the per-medium fields present, in lbs; absent when none is */
+  totalOnSiteReleasesInLbs?: number;
+}
+
+/** A TRI release from a regional search, with the facility columns its tri.tri_facility join carries. */
+export interface TriSearchRelease extends TriRelease {
+  countyName?: string;
+  facilityName: string;
+  /** Parent company as TRI standardizes it; absent when TRI holds its "NA" placeholder */
+  parentCompany?: string;
+  /** 12-digit EPA Facility Registry Service ID */
+  registryId?: string;
 }
 
 /** Normalized Superfund site record. */

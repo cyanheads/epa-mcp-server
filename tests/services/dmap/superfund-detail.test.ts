@@ -2,6 +2,7 @@
  * @fileoverview Superfund exact identity, sparse metadata, filters, and detail retrieval contracts.
  * @module tests/services/dmap/superfund-detail.test
  */
+
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
@@ -12,6 +13,7 @@ import { superfundSiteResource } from '@/mcp-server/resources/definitions/superf
 import { superfundGetSiteTool } from '@/mcp-server/tools/definitions/superfund-get-site.tool.js';
 import { superfundSearchSitesTool } from '@/mcp-server/tools/definitions/superfund-search-sites.tool.js';
 import { DmapService, initDmapService } from '@/services/dmap/dmap-service.js';
+import { answerAfter, hang, textOf } from '../../helpers.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -32,7 +34,6 @@ it('characterizes exact leading-zero lookup and flat resource fields', async () 
     urls.push(String(input));
     return Response.json(String(input).includes('envirofacts_contaminants') ? [] : [rawSite]);
   });
-  expect(await makeService().searchSuperfundById('0200048', createMockContext())).toEqual([site]);
   initDmapService({} as AppConfig, {} as StorageService);
   expect(
     await superfundSiteResource.handler(
@@ -40,7 +41,7 @@ it('characterizes exact leading-zero lookup and flat resource fields', async () 
       createMockContext({ errors: superfundSiteResource.errors }),
     ),
   ).toMatchObject(site);
-  expect(urls.filter((url) => url.includes('envirofacts_site'))).toHaveLength(2);
+  expect(urls.filter((url) => url.includes('envirofacts_site'))).toHaveLength(1);
   expect(
     urls
       .filter((url) => url.includes('envirofacts_site'))
@@ -66,8 +67,9 @@ it.each([
 });
 
 it('preserves source assessment and archive metadata while dropping unsupported cleanupStatus', async () => {
-  vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-    Response.json([
+  detailFetch(
+    [],
+    [
       {
         ...rawSite,
         npl_status_code: 'A',
@@ -78,19 +80,17 @@ it('preserves source assessment and archive metadata while dropping unsupported 
         non_npl_status_name: 'Assessment',
         cleanup_status: 'Unsupported',
       },
-    ]),
+    ],
   );
-  expect(await makeService().searchSuperfundById('0200048', createMockContext())).toEqual([
-    {
-      ...site,
-      nplStatus: 'A',
-      nplStatusName: 'Site is Part of NPL Site',
-      archivedInd: 'Y',
-      epaId: 'NJD123',
-      federalFacilityInd: 'N',
-      nonNplStatusName: 'Assessment',
-    },
-  ]);
+  expect((await makeService().getSuperfundSite('0200048', createMockContext())).site).toEqual({
+    ...site,
+    nplStatus: 'A',
+    nplStatusName: 'Site is Part of NPL Site',
+    archivedInd: 'Y',
+    epaId: 'NJD123',
+    federalFacilityInd: 'N',
+    nonNplStatusName: 'Assessment',
+  });
 });
 
 it('passes opt-in archived exclusion before administrative pagination', async () => {
@@ -261,10 +261,7 @@ it('renders every raw site and association field literally on both tool surfaces
       },
     ],
   });
-  const tokens = new MarkdownIt().parse(
-    result.content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('\n'),
-    {},
-  );
+  const tokens = new MarkdownIt().parse(textOf(result.content), {});
   const inline = tokens.flatMap((token) => token.children ?? []);
   expect(inline.some((token) => token.type === 'link_open')).toBe(false);
   const text = inline
@@ -330,6 +327,38 @@ it.each(['', '   '])('rejects blank new detail ID %j before any request', async 
   expect(fetchSpy).not.toHaveBeenCalled();
 });
 
+const siteIdHint = 'Pass one SEMS site ID exactly as epa_superfund_search_sites returns it.';
+
+it.each([
+  [
+    'a site_id with a character DMAP cannot match',
+    'A.B',
+    'unmatchable_filter',
+    'Remove it and retry.',
+  ],
+  ['a site_id past the request line', 'A'.repeat(5000), 'filter_too_long', 'too long'],
+])(
+  'rejects %s with its declared reason and recovery on both surfaces, before any request',
+  async (_, site_id, reason, message) => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    initDmapService({} as AppConfig, {} as StorageService);
+
+    const result = await runToolContract(superfundGetSiteTool, { site_id });
+
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        code: JsonRpcErrorCode.ValidationError,
+        message: expect.stringContaining(message),
+        data: { reason, recovery: { hint: siteIdHint } },
+      },
+    });
+    const text = JSON.stringify(result.content);
+    expect(text).toContain(siteIdHint);
+    expect(text).toContain(reason);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  },
+);
+
 it.each([403, 429, 500])(
   'propagates contaminant HTTP %s after the site resolves, with real retries',
   async (status) => {
@@ -382,13 +411,9 @@ it('shares the site request deadline with every later contaminant page', async (
   vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
     const url = String(input);
     urls.push(url);
-    return new Promise((resolve, reject) => {
-      if (url.includes('envirofacts_site')) {
-        setTimeout(() => resolve(Response.json([rawSite])), 30_000);
-        return;
-      }
-      init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true });
-    });
+    return url.includes('envirofacts_site')
+      ? answerAfter(30_000, init?.signal, () => Response.json([rawSite]))
+      : hang(init?.signal);
   });
   initDmapService({} as AppConfig, {} as StorageService);
   const pending = runToolContract(superfundGetSiteTool, { site_id: '0200048' });
@@ -451,7 +476,7 @@ it.each([false, true])(
       expect(url).toContain('/npl_status_code/in/F,A/');
       expect(url).toContain('/fk_ref_state_code/equals/WA/');
       expect(url).toContain('/city_name/contains/Seattle/');
-      expect(url).toContain('/zip_code/equals/98101/');
+      expect(url).toContain('/zip_code/beginsWith/98101/');
       expect(url.includes('/archived_ind/equals/N/')).toBe(exclude_archived);
     }
   },
@@ -490,11 +515,9 @@ it('preserves all seven observed source NPL names and sparse archive metadata in
       nplStatusName,
       archivedInd: index % 2 ? 'Y' : 'N',
     })),
-    totalCount: 7,
+    effectiveQuery: 'state=WA',
   });
-  const text = result.content
-    .flatMap((block) => (block.type === 'text' ? [block.text] : []))
-    .join('\n');
+  const text = textOf(result.content);
   for (const [, name] of statuses) expect(text).toContain(name);
   expect(text).not.toContain('Cleanup');
 });
@@ -525,7 +548,7 @@ it('retries a later contaminant page without duplicating the earlier page', asyn
   expect(urls).toHaveLength(4);
 });
 
-it('keeps malformed JSON as an error through the real fetch/retry path', async () => {
+it('fails malformed JSON once as a SerializationError through the real fetch/retry path', async () => {
   vi.useFakeTimers();
   let attempts = 0;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
@@ -538,7 +561,12 @@ it('keeps malformed JSON as an error through the real fetch/retry path', async (
   await vi.runAllTimersAsync();
   const result = await pending;
   expect(result.isError).toBe(true);
-  expect(result.structuredContent).toHaveProperty('error');
-  expect(JSON.stringify(result.content)).toContain('Error:');
-  expect(attempts).toBe(4);
+  expect(result.structuredContent).toMatchObject({
+    error: {
+      code: JsonRpcErrorCode.SerializationError,
+      message: expect.stringContaining('EPA DMAP returned a response that is not JSON'),
+    },
+  });
+  expect(JSON.stringify(result.content)).toContain('EPA DMAP returned a response that is not JSON');
+  expect(attempts).toBe(1);
 });

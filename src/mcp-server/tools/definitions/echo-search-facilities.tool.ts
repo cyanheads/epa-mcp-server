@@ -1,30 +1,100 @@
 /**
- * @fileoverview Tool for searching EPA-regulated facilities by location, industry, or compliance status.
+ * @fileoverview Tool for searching EPA-regulated facilities by location, county, facility name,
+ * NAICS code, program, or compliance status, one page at a time.
  * @module mcp-server/tools/definitions/echo-search-facilities.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
+import {
+  beginsWithTerm,
+  echoQuery,
+  effectiveQueryEnrichment,
+  equalsTerm,
+} from '@/mcp-server/tools/effective-query.js';
+import { dollars } from '@/mcp-server/tools/format-dollars.js';
 import { formatHeading } from '@/mcp-server/tools/format-heading.js';
 import { formatLbs } from '@/mcp-server/tools/format-lbs.js';
 import { formatLocationLines } from '@/mcp-server/tools/format-location.js';
+import { formatNotice } from '@/mcp-server/tools/format-notice.js';
+import {
+  normalizeStateCode,
+  normalizeZip,
+  optionalStateSchema,
+  optionalZipSchema,
+} from '@/mcp-server/tools/input-formats.js';
+import {
+  clampLimit,
+  continueGuidance,
+  limitSchema,
+  offsetSchema,
+  pagingEnrichment,
+  pagingTrailer,
+} from '@/mcp-server/tools/paging.js';
+import { bareCountyName } from '@/services/county-name.js';
 import { getEchoService } from '@/services/echo/echo-service.js';
+
+/** Default and most facilities one call returns; a full page of 100 measures about 60 KB. */
+const SEARCH_PAGE = { defaultLimit: 50, cap: 100 } as const;
+
+/*
+ * Advertised patterns accept every form the handler answers: surrounding whitespace is trimmed and
+ * a blank value reads as omitted. Each is linear: no two adjacent quantified parts match the same
+ * character.
+ */
+const COUNTY_FIPS_PATTERN = /^\s*(?:\d{5}\s*)?$/;
+const NAICS_PATTERN = /^\s*(?:\d{2,6}\s*)?$/;
+const NO_COMMA_PATTERN = /^[^,]*$/;
 
 export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
   title: 'Search EPA Facilities',
   description:
-    'ECHO: Search EPA-regulated facilities by location, environmental program, or compliance status across CAA, CWA, RCRA, TRI, and SDWA. Returns facility name, EPA Registry ID, coordinates, county FIPS code, per-program registration flags, five-year inspection and penalty totals, and TRI release totals. Registry IDs returned here feed epa_echo_get_facility. Supports proximity search via latitude + longitude + radius_miles. At least one geographic filter (zip_code, state, city, or a complete latitude+longitude+radius_miles triple) is required — unscoped searches time out.',
+    'ECHO: Search EPA-regulated facilities by location, county, facility name, NAICS industry code, environmental program, or compliance status across CAA, CWA, RCRA, TRI, and SDWA. Returns facility name, EPA Registry ID, coordinates, county FIPS code, per-program registration flags, TRI facility IDs, five-year inspection and penalty totals, and TRI release totals. Registry IDs returned here feed epa_echo_get_facility; TRI facility IDs feed epa_tri_get_facility_releases. Supports proximity search via latitude + longitude + radius_miles. At least one geographic filter (zip_code, state, city, county_fips, or a complete latitude+longitude+radius_miles triple) is required — unscoped searches time out. Page past limit with offset and nextOffset.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
-    zip_code: z.string().optional().describe('5-digit ZIP code to search within'),
-    state: z.string().optional().describe('2-letter US state abbreviation (e.g. "WA", "CA")'),
+    zip_code: optionalZipSchema(
+      '5-digit ZIP code to search within; a ZIP+4 such as "98108-1234" searches its first five digits',
+    ),
+    state: optionalStateSchema(
+      '2-letter state or territory code (e.g. "WA", "PR"), case-insensitive. Required with county. ECHO also files facilities under codes outside the USPS set, such as DM for offshore Gulf of Mexico platforms; any 2-character code is searched as written.',
+    ),
     city: z
       .string()
       .optional()
       .describe(
         'City name, case-insensitive; matches cities that begin with it ("TACOMA", or "SEAT" for SEATTLE and SEATAC). Pair with state.',
+      ),
+    county: z
+      .string()
+      .optional()
+      .describe(
+        'County name, case-insensitive. A trailing County, Parish, Borough, City and Borough, Census Area, or Municipality is dropped ("King County" searches KING), then it matches recorded county names that begin with it, so KING in VA also matches KING GEORGE. Requires state. Covers every registration ECHO places in the county, including ones with no program record that county_fips leaves out.',
+      ),
+    county_fips: z
+      .string()
+      .regex(COUNTY_FIPS_PATTERN, 'Expected a 5-digit county FIPS code such as "53033".')
+      .optional()
+      .describe(
+        '5-digit county FIPS code, state + county (e.g. "53033" for King County, WA); matches it exactly and scopes a search on its own. Leaves out registrations with no program record, which county includes.',
+      ),
+    facility_name: z
+      .string()
+      .regex(
+        NO_COMMA_PATTERN,
+        'facility_name cannot contain a comma: ECHO reads a comma as a list separator.',
+      )
+      .optional()
+      .describe(
+        'Facility name words, case-insensitive: every word must appear as a whole word, in any order, in a name ECHO records for the facility, so "BOEING" matches BOEING PLANT 2 and "OEING" matches nothing. A match can come from another name ECHO records for the facility, so a returned name can lack the words. No commas. Pair with a geographic filter.',
+      ),
+    naics: z
+      .string()
+      .regex(NAICS_PATTERN, 'Expected a NAICS code of 2 to 6 digits, such as "3364" or "336411".')
+      .optional()
+      .describe(
+        'NAICS industry code, 2–6 digits; fewer than six match every code that begins with them ("3364" for aerospace product and parts manufacturing). Pair with a geographic filter.',
       ),
     latitude: z
       .number()
@@ -67,13 +137,8 @@ export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
       .describe(
         'When true, return only facilities with at least one program in significant noncompliance (complianceStatus "Significant Violation")',
       ),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(100)
-      .default(50)
-      .describe('Maximum number of facilities to return (1–100)'),
+    limit: limitSchema({ ...SEARCH_PAGE, noun: 'facilities' }),
+    offset: offsetSchema('facilities'),
   }),
 
   output: z.object({
@@ -112,7 +177,7 @@ export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
                 tri: z
                   .boolean()
                   .describe(
-                    'Has a Toxics Release Inventory (TRI) facility ID, whether or not it reported in the latest year',
+                    'Has a Toxics Release Inventory (TRI) facility ID (triFacilityIds is non-empty), whether or not it reported in the latest year',
                   ),
                 sdwa: z
                   .boolean()
@@ -121,11 +186,16 @@ export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
               .describe(
                 'Program registration flags — the same programs the programs filter selects',
               ),
+            triFacilityIds: z
+              .array(z.string())
+              .describe(
+                "15-character TRI facility IDs ECHO records for this facility, in ECHO's order, which is not reporting-year order — pass one as facility_id to epa_tri_get_facility_releases for per-chemical releases. A site can carry several from successive operators. Empty when the facility has no TRI facility ID.",
+              ),
             triReleasesTransfersInLbs: z
               .number()
               .optional()
               .describe(
-                "Total TRI on/off-site releases and transfers in pounds for ECHO's latest TRI year (summary). For the per-chemical breakdown, call epa_tri_get_facility_releases with the TRI facility ID that epa_tri_search_releases returns as facilityId — the Registry ID is not a TRI facility ID.",
+                "Total TRI on/off-site releases and transfers in pounds for ECHO's latest TRI year (summary). For the per-chemical breakdown, pass one of triFacilityIds to epa_tri_get_facility_releases — the Registry ID is not a TRI facility ID.",
               ),
             inspectionCount: z
               .number()
@@ -142,23 +212,38 @@ export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
             'EPA facility record with Registry ID, location, program flags, and compliance summary',
           ),
       )
-      .describe('Matching EPA facilities'),
-    totalCount: z.number().describe('Total facilities matched before the limit was applied'),
+      .describe(
+        "One page of matching EPA facilities, in ECHO's order: limit facilities from offset",
+      ),
+    totalCount: z.number().describe('Facilities matched before limit and offset were applied'),
     message: z
       .string()
       .optional()
       .describe(
-        'Recovery hint when no results are found — echoes applied filters and suggests how to broaden the search. Absent when results are returned.',
+        'Recovery hint when the page is empty: no facility matched, or offset is past the last match. Absent when facilities are returned.',
       ),
   }),
+
+  enrichment: {
+    ...effectiveQueryEnrichment,
+    ...pagingEnrichment,
+    notice: z
+      .string()
+      .optional()
+      .describe('Present when more facilities follow: names the offset that continues the list.'),
+  },
+  enrichmentTrailer: {
+    ...pagingTrailer,
+    notice: { render: formatNotice },
+  },
 
   errors: [
     {
       reason: 'no_geographic_filter',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'No geographic filter (zip_code, state, city, or a latitude+longitude+radius_miles triple) was provided.',
+      when: 'No geographic filter (zip_code, state, city, county_fips, or a latitude+longitude+radius_miles triple) was provided.',
       recovery:
-        'Provide at least one of zip_code, state, or city, or a complete latitude + longitude + radius_miles triple, to scope the search.',
+        'Provide at least one of zip_code, state, city, or county_fips, or a complete latitude + longitude + radius_miles triple, to scope the search.',
     },
     {
       reason: 'incomplete_proximity',
@@ -166,6 +251,13 @@ export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
       when: 'A proximity search was started but latitude, longitude, and radius_miles were not all provided.',
       recovery:
         'Proximity search needs all three of latitude, longitude, and radius_miles. Provide the missing value, or use zip_code / state / city instead.',
+    },
+    {
+      reason: 'county_requires_state',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'county was provided without state.',
+      recovery:
+        'Add state with county, since county names repeat across states, or pass county_fips, which names one county on its own.',
     },
   ],
 
@@ -185,59 +277,99 @@ export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
       );
     }
 
-    // Enforce geographic scoping requirement
-    const zipCode = input.zip_code?.trim();
-    const state = input.state?.trim();
-    const city = input.city?.trim();
-    if (!zipCode && !state && !city && !hasProximity) {
+    // A blank optional value reads as omitted.
+    const state = normalizeStateCode(input.state);
+    const zipCode = normalizeZip(input.zip_code);
+    const city = input.city?.trim() || undefined;
+    const county = input.county?.trim() ? bareCountyName(input.county) : undefined;
+    const countyFips = input.county_fips?.trim() || undefined;
+    const facilityName = input.facility_name?.trim() || undefined;
+    const naics = input.naics?.trim() || undefined;
+    const program = input.programs?.[0];
+
+    if (county && !state) {
+      throw ctx.fail('county_requires_state', `county "${county}" needs state.`);
+    }
+    if (!zipCode && !state && !city && !countyFips && !hasProximity) {
       throw ctx.fail(
         'no_geographic_filter',
-        'At least one geographic filter (zip_code, state, city, or a latitude+longitude+radius_miles triple) is required.',
+        'At least one geographic filter (zip_code, state, city, county_fips, or a latitude+longitude+radius_miles triple) is required.',
       );
     }
 
+    const { limit, notice: limitNotice } = clampLimit(input.limit, SEARCH_PAGE.cap);
+    if (limitNotice) ctx.enrich({ limitNotice });
+
     ctx.log.info('epa_echo_search_facilities', {
-      zip: input.zip_code,
-      state: input.state,
-      city: input.city,
+      zip: zipCode,
+      state,
+      city,
+      county,
+      countyFips,
+      naics,
       ...(hasProximity && { latitude, longitude, radiusMiles }),
       programs: input.programs,
+      limit,
+      offset: input.offset,
     });
-    const { facilities, totalCount } = await getEchoService().searchFacilities(
+    const page = await getEchoService().searchFacilities(
       {
         ...(zipCode && { zipCode }),
         ...(state && { state }),
         ...(city && { city }),
+        ...(county && { county }),
+        ...(countyFips && { countyFips }),
+        ...(facilityName && { facilityName }),
+        ...(naics && { naics }),
         ...(latitude !== undefined && { latitude }),
         ...(longitude !== undefined && { longitude }),
         ...(radiusMiles !== undefined && { radiusMiles }),
         ...(input.active_only && { activeOnly: input.active_only }),
-        ...(input.programs?.[0] && { program: input.programs[0] }),
+        ...(program && { program }),
         ...(input.has_violation && { hasViolation: input.has_violation }),
-        limit: input.limit,
+        limit,
+        offset: input.offset,
       },
       ctx,
     );
 
-    ctx.log.info('epa_echo_search_facilities completed', { count: facilities.length, totalCount });
+    echoQuery(ctx, [
+      zipCode && equalsTerm('zip_code', zipCode),
+      state && equalsTerm('state', state),
+      city && beginsWithTerm('city', city),
+      county && beginsWithTerm('county', county),
+      countyFips && equalsTerm('county_fips', countyFips),
+      facilityName && `facility_name has words ${facilityName}`,
+      naics && beginsWithTerm('naics', naics),
+      latitude !== undefined && equalsTerm('latitude', latitude),
+      longitude !== undefined && equalsTerm('longitude', longitude),
+      radiusMiles !== undefined && equalsTerm('radius_miles', radiusMiles),
+      input.active_only && equalsTerm('active_only', true),
+      program && equalsTerm('programs', program),
+      input.has_violation && equalsTerm('has_violation', true),
+    ]);
+    if (page.nextOffset !== undefined) {
+      ctx.enrich({ nextOffset: page.nextOffset });
+      ctx.enrich.notice(continueGuidance(page.nextOffset));
+    }
 
-    if (facilities.length === 0) {
-      const parts: string[] = [];
-      if (input.zip_code) parts.push(`zip_code="${input.zip_code}"`);
-      if (input.state) parts.push(`state="${input.state}"`);
-      if (input.city) parts.push(`city="${input.city}"`);
-      if (hasProximity) parts.push(`within ${radiusMiles} mi of (${latitude}, ${longitude})`);
-      if (input.active_only) parts.push('active_only=true');
-      if (input.programs?.length) parts.push(`programs=[${input.programs.join(', ')}]`);
-      if (input.has_violation) parts.push('has_violation=true');
+    ctx.log.info('epa_echo_search_facilities completed', {
+      count: page.items.length,
+      totalCount: page.totalCount,
+    });
+
+    if (page.items.length === 0) {
       return {
         facilities: [],
-        totalCount: 0,
-        message: `No facilities matched: ${parts.join(', ')}. Try broadening the geographic area or removing program/violation filters.`,
+        totalCount: page.totalCount,
+        message:
+          page.totalCount === 0
+            ? 'No facilities matched. Try broadening the geographic area or removing the name, NAICS, program, or violation filters.'
+            : `offset ${input.offset} is past the last of the ${page.totalCount} matching facilities; call again with a smaller offset.`,
       };
     }
 
-    return { facilities, totalCount };
+    return { facilities: page.items, totalCount: page.totalCount };
   },
 
   format: (result) => {
@@ -259,12 +391,15 @@ export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
         .join(', ');
       if (activePrograms) lines.push(`**Programs:** ${activePrograms}`);
 
+      if (f.triFacilityIds.length > 0) {
+        lines.push(`**TRI Facility IDs:** ${escapeMarkdownInline(f.triFacilityIds.join(', '))}`);
+      }
       if (f.triReleasesTransfersInLbs !== undefined) {
         lines.push(`**TRI Releases+Transfers:** ${formatLbs(f.triReleasesTransfersInLbs)}`);
       }
       if (f.inspectionCount !== undefined) lines.push(`**Inspections:** ${f.inspectionCount}`);
       if (f.totalPenaltiesInDollars !== undefined) {
-        lines.push(`**Total Penalties:** $${f.totalPenaltiesInDollars.toLocaleString()}`);
+        lines.push(`**Total Penalties:** ${dollars(f.totalPenaltiesInDollars)}`);
       }
     }
 

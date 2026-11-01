@@ -1,14 +1,19 @@
 /**
  * @fileoverview EJScreen environmental-justice service. Wraps the community-maintained
  * EJAM API (`api.ejanalysis.com`), run by Public Environmental Data Partners, which
- * rehosts EJScreen v2.2 (2022) data after EPA discontinued public access in 2025.
- * Calls `POST {base}/data` with a point + buffer and normalizes the ~683-column row.
+ * rehosts EJScreen after EPA discontinued public access in 2025; it serves EJAM's
+ * ACS 2018–2022 release, built with the EJScreen 2.3 method. Calls `POST {base}/data`
+ * with a point + buffer and normalizes the ~683-column row.
  * @module services/ejscreen/ejscreen-service
  */
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
-import { serviceUnavailable, validationError } from '@cyanheads/mcp-ts-core/errors';
+import {
+  serializationError,
+  serviceUnavailable,
+  validationError,
+} from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { httpErrorFromResponse, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
@@ -22,13 +27,58 @@ import type {
 
 /** Provenance + vintage string surfaced on every result and in user-facing copy. */
 export const EJSCREEN_DATA_SOURCE =
-  'EJScreen v2.2 (2022 data) via the community-maintained EJAM API (api.ejanalysis.com, Public Environmental Data Partners), which rehosts EJScreen after EPA discontinued public access in 2025.';
+  "EJScreen indicators from EJAM's ACS 2018–2022 release (EJScreen 2.3 method), served by the community-maintained EJAM API (api.ejanalysis.com, Public Environmental Data Partners), which rehosts EJScreen after EPA discontinued public access in 2025.";
+
+/** The largest buffer radius, in miles, the EJAM API accepts. */
+export const EJAM_MAX_BUFFER_MILES = 15;
 
 /**
  * Budget for one EJAM lookup — every attempt and backoff — kept under the 60 s default request
  * timeout of MCP SDK clients with room for transport.
  */
 const REQUEST_DEADLINE_MS = 55_000;
+
+/**
+ * EJAM's Island Area bounding boxes (`islandareas`, EJAM `data-raw/datacreate_islandareas.R`):
+ * Guam, the Northern Mariana Islands, the U.S. Virgin Islands, and American Samoa.
+ */
+const ISLAND_AREA_BOXES: ReadonlyArray<{
+  south: number;
+  north: number;
+  west: number;
+  east: number;
+}> = [
+  { south: 12.951558, north: 13.7783567, west: 144.21516, east: 145.05135 },
+  { south: 14.0129859, north: 15.39699, west: 145.067686, east: 145.9186 },
+  { south: 17.611087, north: 18.45958, west: -65.0974, east: -64.52 },
+  { south: -15.811126, north: -9.74635292, west: -173.4898, east: -168 },
+];
+
+/**
+ * Whether EJAM accepts the point, by its own check (`latlon_is.valid()`, EJAM
+ * `R/latlon_is.valid.R`): inside its rough box around the states, DC, and Puerto Rico
+ * (latitude 17.5–71.5, longitude outside −64…172), or inside an Island Area box. A single-site
+ * lookup outside both fails at EJAM with an R error, so the service answers it without one.
+ */
+function withinEjamBounds(latitude: number, longitude: number): boolean {
+  const inCoreBox = latitude >= 17.5 && latitude <= 71.5 && (longitude <= -64 || longitude >= 172);
+  return (
+    inCoreBox ||
+    ISLAND_AREA_BOXES.some(
+      (box) =>
+        latitude > box.south &&
+        latitude < box.north &&
+        longitude > box.west &&
+        longitude < box.east,
+    )
+  );
+}
+
+const OUT_OF_BOUNDS_NOTE =
+  'The point is outside the bounds EJScreen accepts, which enclose the 50 states, DC, Puerto Rico, and the U.S. Island Areas, so no EJScreen lookup was made. If the point should be in the US, check its latitude and longitude.';
+
+const NOT_COVERED_EXAMPLES =
+  'such as open water or a place outside the 50 states, DC, and Puerto Rico';
 
 /** The 13 EJScreen environmental indicators, in report order, with display units. */
 const ENV_INDICATORS: ReadonlyArray<{ code: string; label: string; unit: string }> = [
@@ -150,22 +200,54 @@ function buildDemographic(row: RawEjamRow): EjDemographicIndicator[] {
   return out;
 }
 
-/** Build one composite index (Demographic Index / Supplemental) from its column family. */
+/**
+ * Build one composite index (Demographic Index / Supplemental) from its column family. The
+ * national average sits beside it; `state.avg.<code>` averages the state-normalized index
+ * (`<code>.State`), not this one, so it is never read.
+ */
 function buildIndex(row: RawEjamRow, code: string): EjIndexValue | undefined {
   const value = num(row, code);
   if (value === undefined) return;
   const index: EjIndexValue = { value };
+  const usAverage = num(row, `avg.${code}`);
   const usPercentile = num(row, `pctile.${code}`);
   const statePercentile = num(row, `state.pctile.${code}`);
+  if (usAverage !== undefined) index.usAverage = usAverage;
   if (usPercentile !== undefined) index.usPercentile = usPercentile;
   if (statePercentile !== undefined) index.statePercentile = statePercentile;
   return index;
 }
 
 /**
- * Normalize a raw EJAM row into the domain result. When the upstream flags the
- * point out of coverage (`valid: false`), indicators are omitted and the
- * `invalid_msg` is surfaced as a coverage note — zeros are never fabricated.
+ * Why EJAM returned no indicators for the buffer, from the shape it answered with. A larger
+ * distance is suggested only while one is still available.
+ */
+function noDataNote(
+  row: RawEjamRow,
+  found: { blocks: boolean; population: number | undefined },
+  bufferMiles: number,
+): string {
+  const canGrow = bufferMiles < EJAM_MAX_BUFFER_MILES;
+  if (!found.blocks) {
+    return canGrow
+      ? `EJScreen found no Census block within the buffer. Either none lies this close to the point, and a larger distance (up to ${EJAM_MAX_BUFFER_MILES} miles) may reach one, or the point is somewhere EJScreen does not cover, ${NOT_COVERED_EXAMPLES}.`
+      : `EJScreen found no Census block within the buffer, which is already at the ${EJAM_MAX_BUFFER_MILES}-mile maximum. Either none lies within ${EJAM_MAX_BUFFER_MILES} miles of the point, or the point is somewhere EJScreen does not cover, ${NOT_COVERED_EXAMPLES}.`;
+  }
+  if (found.population === 0) {
+    const note =
+      'EJScreen found Census blocks within the buffer but no residents, so it has no population-weighted indicators to report.';
+    return canGrow
+      ? `${note} A larger distance (up to ${EJAM_MAX_BUFFER_MILES} miles) may reach populated blocks.`
+      : note;
+  }
+  const reason = str(row, 'invalid_msg');
+  return `EJScreen reported no indicators for this buffer${reason ? ` (EJAM: "${reason}")` : ''}.`;
+}
+
+/**
+ * Normalize a raw EJAM row into the domain result. A row without indicators — EJAM's `{}`
+ * (no Census block in the buffer) or a `valid: false` row (blocks but no residents) — keeps
+ * whatever location context it carries and gets a coverage note; zeros are never fabricated.
  */
 export function normalizeEjscreen(
   row: RawEjamRow,
@@ -176,16 +258,11 @@ export function normalizeEjscreen(
   const population = num(row, 'pop');
   const blockGroupCount = num(row, 'bgcount_near_site');
 
-  // A covered US point returns identity/context columns (block groups, population, state).
-  // Out-of-coverage points return either an explicit valid:false (+ invalid_msg) or an
-  // empty/dataless object — treat both as no coverage rather than reporting valid-but-empty.
+  // A buffer holding Census blocks returns identity/context columns (block groups, population,
+  // state), even when EJAM marks it invalid; `{}` means EJAM found no block at all.
   const hasContext =
     blockGroupCount !== undefined || population !== undefined || state !== undefined;
   const valid = row.valid !== false && hasContext;
-  const note = valid
-    ? undefined
-    : (str(row, 'invalid_msg') ??
-      'EJScreen returned no data for this location — it is likely outside US coverage (EJScreen covers US locations only).');
 
   const location: EjscreenResult['location'] = {
     latitude: params.latitude,
@@ -210,7 +287,12 @@ export function normalizeEjscreen(
     ...(demographicIndex && { demographicIndex }),
     ...(supplementalDemographicIndex && { supplementalDemographicIndex }),
     ...(reportUrl && { reportUrl }),
-    coverage: { valid, ...(note && { note }) },
+    coverage: valid
+      ? { valid: true }
+      : {
+          valid: false,
+          note: noDataNote(row, { blocks: hasContext, population }, params.bufferMiles),
+        },
     dataSource: EJSCREEN_DATA_SOURCE,
   };
 }
@@ -222,11 +304,27 @@ export class EjscreenService {
     this.baseUrl = getServerConfig().ejscreenBaseUrl;
   }
 
-  /** Fetch and normalize EJScreen indicators for a point + buffer (miles). */
+  /**
+   * Fetch and normalize EJScreen indicators for a point + buffer (miles). A point outside
+   * EJAM's bounds gets a coverage result without a request.
+   */
   async getIndicators(
     params: { latitude: number; longitude: number; bufferMiles: number },
     ctx: Context,
   ): Promise<EjscreenResult> {
+    if (!withinEjamBounds(params.latitude, params.longitude)) {
+      return {
+        location: {
+          latitude: params.latitude,
+          longitude: params.longitude,
+          bufferMiles: params.bufferMiles,
+        },
+        environmental: [],
+        demographic: [],
+        coverage: { valid: false, note: OUT_OF_BOUNDS_NOTE },
+        dataSource: EJSCREEN_DATA_SOURCE,
+      };
+    }
     const row = await this.fetchData(params, ctx);
     return normalizeEjscreen(row, params);
   }
@@ -250,13 +348,21 @@ export class EjscreenService {
           signal,
         });
         if (!response.ok) {
-          // Bad input (e.g. invalid coordinates) returns HTTP 400 with {"error":[...]}. This is
-          // deterministic — surface it as a validation failure rather than retrying.
+          /*
+           * EJAM returns every R error inside its analysis as HTTP 400 `{"error":[…]}`. Only
+           * points inside its bounds are sent, so a 400 here is EJAM failing on one it accepts:
+           * deterministic, not retried. Its R message goes in `data` for diagnosis, never into
+           * caller text.
+           */
           if (response.status === 400) {
-            const text = await response.text();
+            const upstreamMessage = parseApiError(await response.text());
             throw validationError(
-              `EJAM API rejected the request: ${parseApiError(text) ?? 'HTTP 400'}`,
-              { reason: 'upstream_rejected', status: 400 },
+              'EJAM rejected a lookup for a point inside the bounds it accepts (HTTP 400).',
+              {
+                reason: 'upstream_rejected',
+                status: 400,
+                ...(upstreamMessage !== undefined && { upstreamMessage }),
+              },
             );
           }
           throw await httpErrorFromResponse(response, { service: 'EJAM' });
@@ -268,7 +374,15 @@ export class EjscreenService {
           );
         }
 
-        const parsed = JSON.parse(text) as unknown;
+        // A fully read body that is not JSON will not parse on a retry: fail it once.
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(text);
+        } catch (cause) {
+          throw serializationError('EJAM API returned a response that is not JSON.', undefined, {
+            cause,
+          });
+        }
         const first = Array.isArray(parsed) ? parsed[0] : parsed;
         if (first === undefined || first === null || typeof first !== 'object') {
           throw serviceUnavailable('EJAM API returned an empty response.');

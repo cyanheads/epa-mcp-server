@@ -6,15 +6,19 @@
 import { formatLbs } from '@/mcp-server/tools/format-lbs.js';
 
 interface TriReleaseQuantities {
+  oneTimeReleaseInLbs?: number | undefined;
   releasesToAirInLbs?: number | undefined;
   releasesToLandInLbs?: number | undefined;
   releasesToUndergroundInjectionInLbs?: number | undefined;
   releasesToWaterInLbs?: number | undefined;
   reportedUnit?: 'grams' | undefined;
-  totalReleasesInLbs?: number | undefined;
+  totalOnSiteReleasesInLbs?: number | undefined;
 }
 
-/** Markdown lines for a TRI record's reported unit and per-medium and one-time quantities; absent fields are skipped. */
+/**
+ * Markdown lines for a TRI record's reported unit, per-medium quantities, their on-site total, and
+ * the one-time quantity; absent fields are skipped.
+ */
 export function formatTriReleaseLines(r: TriReleaseQuantities): string[] {
   const lines: string[] = [];
   if (r.reportedUnit)
@@ -29,7 +33,9 @@ export function formatTriReleaseLines(r: TriReleaseQuantities): string[] {
     lines.push(`**Land Releases:** ${formatLbs(r.releasesToLandInLbs)}`);
   if (r.releasesToUndergroundInjectionInLbs !== undefined)
     lines.push(`**Underground Injection:** ${formatLbs(r.releasesToUndergroundInjectionInLbs)}`);
-  if (r.totalReleasesInLbs !== undefined)
-    lines.push(`**One-Time / Non-Routine Release:** ${formatLbs(r.totalReleasesInLbs)}`);
+  if (r.totalOnSiteReleasesInLbs !== undefined)
+    lines.push(`**Total On-Site Releases:** ${formatLbs(r.totalOnSiteReleasesInLbs)}`);
+  if (r.oneTimeReleaseInLbs !== undefined)
+    lines.push(`**One-Time Release:** ${formatLbs(r.oneTimeReleaseInLbs)}`);
   return lines;
 }

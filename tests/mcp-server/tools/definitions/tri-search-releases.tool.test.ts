@@ -6,13 +6,11 @@
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
-import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  bareCountyName,
-  triSearchReleasesTool,
-} from '@/mcp-server/tools/definitions/tri-search-releases.tool.js';
+import { triSearchReleasesTool } from '@/mcp-server/tools/definitions/tri-search-releases.tool.js';
 import { DmapService } from '@/services/dmap/dmap-service.js';
+import { expectInvalidState, expectValidationRejection, textOf } from '../../../helpers.js';
 
 const mockSearchTriReleases = vi.fn();
 
@@ -35,7 +33,7 @@ const waRelease = {
   facilityName: 'TEST FACILITY',
   chemicalName: 'BENZENE',
   reportingYear: 2022,
-  totalReleasesInLbs: 580,
+  oneTimeReleaseInLbs: 580,
 };
 
 describe('triSearchReleasesTool', () => {
@@ -44,7 +42,7 @@ describe('triSearchReleasesTool', () => {
   });
 
   it('returns releases for valid state', async () => {
-    mockSearchTriReleases.mockResolvedValue([waRelease]);
+    mockSearchTriReleases.mockResolvedValue({ items: [waRelease] });
     const ctx = createMockContext({ errors: triSearchReleasesTool.errors });
     const input = triSearchReleasesTool.input.parse({ state: 'WA' });
     const result = await triSearchReleasesTool.handler(input, ctx);
@@ -52,18 +50,46 @@ describe('triSearchReleasesTool', () => {
   });
 
   it('uppercases state before calling service', async () => {
-    mockSearchTriReleases.mockResolvedValue([waRelease]);
+    mockSearchTriReleases.mockResolvedValue({ items: [waRelease] });
     const ctx = createMockContext({ errors: triSearchReleasesTool.errors });
     const input = triSearchReleasesTool.input.parse({ state: 'wa' });
     await triSearchReleasesTool.handler(input, ctx);
     expect(mockSearchTriReleases).toHaveBeenCalledWith(
-      { state: 'WA', limit: 50, includeReleaseBreakdown: false },
+      { state: 'WA', offset: 0, limit: 50, includeReleaseBreakdown: false },
       expect.anything(),
     );
   });
 
+  it('accepts a padded lowercase state and searches its code', async () => {
+    mockSearchTriReleases.mockResolvedValue({ items: [waRelease] });
+    const call = await runToolContract(triSearchReleasesTool, { state: ' wa ' });
+    expect(call.isError).toBeFalsy();
+    expect(mockSearchTriReleases.mock.calls[0]![0]).toMatchObject({ state: 'WA' });
+    expect(call.structuredContent).toMatchObject({ state: 'WA' });
+    const text = textOf(call.content);
+    expect(text).toContain('## TRI Releases — WA');
+  });
+
+  it.each(['Washington', 'W'])(
+    'rejects state %j at the schema, before any request',
+    async (state) => {
+      const call = await runToolContract(triSearchReleasesTool, { state });
+      expect(call.structuredContent).toMatchObject({
+        error: { code: JsonRpcErrorCode.InvalidParams },
+      });
+      const text = textOf(call.content);
+      expect(text).toContain('2-letter USPS code');
+      expect(mockSearchTriReleases).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects an unknown state code as invalid_state with its recovery, before any request', async () => {
+    expectInvalidState(await runToolContract(triSearchReleasesTool, { state: 'zz' }));
+    expect(mockSearchTriReleases).not.toHaveBeenCalled();
+  });
+
   it('passes county and year filters to service', async () => {
-    mockSearchTriReleases.mockResolvedValue([waRelease]);
+    mockSearchTriReleases.mockResolvedValue({ items: [waRelease] });
     const ctx = createMockContext({ errors: triSearchReleasesTool.errors });
     const input = triSearchReleasesTool.input.parse({
       state: 'WA',
@@ -72,7 +98,14 @@ describe('triSearchReleasesTool', () => {
     });
     await triSearchReleasesTool.handler(input, ctx);
     expect(mockSearchTriReleases).toHaveBeenCalledWith(
-      { state: 'WA', county: 'KING', year: 2022, limit: 50, includeReleaseBreakdown: false },
+      {
+        state: 'WA',
+        county: 'KING',
+        year: 2022,
+        offset: 0,
+        limit: 50,
+        includeReleaseBreakdown: false,
+      },
       expect.anything(),
     );
   });
@@ -86,7 +119,7 @@ describe('triSearchReleasesTool', () => {
     ['Fairbanks North Star Borough', 'FAIRBANKS NORTH STAR'],
     ['Grays Harbor', 'GRAYS HARBOR'],
   ])('normalizes county %j to the bare uppercase name %j', async (county, expected) => {
-    mockSearchTriReleases.mockResolvedValue([waRelease]);
+    mockSearchTriReleases.mockResolvedValue({ items: [waRelease] });
     const ctx = createMockContext({ errors: triSearchReleasesTool.errors });
     const input = triSearchReleasesTool.input.parse({ state: 'WA', county });
     await triSearchReleasesTool.handler(input, ctx);
@@ -97,15 +130,15 @@ describe('triSearchReleasesTool', () => {
   });
 
   it('omits the county filter when county is blank', async () => {
-    mockSearchTriReleases.mockResolvedValue([waRelease]);
+    mockSearchTriReleases.mockResolvedValue({ items: [waRelease] });
     const ctx = createMockContext({ errors: triSearchReleasesTool.errors });
     const input = triSearchReleasesTool.input.parse({ state: 'WA', county: '   ' });
     await triSearchReleasesTool.handler(input, ctx);
     expect(mockSearchTriReleases.mock.calls[0]![0]).not.toHaveProperty('county');
   });
 
-  it('names the normalized county in the no-results message', async () => {
-    mockSearchTriReleases.mockResolvedValue([]);
+  it('names the normalized county in the echo, not in the no-results message', async () => {
+    mockSearchTriReleases.mockResolvedValue({ items: [] });
     const ctx = createMockContext({ errors: triSearchReleasesTool.errors });
     const input = triSearchReleasesTool.input.parse({
       state: 'WA',
@@ -114,12 +147,13 @@ describe('triSearchReleasesTool', () => {
     });
     const result = await triSearchReleasesTool.handler(input, ctx);
     expect(result.releases).toEqual([]);
-    expect(result.message).toContain('No TRI releases found in WA in NOWHERE county for year 2023');
+    expect(getEnrichment(ctx).effectiveQuery).toContain('county contains NOWHERE;');
+    expect(result.message).toMatch(/^No TRI releases found\. /);
     expect(result.message).not.toMatch(/county county/i);
   });
 
   it('passes chemical_name filter trimmed', async () => {
-    mockSearchTriReleases.mockResolvedValue([waRelease]);
+    mockSearchTriReleases.mockResolvedValue({ items: [waRelease] });
     const ctx = createMockContext({ errors: triSearchReleasesTool.errors });
     const input = triSearchReleasesTool.input.parse({ state: 'WA', chemical_name: '  BENZENE  ' });
     await triSearchReleasesTool.handler(input, ctx);
@@ -130,12 +164,13 @@ describe('triSearchReleasesTool', () => {
   });
 
   it('returns message when no releases found', async () => {
-    mockSearchTriReleases.mockResolvedValue([]);
+    mockSearchTriReleases.mockResolvedValue({ items: [] });
     const ctx = createMockContext({ errors: triSearchReleasesTool.errors });
     const input = triSearchReleasesTool.input.parse({ state: 'WY', year: 2010 });
     const result = await triSearchReleasesTool.handler(input, ctx);
     expect(result.releases).toEqual([]);
-    expect(result.message).toMatch(/^No TRI releases found in WY for year 2010\. TRI data lags/);
+    expect(result.message).toMatch(/^No TRI releases found\. TRI data lags/);
+    expect(result.message).toContain('try year 2009');
   });
 
   it('formats output with chemical name, facility ID, and release amounts', () => {
@@ -149,7 +184,7 @@ describe('triSearchReleasesTool', () => {
           '**Records:** 1',
           '',
           '### BENZENE — TEST FACILITY (WA0001234) (2022)',
-          '**One-Time / Non-Routine Release:** 580 lbs',
+          '**One-Time Release:** 580 lbs',
         ].join('\n'),
       },
     ]);
@@ -183,7 +218,7 @@ describe('triSearchReleasesTool', () => {
       facilityName: 'FULL BREAKDOWN PLANT',
       chemicalName: 'Toluene',
       reportingYear: 2022,
-      totalReleasesInLbs: 0,
+      oneTimeReleaseInLbs: 0,
       releasesToAirInLbs: 15000,
       releasesToWaterInLbs: 200,
       releasesToLandInLbs: 3400,
@@ -199,8 +234,8 @@ describe('triSearchReleasesTool', () => {
 
     it('describes the one-time quantity and the per-medium fields', () => {
       const item = triSearchReleasesTool.output.shape.releases.element.shape;
-      expect(item.totalReleasesInLbs.description).toContain('one-time / non-routine');
-      expect(item.totalReleasesInLbs.description).toContain('NOT the sum');
+      expect(item.oneTimeReleaseInLbs.description).toContain('one-time release quantity');
+      expect(item.oneTimeReleaseInLbs.description).toContain('never added to them');
       expect(item.releasesToAirInLbs.description).toContain('air');
       expect(item.releasesToUndergroundInjectionInLbs.description).toContain('injection');
       expect(triSearchReleasesTool.description).toContain(
@@ -232,7 +267,7 @@ describe('triSearchReleasesTool', () => {
       [{ include_release_breakdown: false }, false],
       [{ include_release_breakdown: true }, true],
     ])('passes %j to the service as includeReleaseBreakdown=%s', async (flag, expected) => {
-      mockSearchTriReleases.mockResolvedValue([waRelease]);
+      mockSearchTriReleases.mockResolvedValue({ items: [waRelease] });
       const ctx = createMockContext({ errors: triSearchReleasesTool.errors });
       const input = triSearchReleasesTool.input.parse({ state: 'WA', ...flag });
       await triSearchReleasesTool.handler(input, ctx);
@@ -242,7 +277,7 @@ describe('triSearchReleasesTool', () => {
     });
 
     it('carries the media on both structuredContent and content', async () => {
-      mockSearchTriReleases.mockResolvedValue([fullBreakdown, airOnly]);
+      mockSearchTriReleases.mockResolvedValue({ items: [fullBreakdown, airOnly], nextOffset: 2 });
       const call = await runToolContract(triSearchReleasesTool, {
         state: 'WA',
         year: 2022,
@@ -258,12 +293,12 @@ describe('triSearchReleasesTool', () => {
       };
       expect(structured.releases).toEqual([fullBreakdown, airOnly]);
       expect(structured).toMatchObject({ truncated: true, shown: 2, cap: 2 });
-      const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+      const text = textOf(call.content);
       expect(text).toContain('**Air Releases:** 15,000 lbs');
       expect(text).toContain('**Water Releases:** 200 lbs');
       expect(text).toContain('**Land Releases:** 3,400 lbs');
       expect(text).toContain('**Underground Injection:** 90,000 lbs');
-      expect(text).toContain('**One-Time / Non-Routine Release:** 0 lbs');
+      expect(text).toContain('**One-Time Release:** 0 lbs');
       expect(text).toContain('**Air Releases:** 4 lbs');
     });
 
@@ -275,7 +310,7 @@ describe('triSearchReleasesTool', () => {
         })[0] as { text: string }
       ).text;
       expect(text).not.toMatch(/Air Releases|Water Releases|Land Releases|Underground Injection/);
-      expect(text).not.toContain('One-Time / Non-Routine Release');
+      expect(text).not.toContain('One-Time Release');
     });
 
     it('renders sub-0.001 quantities and medium sums at full precision', () => {
@@ -286,7 +321,7 @@ describe('triSearchReleasesTool', () => {
               facilityId: '96020CLLNS500MA',
               chemicalName: 'Dioxin and dioxin-like compounds',
               reportingYear: 2022,
-              totalReleasesInLbs: 0.00062,
+              oneTimeReleaseInLbs: 0.00062,
               // AIR STACK 0.000894 + AIR FUG 0.000014, as the breakdown rollup sums them.
               releasesToAirInLbs: 0.000894 + 0.000014,
               releasesToWaterInLbs: 0.0000001,
@@ -297,7 +332,7 @@ describe('triSearchReleasesTool', () => {
           state: 'WA',
         })[0] as { text: string }
       ).text;
-      expect(text).toContain('**One-Time / Non-Routine Release:** 0.00062 lbs');
+      expect(text).toContain('**One-Time Release:** 0.00062 lbs');
       expect(text).toContain('**Air Releases:** 0.000908 lbs');
       expect(text).toContain('**Water Releases:** 0.0000001 lbs');
       expect(text).toContain('**Land Releases:** 0.0005809 lbs');
@@ -311,18 +346,18 @@ describe('triSearchReleasesTool', () => {
         chemicalName: 'Dioxin and dioxin-like compounds',
         reportingYear: 2022,
         reportedUnit: 'grams' as const,
-        totalReleasesInLbs: 0.0044092452437,
+        oneTimeReleaseInLbs: 0.0044092452437,
       };
-      mockSearchTriReleases.mockResolvedValue([dioxin, waRelease]);
+      mockSearchTriReleases.mockResolvedValue({ items: [dioxin, waRelease] });
       const call = await runToolContract(triSearchReleasesTool, { state: 'CA', year: 2022 });
       expect(call.isError).toBeFalsy();
       const structured = call.structuredContent as { releases: Array<Record<string, unknown>> };
       expect(structured.releases).toEqual([dioxin, waRelease]);
-      const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+      const text = textOf(call.content);
       expect(text).toContain(
         '**Reported Unit:** grams — any quantities shown are converted to pounds (1 lb = 453.59237 g)',
       );
-      expect(text).toContain('**One-Time / Non-Routine Release:** 0.0044092452437 lbs');
+      expect(text).toContain('**One-Time Release:** 0.0044092452437 lbs');
       expect(text.match(/Reported Unit/g)).toHaveLength(1);
       const item = triSearchReleasesTool.output.shape.releases.element.shape;
       expect(item.reportedUnit.description).toMatch(/dioxin/i);
@@ -363,7 +398,7 @@ describe('triSearchReleasesTool', () => {
 
   describe('result envelope below the limit', () => {
     it('returns records without truncation fields when fewer than limit come back', async () => {
-      mockSearchTriReleases.mockResolvedValue([waRelease]);
+      mockSearchTriReleases.mockResolvedValue({ items: [waRelease] });
       const call = await runToolContract(triSearchReleasesTool, { state: 'WA', limit: 5 });
       expect(call.isError).toBeFalsy();
       expect(mockSearchTriReleases.mock.calls[0]![0]).toMatchObject({
@@ -373,24 +408,30 @@ describe('triSearchReleasesTool', () => {
       expect(structured.releases).toEqual([waRelease]);
       expect(structured).not.toHaveProperty('truncated');
       expect(structured).not.toHaveProperty('shown');
-      const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+      const text = textOf(call.content);
       expect(text).toContain('**Records:** 1');
       expect(text).not.toMatch(/truncated/i);
     });
 
     it('returns the no-results message, not an error, for a county with no facilities', async () => {
-      mockSearchTriReleases.mockResolvedValue([]);
+      mockSearchTriReleases.mockResolvedValue({ items: [] });
       const call = await runToolContract(triSearchReleasesTool, {
         state: 'WA',
         county: 'Nowhere County',
         year: 2022,
       });
       expect(call.isError).toBeFalsy();
-      const structured = call.structuredContent as { releases: unknown[]; message?: string };
+      const structured = call.structuredContent as {
+        releases: unknown[];
+        message?: string;
+        effectiveQuery?: string;
+      };
       expect(structured.releases).toEqual([]);
-      expect(structured.message).toContain('No TRI releases found in WA in NOWHERE county');
-      const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
-      expect(text).toContain('No TRI releases found in WA in NOWHERE county');
+      expect(structured.message).toContain('Remove county to search the whole state.');
+      expect(structured.effectiveQuery).toBe('state=WA; county contains NOWHERE; year=2022');
+      const text = textOf(call.content);
+      expect(text).toContain('Remove county to search the whole state.');
+      expect(text).toContain('Query: `state=WA; county contains NOWHERE; year=2022`');
     });
   });
 
@@ -411,30 +452,198 @@ describe('triSearchReleasesTool', () => {
       expect(parse({ county: 'x'.repeat(4095) })).toBe(false);
     });
 
-    it('strips a County suffix in time linear in the name length', () => {
-      // The suffix pattern used to backtrack over each run of inner whitespace: quadratic.
-      const name = (spaces: number) => `x${' '.repeat(spaces)}y`;
-      const cpuMicrosPerCall = (input: string, calls: number) => {
-        const start = process.threadCpuUsage();
-        for (let i = 0; i < calls; i++) bareCountyName(input);
-        const used = process.threadCpuUsage(start);
-        return (used.user + used.system) / calls;
-      };
-      // Warm both sizes before measuring.
-      cpuMicrosPerCall(name(60), 2_000);
-      cpuMicrosPerCall(name(4000), 20);
-      const short = Math.min(...[0, 1, 2].map(() => cpuMicrosPerCall(name(60), 20_000)));
-      const long = Math.min(...[0, 1, 2].map(() => cpuMicrosPerCall(name(4000), 300)));
-      // 4000 / 60 ≈ 67× the input: linear work stays under 256×; quadratic work is ~4,400×.
-      expect(long / short).toBeLessThan(256);
-      expect(bareCountyName(`  King \t County `)).toBe('KING');
-    });
-
     it('says punctuation in the text filters is matched as written', () => {
       expect(triSearchReleasesTool.input.shape.chemical_name.description).toContain(
         'matched as written',
       );
       expect(triSearchReleasesTool.input.shape.county.description).toContain('matched as written');
+    });
+  });
+
+  describe('paging', () => {
+    it('passes offset to the service and continues with nextOffset on both surfaces', async () => {
+      mockSearchTriReleases.mockResolvedValue({ items: [waRelease, waRelease], nextOffset: 7 });
+
+      const call = await runToolContract(triSearchReleasesTool, {
+        state: 'WA',
+        offset: 5,
+        limit: 2,
+      });
+
+      expect(call.isError).toBeFalsy();
+      expect(mockSearchTriReleases.mock.calls[0]![0]).toMatchObject({ offset: 5, limit: 2 });
+      const structured = call.structuredContent as Record<string, unknown>;
+      expect(structured).toMatchObject({
+        nextOffset: 7,
+        truncated: true,
+        shown: 2,
+        cap: 2,
+        guidance: 'More records follow; call again with offset 7 to continue.',
+      });
+      const text = textOf(call.content);
+      expect(text).toContain('**Next offset:** 7');
+      expect(text).toContain('More records follow; call again with offset 7 to continue.');
+      expect(text.toLowerCase()).not.toContain('raise the cap');
+    });
+
+    it('returns the last page without nextOffset or truncation fields', async () => {
+      mockSearchTriReleases.mockResolvedValue({ items: [waRelease] });
+
+      const call = await runToolContract(triSearchReleasesTool, { state: 'WA', offset: 50 });
+
+      expect(call.isError).toBeFalsy();
+      const structured = call.structuredContent as Record<string, unknown>;
+      expect(structured.releases).toEqual([waRelease]);
+      for (const key of ['nextOffset', 'truncated', 'shown', 'cap', 'guidance', 'limitNotice'])
+        expect(structured).not.toHaveProperty(key);
+      expect(textOf(call.content)).not.toContain('Next offset');
+    });
+
+    it('clamps a limit above 200 to 200 with a notice instead of rejecting it', async () => {
+      mockSearchTriReleases.mockResolvedValue({ items: [waRelease] });
+
+      const call = await runToolContract(triSearchReleasesTool, { state: 'WA', limit: 5000 });
+
+      expect(call.isError).toBeFalsy();
+      expect(mockSearchTriReleases.mock.calls[0]![0]).toMatchObject({ limit: 200 });
+      const notice = (call.structuredContent as { limitNotice?: string }).limitNotice;
+      expect(notice).toContain('limit 5000');
+      expect(textOf(call.content)).toContain(`> ${notice}`);
+      expect(triSearchReleasesTool.input.safeParse({ state: 'WA', limit: 5001 }).success).toBe(
+        false,
+      );
+    });
+
+    it('says an empty page past the end is past the end, without no-match advice', async () => {
+      mockSearchTriReleases.mockResolvedValue({ items: [] });
+
+      const call = await runToolContract(triSearchReleasesTool, {
+        state: 'WA',
+        year: 2022,
+        offset: 400,
+      });
+
+      const structured = call.structuredContent as { releases: unknown[]; message: string };
+      expect(structured.releases).toEqual([]);
+      expect(structured.message).toBe(
+        'No TRI releases found at offset 400: the search has no records past it. Lower offset, or start again at offset 0.',
+      );
+      expect(structured).not.toHaveProperty('nextOffset');
+      expect(textOf(call.content)).toContain(structured.message);
+    });
+  });
+
+  describe('effective query', () => {
+    it('echoes the normalized state, the county match, and the year, and returns the normalized state', async () => {
+      mockSearchTriReleases.mockResolvedValue({ items: [waRelease] });
+
+      const call = await runToolContract(triSearchReleasesTool, {
+        state: 'wa',
+        county: 'King County',
+        year: 2022,
+      });
+
+      const structured = call.structuredContent as { state: string; effectiveQuery: string };
+      expect(structured.state).toBe('WA');
+      expect(structured.effectiveQuery).toBe('state=WA; county contains KING; year=2022');
+      const text = textOf(call.content);
+      expect(text).toContain('Query: `state=WA; county contains KING; year=2022`');
+    });
+
+    it('echoes an omitted year as all years newest first and the chemical match', async () => {
+      mockSearchTriReleases.mockResolvedValue({ items: [] });
+      const ctx = createMockContext({ errors: triSearchReleasesTool.errors });
+
+      await triSearchReleasesTool.handler(
+        triSearchReleasesTool.input.parse({
+          state: 'TX',
+          county: '  ',
+          chemical_name: " Michler's ketone ",
+          include_release_breakdown: true,
+        }),
+        ctx,
+      );
+
+      expect(getEnrichment(ctx).effectiveQuery).toBe(
+        "state=TX; year=all, newest first; chemical_name contains Michler's ketone",
+      );
+    });
+
+    it('stops restating filters in the empty-result message', async () => {
+      mockSearchTriReleases.mockResolvedValue({ items: [] });
+      const ctx = createMockContext({ errors: triSearchReleasesTool.errors });
+
+      const result = await triSearchReleasesTool.handler(
+        triSearchReleasesTool.input.parse({
+          state: 'WA',
+          county: 'Nowhere County',
+          year: 2023,
+          chemical_name: 'BENZENE',
+        }),
+        ctx,
+      );
+
+      expect(getEnrichment(ctx).effectiveQuery).toBe(
+        'state=WA; county contains NOWHERE; year=2023; chemical_name contains BENZENE',
+      );
+      expect(result.message).toMatch(/^No TRI releases found\. TRI data lags ~18 months\. /);
+      expect(result.message).toContain('Remove county to search the whole state.');
+      expect(result.message).not.toMatch(/NOWHERE|2023|BENZENE/);
+    });
+  });
+
+  describe('facility identifiers and release totals', () => {
+    const identified = {
+      facilityId: '9867WSNRWD1981S',
+      facilityName: 'WOODLAND USNR LLC',
+      countyName: 'COWLITZ',
+      registryId: '110070322017',
+      parentCompany: 'WOOD *TECHNOLOGIES* [INTL](https://example.com)',
+      chemicalName: 'Chromium',
+      reportingYear: 2022,
+      oneTimeReleaseInLbs: 3,
+      releasesToAirInLbs: 4,
+      releasesToLandInLbs: 10,
+      totalOnSiteReleasesInLbs: 14,
+    };
+
+    it('carries the Registry ID, parent company, and both totals on both surfaces', async () => {
+      mockSearchTriReleases.mockResolvedValue({ items: [identified] });
+
+      const call = await runToolContract(triSearchReleasesTool, {
+        state: 'WA',
+        include_release_breakdown: true,
+      });
+
+      expect((call.structuredContent as { releases: unknown[] }).releases).toEqual([identified]);
+      const text = textOf(call.content);
+      expect(text).toContain('**Registry ID:** 110070322017');
+      expect(text).toContain(
+        '**Parent Company:** WOOD \\*TECHNOLOGIES\\* \\[INTL\\](https://example.com)',
+      );
+      expect(text).toContain('**Total On-Site Releases:** 14 lbs');
+      expect(text).toContain('**One-Time Release:** 3 lbs');
+      expect(text).not.toMatch(/routine/i);
+    });
+
+    it('describes the renamed one-time quantity, the on-site total, and no ranking', () => {
+      const item = triSearchReleasesTool.output.shape.releases.element.shape;
+      expect(item).not.toHaveProperty('totalReleasesInLbs');
+      expect(item.oneTimeReleaseInLbs.description).toContain('8.8');
+      expect(item.oneTimeReleaseInLbs.description).toContain('already counted');
+      expect(item.totalOnSiteReleasesInLbs.description).toContain('midpoint');
+      expect(item.registryId.description).toContain('epa_echo_get_facility');
+      expect(item.parentCompany.description).toContain('NA');
+      const texts = [
+        triSearchReleasesTool.description,
+        triSearchReleasesTool.input.shape.include_release_breakdown.description ?? '',
+        ...Object.values(item).map((field) => field.description ?? ''),
+      ];
+      for (const text of texts) {
+        expect(text).not.toMatch(/routine/i);
+        expect(text).not.toMatch(/top (polluters|emitters)/i);
+        expect(text).not.toContain('NOT the sum');
+      }
     });
   });
 
@@ -493,7 +702,10 @@ describe('triSearchReleasesTool', () => {
 
       expect(call.isError).toBeFalsy();
       expect(urls).toHaveLength(1);
-      expect(urls[0]).toContain('/and/reporting_year/equals/2022/1:2/json');
+      // One row past the limit proves more follow; the sort ends on the unique submission number.
+      expect(urls[0]).toContain(
+        '/and/reporting_year/equals/2022/sort/tri.tri_reporting_form.reporting_year:desc,tri.tri_reporting_form.doc_ctrl_num:asc/1:3/json',
+      );
       const structured = call.structuredContent as {
         releases: Array<Record<string, unknown>>;
         truncated?: boolean;
@@ -506,20 +718,31 @@ describe('triSearchReleasesTool', () => {
           facilityName: 'HOUSTON PLANT 0',
           chemicalName: 'Benzene',
           reportingYear: 2022,
-          totalReleasesInLbs: 0,
+          oneTimeReleaseInLbs: 0,
         },
         {
           facilityId: '77001PLANT',
           facilityName: 'HOUSTON PLANT 1',
           chemicalName: 'Benzene',
           reportingYear: 2022,
-          totalReleasesInLbs: 1,
+          oneTimeReleaseInLbs: 1,
         },
       ]);
-      expect(structured).toMatchObject({ truncated: true, shown: 2, cap: 2 });
-      const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+      expect(structured).toMatchObject({ truncated: true, shown: 2, cap: 2, nextOffset: 2 });
+      const text = textOf(call.content);
       expect(text).toContain('**Records:** 2');
       expect(text).toContain('Benzene — HOUSTON PLANT 1 (77001PLANT) (2022)');
+
+      const last = await runToolContract(triSearchReleasesTool, {
+        state: 'tx',
+        year: 2022,
+        limit: 2,
+        offset: 2,
+      });
+      expect(urls[1]).toMatch(/\/3:5\/json$/);
+      expect((last.structuredContent as { releases: unknown[] }).releases).toHaveLength(1);
+      expect(last.structuredContent).not.toHaveProperty('nextOffset');
+      expect(last.structuredContent).not.toHaveProperty('truncated');
     });
 
     it('returns every record below the limit without truncation fields', async () => {
@@ -531,7 +754,7 @@ describe('triSearchReleasesTool', () => {
       const structured = call.structuredContent as Record<string, unknown>;
       expect(structured.releases).toHaveLength(3);
       expect(structured).not.toHaveProperty('truncated');
-      const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+      const text = textOf(call.content);
       expect(text).toContain('**Records:** 3');
     });
 
@@ -546,12 +769,65 @@ describe('triSearchReleasesTool', () => {
 
       expect(call.isError).toBeFalsy();
       expect(urls).toHaveLength(1);
-      const structured = call.structuredContent as { releases: unknown[]; message?: string };
+      const structured = call.structuredContent as {
+        releases: unknown[];
+        message?: string;
+        effectiveQuery?: string;
+      };
       expect(structured.releases).toEqual([]);
-      expect(structured.message).toContain('No TRI releases found in TX for year 1990');
-      const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
-      expect(text).toContain('No TRI releases found in TX for year 1990');
+      expect(structured.message).toContain('No TRI releases found. TRI data lags');
+      expect(structured.message).toContain('try year 1989');
+      expect(structured.effectiveQuery).toBe('state=TX; year=1990; chemical_name contains Benzene');
+      const text = textOf(call.content);
+      expect(text).toContain('No TRI releases found. TRI data lags');
+      expect(text).toContain('Query: `state=TX; year=1990; chemical_name contains Benzene`');
     });
+
+    const unmatchableHint =
+      'Include a letter or digit in whichever of county or chemical_name has none, or remove that filter.';
+    const tooLongHint =
+      'Shorten county or chemical_name to a distinctive part of the name and retry.';
+
+    it.each([
+      [
+        'a chemical_name with no letter or digit',
+        { chemical_name: "'''" },
+        'unmatchable_filter',
+        unmatchableHint,
+        'has no letter or digit',
+      ],
+      [
+        'a county with no letter or digit',
+        { county: "'''" },
+        'unmatchable_filter',
+        unmatchableHint,
+        'has no letter or digit',
+      ],
+      [
+        'a chemical_name past the request line',
+        { chemical_name: 'a'.repeat(4000) },
+        'filter_too_long',
+        tooLongHint,
+        'too long',
+      ],
+      [
+        'a county past the request line',
+        { county: 'a'.repeat(4000) },
+        'filter_too_long',
+        tooLongHint,
+        'too long',
+      ],
+    ])(
+      'rejects %s with its declared reason and recovery on both surfaces, before any request',
+      async (_, filter, reason, hint, message) => {
+        const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+        const call = await runToolContract(triSearchReleasesTool, { state: 'WA', ...filter });
+
+        expectValidationRejection(call, { reason, hint, message });
+        expect(fetchSpy).not.toHaveBeenCalled();
+      },
+    );
 
     it('surfaces a caller abort mid-request as cancellation, never as an empty result', async () => {
       const controller = new AbortController();
@@ -576,7 +852,7 @@ describe('triSearchReleasesTool', () => {
         error: { code: JsonRpcErrorCode.RequestCancelled },
       });
       expect(call.structuredContent).not.toHaveProperty('releases');
-      const text = call.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+      const text = textOf(call.content);
       expect(text).toContain('Error:');
       expect(text).not.toContain('No TRI releases found');
     });

@@ -23,6 +23,20 @@ export const superfundSiteResource = resource('epa://superfund/{site_id}', {
       recovery: 'Use epa_superfund_search_sites to discover valid SEMS site IDs and retry.',
       thrownBy: 'service',
     },
+    {
+      reason: 'unmatchable_filter',
+      code: JsonRpcErrorCode.ValidationError,
+      when: "site_id holds a character EPA's DMAP service cannot match exactly.",
+      recovery: 'Pass one SEMS site ID exactly as epa_superfund_search_sites returns it.',
+      thrownBy: 'service',
+    },
+    {
+      reason: 'filter_too_long',
+      code: JsonRpcErrorCode.ValidationError,
+      when: "site_id makes a request longer than EPA's DMAP service accepts.",
+      recovery: 'Pass one SEMS site ID exactly as epa_superfund_search_sites returns it.',
+      thrownBy: 'service',
+    },
   ],
   params: z.object({
     site_id: z

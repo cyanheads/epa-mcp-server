@@ -8,6 +8,12 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { formatHeading } from '@/mcp-server/tools/format-heading.js';
+import {
+  normalizeDate,
+  normalizeZip,
+  optionalDateSchema,
+  optionalZipSchema,
+} from '@/mcp-server/tools/input-formats.js';
 import { getAirNowService } from '@/services/airnow/airnow-service.js';
 import type { AirNowLocation, AirQualityArea } from '@/services/airnow/types.js';
 
@@ -45,7 +51,9 @@ export const airnowGetConditionsTool = tool('epa_airnow_get_conditions', {
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
-    zip_code: z.string().optional().describe('5-digit US ZIP code for the location'),
+    zip_code: optionalZipSchema(
+      'US ZIP code for the location: 5 digits, or a ZIP+4 such as 98108-1234, which searches its first five digits',
+    ),
     latitude: z
       .number()
       .min(-90)
@@ -64,12 +72,9 @@ export const airnowGetConditionsTool = tool('epa_airnow_get_conditions', {
       .describe(
         'Data mode: "current" for the latest hourly observations, "forecast" for every forecast day the reporting area has issued',
       ),
-    forecast_date: z
-      .string()
-      .optional()
-      .describe(
-        'Forecast mode only (rejected in current mode): keep just the forecast valid on this date (YYYY-MM-DD). Omit to get every issued forecast day. When no issued day matches, the result is empty and its message lists the issued dates.',
-      ),
+    forecast_date: optionalDateSchema(
+      'Forecast mode only (rejected in current mode): keep just the forecast valid on this date (YYYY-MM-DD). Omit to get every issued forecast day. When no issued day matches, the result is empty and its message lists the issued dates.',
+    ),
   }),
 
   output: z.object({
@@ -215,7 +220,7 @@ export const airnowGetConditionsTool = tool('epa_airnow_get_conditions', {
 
   async handler(input, ctx) {
     // Zip takes precedence over lat/lng; a blank zip (form clients) falls through to lat/lng.
-    const zip = input.zip_code?.trim();
+    const zip = normalizeZip(input.zip_code);
     const location: AirNowLocation | undefined = zip
       ? { kind: 'zip', zipCode: zip }
       : input.latitude !== undefined && input.longitude !== undefined
@@ -224,7 +229,7 @@ export const airnowGetConditionsTool = tool('epa_airnow_get_conditions', {
     if (!location) {
       throw ctx.fail('no_location', 'Provide either zip_code or both latitude and longitude.');
     }
-    const forecastDate = input.forecast_date?.trim() || undefined;
+    const forecastDate = normalizeDate(input.forecast_date);
     if (forecastDate && input.mode === 'current') {
       throw ctx.fail(
         'forecast_date_needs_forecast_mode',

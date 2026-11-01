@@ -1,7 +1,10 @@
 /**
- * @fileoverview ECHO response bodies captured from echodata.epa.gov on 2026-10-16 and trimmed
- * to the sections EchoService reads (get_dfr keeps the first rows of each inspection history
- * statute and two TRIHistory years; every kept value is verbatim).
+ * @fileoverview ECHO response bodies captured from echodata.epa.gov on 2026-10-16 (the SDWIS
+ * get_dfr and sdw_rest_services bodies, the NUCOR facility search, the 110015969941 NAICS
+ * section, and the case search rows and case reports on 2026-11-01) and trimmed to the sections
+ * EchoService reads (get_dfr keeps the first rows of each inspection history statute and two
+ * TRIHistory years; a case report keeps the first rows of the sections it leaves out; every kept
+ * value is verbatim).
  * @module tests/services/echo/echo-fixtures
  */
 
@@ -1095,6 +1098,143 @@ export const DFR_THREE_TRI_IDS_110015969941 = {
       Latitude83: '47.569331',
       Longitude83: '-122.367332',
     },
+    // The whole section: 331110 and 331111 recur across sources.
+    NAICS: {
+      Sources: [
+        {
+          NAICSCodes: [
+            {
+              SourceID: '1000029',
+              EPASystem: 'GHGRP',
+              NAICSCode: '331110',
+              NAICSDesc: 'Iron and Steel Mills and Ferroalloy Manufacturing',
+            },
+          ],
+        },
+        {
+          NAICSCodes: [
+            {
+              SourceID: '6279511',
+              EPASystem: 'EIS',
+              NAICSCode: '2123',
+              NAICSDesc: 'Nonmetallic Mineral Mining and Quarrying',
+            },
+          ],
+        },
+        {
+          NAICSCodes: [
+            {
+              SourceID: '7503711',
+              EPASystem: 'EIS',
+              NAICSCode: '331110',
+              NAICSDesc: 'Iron and Steel Mills and Ferroalloy Manufacturing',
+            },
+          ],
+        },
+        {
+          NAICSCodes: [
+            {
+              SourceID: '98106HCKTT2424S',
+              EPASystem: 'TRI',
+              NAICSCode: '331111',
+              NAICSDesc: 'Iron and Steel Mills',
+            },
+          ],
+        },
+        {
+          NAICSCodes: [
+            {
+              SourceID: '98106SLMNB2424S',
+              EPASystem: 'TRI',
+              NAICSCode: '331110',
+              NAICSDesc: 'Iron and Steel Mills and Ferroalloy Manufacturing',
+            },
+            {
+              SourceID: '98106SLMNB2424S',
+              EPASystem: 'TRI',
+              NAICSCode: '331111',
+              NAICSDesc: 'Iron and Steel Mills',
+            },
+            {
+              SourceID: '98106SLMNB2424S',
+              EPASystem: 'TRI',
+              NAICSCode: '331221',
+              NAICSDesc: 'Rolled Steel Shape Manufacturing',
+            },
+          ],
+        },
+        {
+          NAICSCodes: [
+            {
+              SourceID: '98106STTLS2414S',
+              EPASystem: 'TRI',
+              NAICSCode: '331111',
+              NAICSDesc: 'Iron and Steel Mills',
+            },
+          ],
+        },
+        {
+          NAICSCodes: [
+            {
+              SourceID: 'CEDRI10207719',
+              EPASystem: 'CEDRI',
+              NAICSCode: '331110',
+              NAICSDesc: 'Iron and Steel Mills and Ferroalloy Manufacturing',
+            },
+          ],
+        },
+        {
+          NAICSCodes: [
+            {
+              SourceID: 'WA0000360107',
+              EPASystem: 'RCRAInfo',
+              NAICSCode: '332618',
+              NAICSDesc: 'Other Fabricated Wire Product Manufacturing',
+            },
+          ],
+        },
+        {
+          NAICSCodes: [
+            {
+              SourceID: 'WA0031305',
+              EPASystem: 'ICIS-NPDES',
+              NAICSCode: '331111',
+              NAICSDesc: 'Iron and Steel Mills',
+            },
+          ],
+        },
+        {
+          NAICSCodes: [
+            {
+              SourceID: 'WAD009265851',
+              EPASystem: 'RCRAInfo',
+              NAICSCode: '23721',
+              NAICSDesc: 'Land Subdivision',
+            },
+          ],
+        },
+        {
+          NAICSCodes: [
+            {
+              SourceID: 'WAD988487583',
+              EPASystem: 'RCRAInfo',
+              NAICSCode: '331110',
+              NAICSDesc: 'Iron and Steel Mills and Ferroalloy Manufacturing',
+            },
+          ],
+        },
+        {
+          NAICSCodes: [
+            {
+              SourceID: 'WAPSC0005303300006',
+              EPASystem: 'ICIS-Air',
+              NAICSCode: '331110',
+              NAICSDesc: 'Iron and Steel Mills and Ferroalloy Manufacturing',
+            },
+          ],
+        },
+      ],
+    },
     EnforcementComplianceSummaries: {
       ProgramDates: [
         {
@@ -1690,6 +1830,85 @@ export const FACILITY_SEARCH_SDWA_98108_INLINE = {
 };
 
 /**
+ * `echo_rest_services.get_facility_info?p_st=WA&p_fn=NUCOR&responseset=5&qcolumns=…`, captured
+ * 2026-11-01 — 6 matches, rows left to get_qid. Summary counts and cluster data trimmed.
+ */
+export const FACILITY_SEARCH_NUCOR_WA = {
+  Results: {
+    Message: 'Success',
+    QueryID: '250',
+    QueryRows: '6',
+    QueryParameters: [
+      { QP: 'output', QV: 'JSON' },
+      { QP: 'p_fn', QV: 'NUCOR' },
+      { QP: 'p_st', QV: 'WA' },
+      { QP: 'responseset', QV: '5' },
+      { QP: 'qcolumns', QV: SEARCH_QCOLUMNS },
+    ],
+  },
+};
+
+/**
+ * `echo_rest_services.get_qid?qid=250&pageno=1&qcolumns=…` — page 1 of the search above, cut to
+ * its first and fourth rows: HARRIS REBAR AUBURN, matched through a name ECHO records for it other
+ * than FacName, with null TRIIDs; and NUCOR STEEL SEATTLE INC with three space-separated TRI IDs.
+ */
+export const FACILITY_SEARCH_NUCOR_WA_PAGE = {
+  Results: {
+    Message: 'Working',
+    QueryRows: '6',
+    QueryID: '250',
+    PageNo: '1',
+    Facilities: [
+      {
+        FacName: 'HARRIS REBAR AUBURN',
+        FacStreet: '3512 B ST NW',
+        FacCity: 'AUBURN',
+        FacState: 'WA',
+        FacZip: '98001',
+        RegistryID: '110042146638',
+        FacCounty: 'KING',
+        FacLat: '47.338585',
+        FacLong: '-122.232712',
+        TRIIDs: null,
+        FacComplianceStatus: 'Violation Identified',
+        FacInspectionCount: '1',
+        FacTotalPenalties: '$0',
+        TRIReleasesTransfers: null,
+        FacFIPSCode: '53033',
+        FacDerivedStctyFIPS: '53033',
+        AIRFlag: 'N',
+        NPDESFlag: 'Y',
+        SDWISFlag: 'N',
+        RCRAFlag: 'Y',
+      },
+      {
+        FacName: 'NUCOR STEEL SEATTLE INC',
+        FacStreet: '2424 SW ANDOVER ST',
+        FacCity: 'SEATTLE',
+        FacState: 'WA',
+        FacZip: '98106',
+        RegistryID: '110015969941',
+        FacCounty: 'KING',
+        FacLat: '47.569331',
+        FacLong: '-122.367332',
+        TRIIDs: '98106HCKTT2424S 98106SLMNB2424S 98106STTLS2414S',
+        FacComplianceStatus: 'Violation Identified',
+        FacInspectionCount: '8',
+        FacTotalPenalties: '$2,000',
+        TRIReleasesTransfers: '5830668',
+        FacFIPSCode: '53033',
+        FacDerivedStctyFIPS: '53033',
+        AIRFlag: 'Y',
+        NPDESFlag: 'Y',
+        SDWISFlag: 'N',
+        RCRAFlag: 'Y',
+      },
+    ],
+  },
+};
+
+/**
  * `case_rest_services.get_case_info?p_state=WA&p_from_date=01/01/2024&p_to_date=12/31/2024&
  * p_milestone=CMF,CPOA&p_civil_criminal_indicator=CI&responseset=2` — ECHO echoes the
  * defaults it was not sent (p_name_type, mapset) and omits responseset. Summary counts trimmed.
@@ -1755,6 +1974,1463 @@ export const CASE_PAGE_WA_2024_CIVIL = {
         EnfOutcome: 'Final Order No Penalty',
         Lead: 'EPA',
       },
+    ],
+  },
+};
+
+/** Values every violation in DFR_SDWIS_WA5300484 shares. */
+const WA5300484_STAGE2 = {
+  SourceID: 'WA5300484',
+  FederalRule: 'Stage 2 Disinfectants and Disinfection Byproducts Rule',
+  StateMCL: null,
+};
+
+/** The 02/23/2023 state order ECHO links to each WA5300484 TTHM MCL violation. */
+const WA5300484_ORDER = {
+  EnforcementDate: '02/23/2023',
+  EnforcementType: 'Formal',
+  EnforcementActionTypeDesc: 'State Administrative/Compliance Order without penalty issued',
+  Agency: 'State',
+};
+
+/** A WA5300484 TTHM MCL violation, Archived with the state order. */
+const wa5300484Mcl = (id: string, begin: string, end: string, measure: string) => ({
+  ...WA5300484_STAGE2,
+  CompliancePeriodBeginDate: begin,
+  CompliancePeriodEndDate: end,
+  ViolationID: id,
+  ContaminantName: 'TTHM',
+  ViolationCategoryCode: 'MCL',
+  ViolationCategoryDesc: 'Maximum Contaminant Level Violation',
+  ViolationMeasure: measure,
+  FederalMCL: '0.080 mg/L',
+  ResolvedDate: end,
+  Status: 'Archived',
+  EnforcementActions: [WA5300484_ORDER],
+});
+
+/**
+ * `dfr_rest_services.get_dfr?p_id=WA5300484`, captured 2026-11-01 — a PWSID as `p_id`; ECHO
+ * answered byte-for-byte the report it gives for Registry ID 110012873658. SDWA only: the system's
+ * whole ViolationsEnforcementActions list (17 violations, in ECHO's order: Archived TTHM MCL rows
+ * that carry a ResolvedDate, Resolved monitoring rows with a resolving action, an 11-digit
+ * ViolationID). Trimmed to the sections EchoService reads; the NonCompliancePeriod dates and
+ * EnforcementId it does not read are dropped, and the shared values above are kept verbatim.
+ */
+export const DFR_SDWIS_WA5300484 = {
+  Results: {
+    Message: 'Success',
+    RegistryID: '110012873658',
+    Permits: [
+      {
+        EPASystem: 'FRS',
+        Statute: '',
+        SourceID: '110012873658',
+        FacilityName: 'TOWNSHIP 29 WATER ASSOCIATION FACILITY',
+        FacilityStreet: 'SCURLOCK RD',
+        FacilityCity: 'FREELAND',
+        FacilityState: 'WA',
+        FacilityZip: '98249',
+        FacilityCountyName: 'Island County',
+        FacilityFipsCode: '53029',
+        FacilityStatus: null,
+        Latitude: '48.032484',
+        Longitude: '-122.599633',
+      },
+      {
+        EPASystem: 'SDWIS',
+        Statute: 'SDWA',
+        SourceID: 'WA5300484',
+        FacilityName: 'TOWNSHIP 29 WATER ASSOCIATION',
+        FacilityStreet: null,
+        FacilityCity: null,
+        FacilityState: 'WA',
+        FacilityZip: null,
+        FacilityCountyName: null,
+        FacilityFipsCode: null,
+        FacilityStatus: 'Active',
+        Latitude: null,
+        Longitude: null,
+      },
+    ],
+    SpatialMetadata: {
+      RegistryID: '110012873658',
+      Latitude83: '48.032484',
+      Longitude83: '-122.599633',
+    },
+    EnforcementComplianceSummaries: {
+      ProgramDates: [
+        {
+          Program: 'SDWA',
+          StartDate3Yr: '07/01/2023',
+          StartDate5Yr: '07/01/2021',
+          EndDate: '06/30/2026',
+        },
+      ],
+      Summaries: [
+        {
+          Statute: 'SDWA',
+          Inspections: null,
+          LastInspection: null,
+          CurrentStatus: 'No Violation Identified',
+          QtrsInNC: '10',
+          QtrsInSNC: '0',
+          InformalActions: null,
+          FormalActions: '1',
+          TotalPenalties: '$0',
+        },
+      ],
+    },
+    ComplianceHistory: {
+      Inspection: [
+        {
+          Statute: 'SDWA',
+          SourceID: 'WA5300484',
+          EPASystem: 'SDWIS',
+          ActivityType: null,
+          InspectionType: 'Sanitary Survey, Complete',
+          LeadAgency: 'State',
+          Date: '07/06/2022',
+          Finding: null,
+        },
+      ],
+    },
+    FormalActions: {
+      Action: [
+        {
+          Statute: 'SDWA',
+          SourceID: 'WA5300484',
+          ActionType: 'State Administrative/Compliance Order without penalty issued',
+          LeadAgency: 'State',
+          ActionDate: '02/23/2023',
+          PenaltyAmount: null,
+        },
+      ],
+    },
+    CaseFormalActions: {
+      Action: [
+        {
+          StatuteCode: 'SDWA',
+          CaseID: null,
+          SourceID: 'SFDW/WA5300484',
+          IssueDate: null,
+          Settlements: {
+            Settlement: [
+              { SettlementDate: '02/23/2023', FederalPenalty: null, StateLocalPenalty: null },
+            ],
+          },
+        },
+      ],
+    },
+    TRIHistory: {},
+    ViolationsEnforcementActions: {
+      Sources: [
+        {
+          Violations: [
+            wa5300484Mcl('3410601', '01/01/2026', '03/31/2026', '148.37 UG/L'),
+            {
+              ...WA5300484_STAGE2,
+              CompliancePeriodBeginDate: '01/01/2026',
+              CompliancePeriodEndDate: '03/31/2026',
+              ViolationID: '3387042',
+              ContaminantName: 'TTHM',
+              ViolationCategoryCode: 'MR',
+              ViolationCategoryDesc: 'Monitoring and Reporting',
+              ViolationMeasure: null,
+              FederalMCL: null,
+              ResolvedDate: '03/31/2026',
+              Status: 'Archived',
+              EnforcementActions: [],
+            },
+            {
+              ...WA5300484_STAGE2,
+              CompliancePeriodBeginDate: '01/01/2026',
+              CompliancePeriodEndDate: '03/31/2026',
+              ViolationID: '3386334',
+              ContaminantName: 'Total Haloacetic Acids (HAA5)',
+              ViolationCategoryCode: 'MR',
+              ViolationCategoryDesc: 'Monitoring and Reporting',
+              ViolationMeasure: null,
+              FederalMCL: null,
+              ResolvedDate: '03/31/2026',
+              Status: 'Archived',
+              EnforcementActions: [],
+            },
+            wa5300484Mcl('3385819', '10/01/2025', '12/31/2025', '123.65 UG/L'),
+            {
+              SourceID: 'WA5300484',
+              CompliancePeriodBeginDate: '10/01/2025',
+              CompliancePeriodEndDate: '12/31/2025',
+              ViolationID: '25829961005',
+              FederalRule: 'Arsenic Rule',
+              ContaminantName: 'Arsenic',
+              ViolationCategoryCode: 'MR',
+              ViolationCategoryDesc: 'Monitoring and Reporting',
+              ViolationMeasure: null,
+              StateMCL: null,
+              FederalMCL: null,
+              ResolvedDate: '10/08/2025',
+              Status: 'Resolved',
+              EnforcementActions: [
+                {
+                  EnforcementDate: '10/08/2025',
+                  EnforcementType: 'Resolving',
+                  EnforcementActionTypeDesc: 'State Compliance achieved',
+                  Agency: 'State',
+                },
+              ],
+            },
+            wa5300484Mcl('3288537', '07/01/2025', '09/30/2025', '158.53 UG/L'),
+            wa5300484Mcl('3261192', '04/01/2025', '06/30/2025', '145.38 UG/L'),
+            wa5300484Mcl('3238253', '01/01/2025', '03/31/2025', '128.75 UG/L'),
+            wa5300484Mcl('3227730', '10/01/2024', '12/31/2024', '132.83 UG/L'),
+            wa5300484Mcl('3171863', '07/01/2024', '09/30/2024', '112.03 UG/L'),
+            wa5300484Mcl('3141089', '04/01/2024', '06/30/2024', '108.8 UG/L'),
+            wa5300484Mcl('3085545', '10/01/2023', '12/31/2023', '120.7 UG/L'),
+            wa5300484Mcl('3085544', '07/01/2023', '09/30/2023', '156.9 UG/L'),
+            wa5300484Mcl('3027837', '04/01/2023', '06/30/2023', '173.6 UG/L'),
+            wa5300484Mcl('3000617', '01/01/2023', '03/31/2023', '212.7 UG/L'),
+            {
+              ...WA5300484_STAGE2,
+              CompliancePeriodBeginDate: '07/01/2022',
+              CompliancePeriodEndDate: '09/30/2022',
+              ViolationID: '2849133',
+              ContaminantName: 'Total Haloacetic Acids (HAA5)',
+              ViolationCategoryCode: 'MR',
+              ViolationCategoryDesc: 'Monitoring and Reporting',
+              ViolationMeasure: null,
+              FederalMCL: null,
+              ResolvedDate: '09/30/2022',
+              Status: 'Resolved',
+              EnforcementActions: [
+                {
+                  EnforcementDate: '12/30/2022',
+                  EnforcementType: 'Resolving',
+                  EnforcementActionTypeDesc: 'State Compliance achieved',
+                  Agency: 'State',
+                },
+              ],
+            },
+            {
+              ...WA5300484_STAGE2,
+              CompliancePeriodBeginDate: '07/01/2022',
+              CompliancePeriodEndDate: '09/30/2022',
+              ViolationID: '2849132',
+              ContaminantName: 'TTHM',
+              ViolationCategoryCode: 'MR',
+              ViolationCategoryDesc: 'Monitoring and Reporting',
+              ViolationMeasure: null,
+              FederalMCL: null,
+              ResolvedDate: '09/30/2022',
+              Status: 'Resolved',
+              EnforcementActions: [
+                {
+                  EnforcementDate: '12/30/2022',
+                  EnforcementType: 'Resolving',
+                  EnforcementActionTypeDesc: 'State Compliance achieved',
+                  Agency: 'State',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+};
+
+/** A WA5389080 Lead and Copper Rule monitoring violation: Unaddressed, its compliance period open. */
+const wa5389080Lcr = (id: string, begin: string) => ({
+  SourceID: 'WA5389080',
+  CompliancePeriodBeginDate: begin,
+  CompliancePeriodEndDate: null,
+  ViolationID: id,
+  FederalRule: 'Lead and Copper Rule',
+  ContaminantName: 'Lead and Copper Rule',
+  ViolationCategoryCode: 'MR',
+  ViolationCategoryDesc: 'Monitoring and Reporting',
+  ViolationMeasure: null,
+  StateMCL: null,
+  FederalMCL: null,
+  ResolvedDate: null,
+  Status: 'Unaddressed',
+  EnforcementActions: [],
+});
+
+/**
+ * `dfr_rest_services.get_dfr?p_id=WA5389080` (Trails West Subdivision, Registry ID 110049537202),
+ * captured 2026-11-01. The report lists 899 violations (890 Archived, 9 Unaddressed); this keeps
+ * the 9 Unaddressed ones, then the first 3 Archived, in that order — not ECHO's — so a sort is
+ * observable. Its FRS record and SpatialMetadata carry no address or coordinates.
+ */
+export const DFR_SDWIS_WA5389080 = {
+  Results: {
+    Message: 'Success',
+    RegistryID: '110049537202',
+    Permits: [
+      {
+        EPASystem: 'FRS',
+        Statute: '',
+        SourceID: '110049537202',
+        FacilityName: 'TRAILS WEST SUBDIVISION',
+        FacilityStreet: null,
+        FacilityCity: null,
+        FacilityState: 'WA',
+        FacilityZip: null,
+        FacilityCountyName: null,
+        FacilityFipsCode: null,
+        FacilityStatus: null,
+        Latitude: null,
+        Longitude: null,
+      },
+      {
+        EPASystem: 'SDWIS',
+        Statute: 'SDWA',
+        SourceID: 'WA5389080',
+        FacilityName: 'TRAILS WEST SUBDIVISION',
+        FacilityStreet: null,
+        FacilityCity: null,
+        FacilityState: 'WA',
+        FacilityZip: null,
+        FacilityCountyName: null,
+        FacilityFipsCode: null,
+        FacilityStatus: 'Active',
+        Latitude: null,
+        Longitude: null,
+      },
+    ],
+    SpatialMetadata: {},
+    EnforcementComplianceSummaries: {
+      ProgramDates: [
+        {
+          Program: 'SDWA',
+          StartDate3Yr: '07/01/2023',
+          StartDate5Yr: '07/01/2021',
+          EndDate: '06/30/2026',
+        },
+      ],
+      Summaries: [
+        {
+          Statute: 'SDWA',
+          Inspections: null,
+          LastInspection: null,
+          CurrentStatus: 'Enforcement Priority',
+          QtrsInNC: '12',
+          QtrsInSNC: '12',
+          InformalActions: null,
+          FormalActions: null,
+          TotalPenalties: null,
+        },
+      ],
+    },
+    ComplianceHistory: {
+      Inspection: [
+        {
+          Statute: 'SDWA',
+          SourceID: 'WA5389080',
+          EPASystem: 'ICIS',
+          ActivityType: 'Offsite Record Review',
+          InspectionType: 'Desk Audit',
+          LeadAgency: 'EPA',
+          Date: '09/24/2025',
+          Finding: null,
+        },
+      ],
+    },
+    FormalActions: { Action: [] },
+    CaseFormalActions: { Action: [] },
+    TRIHistory: {},
+    ViolationsEnforcementActions: {
+      Sources: [
+        {
+          Violations: [
+            wa5389080Lcr('2679696', '01/01/2026'),
+            wa5389080Lcr('2561067', '07/01/2025'),
+            wa5389080Lcr('2504723', '01/01/2025'),
+            wa5389080Lcr('2254751', '07/01/2022'),
+            wa5389080Lcr('2296784', '01/01/2022'),
+            wa5389080Lcr('2136425', '07/01/2021'),
+            wa5389080Lcr('2182580', '01/01/2021'),
+            wa5389080Lcr('2018225', '07/01/2020'),
+            wa5389080Lcr('2079479', '01/01/2020'),
+            {
+              SourceID: 'WA5389080',
+              CompliancePeriodBeginDate: '06/01/2026',
+              CompliancePeriodEndDate: '06/30/2026',
+              ViolationID: '3410828',
+              FederalRule: 'Revised Total Coliform Rule',
+              ContaminantName: 'Revised Total Coliform Rule',
+              ViolationCategoryCode: 'MON',
+              ViolationCategoryDesc: 'Monitoring Violation',
+              ViolationMeasure: null,
+              StateMCL: null,
+              FederalMCL: null,
+              ResolvedDate: '06/30/2026',
+              Status: 'Archived',
+              EnforcementActions: [],
+            },
+            {
+              SourceID: 'WA5389080',
+              CompliancePeriodBeginDate: '05/01/2026',
+              CompliancePeriodEndDate: '05/31/2026',
+              ViolationID: '3407387',
+              FederalRule: 'Revised Total Coliform Rule',
+              ContaminantName: 'Revised Total Coliform Rule',
+              ViolationCategoryCode: 'MON',
+              ViolationCategoryDesc: 'Monitoring Violation',
+              ViolationMeasure: null,
+              StateMCL: null,
+              FederalMCL: null,
+              ResolvedDate: '05/31/2026',
+              Status: 'Archived',
+              EnforcementActions: [],
+            },
+            {
+              SourceID: 'WA5389080',
+              CompliancePeriodBeginDate: '04/01/2026',
+              CompliancePeriodEndDate: '06/30/2026',
+              ViolationID: '26027632326',
+              FederalRule: 'Synthetic Organic Chemicals',
+              ContaminantName: 'Pentachlorophenol',
+              ViolationCategoryCode: 'MR',
+              ViolationCategoryDesc: 'Monitoring and Reporting',
+              ViolationMeasure: null,
+              StateMCL: null,
+              FederalMCL: null,
+              ResolvedDate: '06/30/2026',
+              Status: 'Archived',
+              EnforcementActions: [],
+            },
+          ],
+        },
+      ],
+    },
+  },
+};
+
+/**
+ * `sdw_rest_services.get_systems?output=JSON&p_st=WA&p_systyp=NTNCWS&p_cs=H,M,O,P,S&responseset=1000`,
+ * captured 2026-11-01. SDW echoes no QueryParameters.
+ */
+export const SDW_SYSTEMS_WA_NTNCWS_CURRENT = {
+  Results: {
+    Message: 'Success',
+    Version: 'SDWA v2020-02-05 1500',
+    QueryRows: '21',
+    IndianCountryRows: '6',
+    SVRows: '5',
+    CVRows: '21',
+    V3Rows: '21',
+    FEARows: '1',
+    InfFEARows: '2',
+    INSPRows: '18',
+    BadSystemIDs: null,
+    QueryID: '71',
+  },
+};
+
+/**
+ * `sdw_rest_services.get_qid?output=JSON&qid=71&pageno=1&qcolumns=2,57` — the 21 rows above, in
+ * ECHO's PWSName order. Six are under EPA Region 10 primacy (PWSID prefix `10`); `1053AA941`,
+ * `WA53AE369`, and `WA53AA761` show a PWSID's last seven characters are not all digits.
+ */
+export const SDW_PAGE_WA_NTNCWS_CURRENT = {
+  Results: {
+    Message: 'Working',
+    QueryRows: '21',
+    QueryID: '71',
+    PageNo: '1',
+    WaterSystems: [
+      { PWSName: 'Columbia Generating Station', PWSId: 'WA5392024', CurrVioFlag: '1' },
+      { PWSName: 'DAMMAN SCHOOL', PWSId: 'WA5317765', CurrVioFlag: '1' },
+      { PWSName: 'Gig Harbor Academy', PWSId: 'WA5364920', CurrVioFlag: '1' },
+      { PWSName: 'Grandview Farms Pasco - Dodd Rd', PWSId: 'WA5309701', CurrVioFlag: '1' },
+      { PWSName: 'HERITAGE UNIVERSITY WATER SYSTEM', PWSId: '1053AA941', CurrVioFlag: '1' },
+      { PWSName: 'Industrial Development Complex', PWSId: 'WA5392023', CurrVioFlag: '1' },
+      { PWSName: 'KLINGEMAN WELL', PWSId: 'WA5307443', CurrVioFlag: '1' },
+      { PWSName: 'LUCKY EAGLE CASINO', PWSId: '105300094', CurrVioFlag: '1' },
+      { PWSName: 'MURPHY ELMA VENEER', PWSId: 'WA5308305', CurrVioFlag: '1' },
+      { PWSName: 'NEW LIFE CHRISTIAN CENTER', PWSId: 'WA5304020', CurrVioFlag: '1' },
+      { PWSName: 'PACE INTERNATIONAL', PWSId: '105327112', CurrVioFlag: '1' },
+      { PWSName: 'PERRY', PWSId: 'WA5367045', CurrVioFlag: '1' },
+      { PWSName: 'Project Cougar', PWSId: 'WA53AE369', CurrVioFlag: '1' },
+      { PWSName: 'RIVER ROCK TOBACCO AND FUEL', PWSId: '105338114', CurrVioFlag: '1' },
+      { PWSName: 'Rainier Christian School', PWSId: 'WA5351295', CurrVioFlag: '1' },
+      { PWSName: 'SAND HILL ELEMENTARY', PWSId: 'WA5360381', CurrVioFlag: '1' },
+      { PWSName: 'SNOQUALMIE VALLEY LAND COMPANY INC', PWSId: 'WA5381073', CurrVioFlag: '1' },
+      { PWSName: 'STILLAGUAMISH NATURAL RESOURCES', PWSId: '105338116', CurrVioFlag: '1' },
+      { PWSName: 'STILLAGUAMISH VILLAGE', PWSId: '105338118', CurrVioFlag: '1' },
+      { PWSName: 'TROPHY LAKE GOLF COURSE', PWSId: 'WA53AA761', CurrVioFlag: '1' },
+      { PWSName: 'WHIDBEY INSTITUTE', PWSId: 'WA5305235', CurrVioFlag: '1' },
+    ],
+  },
+};
+
+/**
+ * `sdw_rest_services.get_systems?output=JSON&p_pid=<ZIP 59901's 194 PWSIDs>&p_cs=H,M,O,P,S`,
+ * captured 2026-11-01: three of the 194 have a current violation.
+ */
+export const SDW_SYSTEMS_ZIP_59901_CURRENT = {
+  Results: {
+    Message: 'Success',
+    Version: 'SDWA v2020-02-05 1500',
+    QueryRows: '3',
+    IndianCountryRows: '0',
+    SVRows: '0',
+    CVRows: '3',
+    V3Rows: '3',
+    FEARows: '0',
+    InfFEARows: '1',
+    INSPRows: '3',
+    BadSystemIDs: null,
+    QueryID: '161',
+  },
+};
+
+/**
+ * `case_rest_services.get_case_info?p_case_number=03-2014-7010&responseset=5` (2026-11-01) — a
+ * one-row match ECHO answers inline, with the full default row. Map and summary counts trimmed.
+ */
+export const CASE_INFO_03_2014_7010_INLINE = {
+  Results: {
+    Message: 'Success',
+    QueryID: '951',
+    QueryRows: '1',
+    QueryParameters: [
+      { QP: 'output', QV: 'JSON' },
+      { QP: 'p_name_type', QV: 'ANY' },
+      { QP: 'p_case_number', QV: '03-2014-7010' },
+      { QP: 'responseset', QV: '5' },
+      { QP: 'mapset', QV: '2000' },
+    ],
+    Cases: [
+      {
+        CaseNumber: '03-2014-7010',
+        CaseName:
+          'HOME INSURANCE COMPANY (SHARON STEEL CORP FARRELL WORKS DISPOSAL AREA)(NC)(LEAD)',
+        CaseCategoryCode: 'JDC',
+        CaseCategoryDesc: 'Judicial',
+        CaseStatusCode: 'FOE',
+        CaseStatusDesc: 'Final Order Entered',
+        DOJDocketNmbr: '90-11-3-06663/2',
+        CourtDocketNumber: '18-195',
+        PrimaryLaw: 'CERCLA',
+        PrimarySection: '107A',
+        DateFiled: '09/05/2018',
+        SettlementDate: '03/26/2019',
+        FedPenalty: '$0.00',
+        SEPCost: '$0.00',
+        PrimaryNAICSCode: '324199',
+        ActivityID: '3400293561',
+        TotalCompActionAmt: '$0.00',
+        SettlementCnt: '1',
+        TribalLandFlag: null,
+        ProsecutionSummaryID: null,
+        CivilCriminalIndicator: 'CI',
+        DateLodged: '03/26/2019',
+        DateClosed: null,
+        EnfOutcome: null,
+        CostRecovery: '$27,044,146.00',
+        Lead: 'EPA',
+        StateLocPenaltyAmt: '$0.00',
+      },
+    ],
+  },
+};
+
+/**
+ * `case_rest_services.get_case_info?p_state=WA&p_civil_criminal_indicator=CR&responseset=2`
+ * (2026-11-01). Summary counts and cluster output trimmed.
+ */
+export const CASE_INFO_WA_CRIMINAL = {
+  Results: {
+    Message: 'Success',
+    QueryID: '14',
+    QueryRows: '114',
+    QueryParameters: [
+      { QP: 'output', QV: 'JSON' },
+      { QP: 'p_name_type', QV: 'ANY' },
+      { QP: 'p_state', QV: 'WA' },
+      { QP: 'p_civil_criminal_indicator', QV: 'CR' },
+      { QP: 'responseset', QV: '2' },
+      { QP: 'mapset', QV: '2000' },
+    ],
+  },
+};
+
+/** `case_rest_services.get_qid?qid=14&pageno=1` — page 1 of the search above: null status and money columns. */
+export const CASE_PAGE_WA_CRIMINAL = {
+  Results: {
+    Message: 'Working',
+    QueryRows: '114',
+    QueryID: '14',
+    PageNo: '1',
+    Cases: [
+      {
+        CaseNumber: 'CR_1270',
+        CaseName: 'Ilias Ntais, Irika Maritime SA',
+        CaseCategoryCode: null,
+        CaseCategoryDesc: 'Criminal',
+        CaseStatusCode: null,
+        CaseStatusDesc: null,
+        DOJDocketNmbr: null,
+        CourtDocketNumber: null,
+        PrimaryLaw: 'MARPOL',
+        PrimarySection: '33 U.S.C. 1908(a)',
+        DateFiled: '11/03/2006',
+        SettlementDate: '01/23/2007',
+        FedPenalty: null,
+        SEPCost: null,
+        PrimaryNAICSCode: null,
+        ActivityID: null,
+        TotalCompActionAmt: null,
+        SettlementCnt: null,
+        TribalLandFlag: null,
+        ProsecutionSummaryID: '1270',
+        CivilCriminalIndicator: 'CR',
+        DateLodged: null,
+        DateClosed: null,
+        EnfOutcome: null,
+        CostRecovery: null,
+        Lead: 'EPA',
+        StateLocPenaltyAmt: null,
+      },
+      {
+        CaseNumber: 'CR_1383',
+        CaseName: 'Donn Herron',
+        CaseCategoryCode: null,
+        CaseCategoryDesc: 'Criminal',
+        CaseStatusCode: null,
+        CaseStatusDesc: null,
+        DOJDocketNmbr: null,
+        CourtDocketNumber: null,
+        PrimaryLaw: 'TITLE 18',
+        PrimarySection: '18 U.S.C. 1001',
+        DateFiled: '06/03/2003',
+        SettlementDate: '10/15/2003',
+        FedPenalty: null,
+        SEPCost: null,
+        PrimaryNAICSCode: null,
+        ActivityID: null,
+        TotalCompActionAmt: null,
+        SettlementCnt: null,
+        TribalLandFlag: null,
+        ProsecutionSummaryID: '1383',
+        CivilCriminalIndicator: 'CR',
+        DateLodged: null,
+        DateClosed: null,
+        EnfOutcome: null,
+        CostRecovery: null,
+        Lead: 'EPA',
+        StateLocPenaltyAmt: null,
+      },
+    ],
+  },
+};
+
+/**
+ * `case_rest_services.get_case_report?p_id=03-2014-7010` (2026-11-01) — a CERCLA cost-recovery
+ * case naming 7 Registry IDs across 11 Facilities rows in six states. ProgramLinks (77 rows) and
+ * EnfConFacilities (11) cut to their first rows; EJScreenURL and Over80CountUS dropped from
+ * facility rows.
+ */
+export const CASE_REPORT_03_2014_7010 = {
+  Results: {
+    Message: 'Success',
+    CaseInformation: {
+      ActivityId: '3400293561',
+      CaseNumber: '03-2014-7010',
+      CaseName: 'HOME INSURANCE COMPANY (SHARON STEEL CORP FARRELL WORKS DISPOSAL AREA)(NC)(LEAD)',
+      CaseType: 'JDC',
+      CaseStatus: 'Final Order Entered',
+      CaseStatusDate: '03/26/2019',
+      RegionalDocketNumber: '18-195',
+      DOJDocketNumber: '90-11-3-06663/2',
+      Lead: 'EPA',
+      ReliefSought: 'Cost Recovery',
+      EnforcementOutcome: null,
+      HeadquartersDivision: null,
+      Branch: null,
+      ResultVolDisclosure: 'No',
+      MultiMediaCase: null,
+      EnforcementType: 'Bankruptcy',
+      TotalFederalPenalty: '$0',
+      TotalStatePenalty: '$0',
+      PenaltyCollected: '$0',
+      TotalSEPCost: '$0',
+      TotalComplianceActionCost: '$0',
+      TotalCostRecovery: '$27,044,146',
+      CaseSummary:
+        'On March 26, 2019, after a period of public comment, the Liquidation Court (Superior Court of the State of New Hampshire, Merrimack County, Case Number 03-E-0106) entered an order approving the proposed multi-regional Settlement Agreement between the U.S., on behalf of EPA, the Navy, DOI and NOAA, and the Insurance Commissioner of the State of New Hampshire, in his capacity as the  Liquidator of The Home Insurance Company, in connection with the CERCLA liability of its insured, Sharon Steel Corporation, for the Sharon Steel (Farrell Works Disposal Area) Superfund Site; the settlement proceeds will be used to fund cleanup at the Site, located in the vicinity of the City of Farrell, Mercer County, Pennsylvania, which cleanup is estimated at $36 million. The Agreement provides for a total allowed claim of over $27 million, with $16 million of that total allocated to the Site.  This is a direct implementation claim for the federal government which arises under the State of New Hampshire?s receivership statute and the Federal Priorities Act. ',
+      Violations: null,
+    },
+    LawsAndSections: [
+      { Law: 'CERCLA', Sections: '107A: Cost Recovery', Programs: 'Cost Recovery/Financial' },
+    ],
+    Citations: [],
+    ProgramLinks: [
+      { FRSNumber: '110009259729', Program: 'ICIS', ProgramID: '3601131366' },
+      { FRSNumber: '110009259729', Program: 'ICIS', ProgramID: '3400053150' },
+    ],
+    Facilities: [
+      {
+        FRSNumber: '110009259729',
+        FacilityName: 'LOWER DUWAMISH WATERWAY',
+        FacilityAddress: 'RK 2.5 TO RK 10.8',
+        FacilityCity: 'SEATTLE',
+        FacilityState: 'WA',
+        FacilityZip: '98168',
+        SICCodes: null,
+        NAICSCodes: '331111',
+        FacilityNoLongerExists: 'N',
+        ProgramAcronym: 'ICIS',
+        ProgramId: '41027',
+      },
+      {
+        FRSNumber: '110009259729',
+        FacilityName: 'LOWER DUWAMISH WATERWAY',
+        FacilityAddress: 'RK 2.5 TO RK 10.8',
+        FacilityCity: 'SEATTLE',
+        FacilityState: 'WA',
+        FacilityZip: '98168',
+        SICCodes: null,
+        NAICSCodes: null,
+        FacilityNoLongerExists: 'N',
+        ProgramAcronym: 'SEMS',
+        ProgramId: 'WA0002329803',
+      },
+      {
+        FRSNumber: '110009281767',
+        FacilityName: 'PETROLEUM PRODUCTS CORP.',
+        FacilityAddress: '14000 BLOCK PEMBROKE ROAD',
+        FacilityCity: 'PEMBROKE PARK',
+        FacilityState: 'FL',
+        FacilityZip: '33024',
+        SICCodes: null,
+        NAICSCodes: '331111',
+        FacilityNoLongerExists: 'N',
+        ProgramAcronym: 'ICIS',
+        ProgramId: '3601131367',
+      },
+      {
+        FRSNumber: '110009281767',
+        FacilityName: 'PETROLEUM PRODUCTS CORP.',
+        FacilityAddress: '14000 BLOCK PEMBROKE ROAD',
+        FacilityCity: 'PEMBROKE PARK',
+        FacilityState: 'FL',
+        FacilityZip: '33024',
+        SICCodes: null,
+        NAICSCodes: null,
+        FacilityNoLongerExists: 'N',
+        ProgramAcronym: 'SEMS',
+        ProgramId: 'FLD980798698',
+      },
+      {
+        FRSNumber: '110013802572',
+        FacilityName: "LEE'S LANE LANDFILL",
+        FacilityAddress: 'LEES LN @ OHIO RIV',
+        FacilityCity: 'LOUISVILLE',
+        FacilityState: 'KY',
+        FacilityZip: '40216',
+        SICCodes: null,
+        NAICSCodes: '331111',
+        FacilityNoLongerExists: 'N',
+        ProgramAcronym: 'ICIS',
+        ProgramId: '3601131366',
+      },
+      {
+        FRSNumber: '110013802572',
+        FacilityName: "LEE'S LANE LANDFILL",
+        FacilityAddress: 'LEES LN @ OHIO RIV',
+        FacilityCity: 'LOUISVILLE',
+        FacilityState: 'KY',
+        FacilityZip: '40216',
+        SICCodes: null,
+        NAICSCodes: null,
+        FacilityNoLongerExists: 'N',
+        ProgramAcronym: 'SEMS',
+        ProgramId: 'KYD980557052',
+      },
+      {
+        FRSNumber: '110015665528',
+        FacilityName: 'U.S. OIL RECOVERY',
+        FacilityAddress: '400 N RICHEY ST',
+        FacilityCity: 'PASADENA',
+        FacilityState: 'TX',
+        FacilityZip: '77506',
+        SICCodes: null,
+        NAICSCodes: null,
+        FacilityNoLongerExists: 'N',
+        ProgramAcronym: 'SEMS',
+        ProgramId: 'TXN000607093',
+      },
+      {
+        FRSNumber: '110015665528',
+        FacilityName: 'U.S. OIL RECOVERY',
+        FacilityAddress: '400 N. RICHEY ST.',
+        FacilityCity: 'PASADENA',
+        FacilityState: 'TX',
+        FacilityZip: '77506',
+        SICCodes: null,
+        NAICSCodes: '331111',
+        FacilityNoLongerExists: 'N',
+        ProgramAcronym: 'ICIS',
+        ProgramId: '1000005122',
+      },
+      {
+        FRSNumber: '110025329829',
+        FacilityName: 'SHARON STEEL CORP (FARRELL WORKS DISPOSAL AREA)',
+        FacilityAddress: '300 OHIO STREET',
+        FacilityCity: 'HERMITAGE',
+        FacilityState: 'PA',
+        FacilityZip: '16159',
+        SICCodes: null,
+        NAICSCodes: null,
+        FacilityNoLongerExists: 'N',
+        ProgramAcronym: 'SEMS',
+        ProgramId: 'PAD001933175',
+      },
+      {
+        FRSNumber: '110033144817',
+        FacilityName: 'SHARON STEEL CORP STEEL DIV',
+        FacilityAddress: '15 ROEMER BLVD',
+        FacilityCity: 'FARRELL',
+        FacilityState: 'PA',
+        FacilityZip: '16121',
+        SICCodes: null,
+        NAICSCodes: '331513',
+        FacilityNoLongerExists: 'N',
+        ProgramAcronym: 'ICIS',
+        ProgramId: '3400053150',
+      },
+      {
+        FRSNumber: '110070408553',
+        FacilityName: 'SAN GABRIEL VALLEY AREA 2',
+        FacilityAddress: 'SUNSET & SAN BERNARDINO FRWY',
+        FacilityCity: 'BALDWIN PARK',
+        FacilityState: 'CA',
+        FacilityZip: '91706',
+        SICCodes: null,
+        NAICSCodes: '331111',
+        FacilityNoLongerExists: 'N',
+        ProgramAcronym: 'ICIS',
+        ProgramId: '3601131351',
+      },
+    ],
+    Defendants: [
+      { DefendantName: 'HOME INSURANCE COMPANY', NamedInComplaint: 'Y', NamedInSettlement: 'Y' },
+    ],
+    CaseMilestones: [
+      { Event: 'Referred To Headquarters', ActualDate: '09/26/2014' },
+      { Event: 'Referred To Dept Of Justice', ActualDate: '09/29/2014' },
+      { Event: 'Enforcement Action Data Entered', ActualDate: '09/30/2014' },
+      { Event: 'Complaint Filed With Court', ActualDate: '09/05/2018' },
+      { Event: 'Final Order Entered', ActualDate: '03/26/2019' },
+      { Event: 'Final Order Lodged', ActualDate: '03/26/2019' },
+    ],
+    Pollutants: [
+      { PollutantName: 'Arsenic', ChemicalAbstractNumber: '7440382' },
+      { PollutantName: 'Barium', ChemicalAbstractNumber: '7440393' },
+      { PollutantName: 'Cadmium', ChemicalAbstractNumber: '7440439' },
+      { PollutantName: 'Chromium', ChemicalAbstractNumber: '7440473' },
+      { PollutantName: 'Lead', ChemicalAbstractNumber: '7439921' },
+    ],
+    NonPrimaryLaws: [],
+    RelatedActivities: [],
+    EnforcementConclusions: [
+      {
+        EnforcementConclusionId: '3600139220',
+        EnforcementConclusionNmbr: '1',
+        EnforcementConclusionType:
+          'Consent Decree or Court Order Resolving a Civil Judicial Action',
+        EnforcementConclusionName:
+          'HOME INSURANCE COMPANY (SHARON STEEL CORP FARRELL WORKS DISPOSAL AREA)',
+        FacilitiesInSettlement:
+          '110009259729, 110009281767, 110013802572, 110015665528, 110025329829, 110033144817, 110070408553',
+        SettlementEnteredDate: '03/26/2019',
+        SettlementLodgedDate: '03/26/2019',
+        FederalPenalty: '$0',
+        StatePenalty: null,
+        SEPCost: null,
+        ComplianceActionCost: '$0',
+        EnforcementActionClosedDate: null,
+        ActualTerminationDate: null,
+        CostRecovery: '$27,044,146',
+        PollutantReductions: [],
+        ComplianceSchedules: [],
+        ComplyingActions: [],
+        SupplementalEnvironmentalProjects: [],
+        EnfConFacilities: [
+          {
+            FacilityFRSID: '110009259729',
+            FacilityName: 'LOWER DUWAMISH WATERWAY',
+            FacilityAddress: 'RK 2.5 TO RK 10.8',
+            FacilityCity: 'SEATTLE',
+            FacilityState: 'WA',
+            FacilityZip: '98168',
+            SICCodes: null,
+            NAICSCodes: '331111',
+            ProgramID: '41027',
+            ProgramSystem: 'ICIS',
+            FacilityNoLongerExists: 'N',
+          },
+          {
+            FacilityFRSID: '110009259729',
+            FacilityName: 'LOWER DUWAMISH WATERWAY',
+            FacilityAddress: 'RK 2.5 TO RK 10.8',
+            FacilityCity: 'SEATTLE',
+            FacilityState: 'WA',
+            FacilityZip: '98168',
+            SICCodes: null,
+            NAICSCodes: null,
+            ProgramID: 'WA0002329803',
+            ProgramSystem: 'SEMS',
+            FacilityNoLongerExists: 'N',
+          },
+        ],
+        EnfConNPDESViolationsCount: '0',
+        EnfConNPDESViolationsDownloadURL:
+          'https://echodata.epa.gov/echo/case_rest_services.npdesvioenfconcl_download?p_enf_concl_id=3600139220',
+        EnfConNPDESViolations: [],
+      },
+    ],
+    CAEDDocuments: [],
+  },
+};
+
+/**
+ * `case_rest_services.get_case_report?p_id=10-2026-0276` (2026-11-01) — an EPA-led administrative
+ * CWA order with two defendants, complying actions, and a pollutant reduction. EJScreenURL and
+ * Over80CountUS dropped from facility rows.
+ */
+export const CASE_REPORT_10_2026_0276 = {
+  Results: {
+    Message: 'Success',
+    CaseInformation: {
+      ActivityId: '3605142896',
+      CaseNumber: '10-2026-0276',
+      CaseName: 'OLYMPIC PIPELINE',
+      CaseType: 'AFR',
+      CaseStatus: 'Final Order Issued',
+      CaseStatusDate: '09/30/2026',
+      RegionalDocketNumber: null,
+      DOJDocketNumber: null,
+      Lead: 'EPA',
+      ReliefSought: 'Injunctive Relief',
+      EnforcementOutcome: 'Final Order No Penalty',
+      HeadquartersDivision: null,
+      Branch: null,
+      ResultVolDisclosure: 'No',
+      MultiMediaCase: null,
+      EnforcementType: 'CWA 309A AO For Compliance',
+      TotalFederalPenalty: '$0',
+      TotalStatePenalty: '$0',
+      PenaltyCollected: '$0',
+      TotalSEPCost: '$0',
+      TotalComplianceActionCost: '$843,500',
+      TotalCostRecovery: '$0',
+      CaseSummary:
+        'On September 30, 2026, Region 10 issued an administrative order on consent to Olympic Pipe Line Company LLC and BP Pipelines (North America) Inc. for a spill from the Olympic Pipeline.  Beginning on December 9, 2023, gasoline was released from pressure transmitter tubing connected to the mainline pipe of the pipeline near Conway, WA.  Corrosion of a fitting on the pressure transmitter tubing caused the release of 21,168 gallons of gasoline into a subterranean valve station vault, which overflowed.  Gasoline flowed downhill over agricultural land into Hill Ditch (also known as Carpenter Creek). Hill Ditch has documented use of winter steelhead, summer steelhead, kokanee, coho and coastal/resident cutthroat trout, and is gradient accessible to pink, chum and Chinook salmon. The Respondents spent more than $52 million to clean up the spill. To prevent future spills, the Respondents agreed to develop and implement vault inspection procedures to identify corrosion, develop and implement a leak detection and improvement plan, and hire additional staff with expertise in leak detection. The estimated cost of implementing this injunctive relief is $843,500.',
+      Violations: 'Oil Spill Violation Under CWA/OPA',
+    },
+    LawsAndSections: [
+      { Law: 'CWA', Sections: '311B: Oil & Hazardous Substances Discharge', Programs: 'Spills' },
+    ],
+    Citations: [],
+    ProgramLinks: [{ FRSNumber: '110071860973', Program: 'ICIS', ProgramID: '3601735460' }],
+    Facilities: [
+      {
+        FRSNumber: '110071860973',
+        FacilityName: 'BP OLYMPIC PIPELINE',
+        FacilityAddress: ',',
+        FacilityCity: 'MOUNT VERNON',
+        FacilityState: 'WA',
+        FacilityZip: '98274',
+        SICCodes: '4612',
+        NAICSCodes: '486110',
+        FacilityNoLongerExists: 'N',
+        ProgramAcronym: 'ICIS',
+        ProgramId: '3601735460',
+      },
+    ],
+    Defendants: [
+      {
+        DefendantName: 'BP Pipelines (North America) Inc.',
+        NamedInComplaint: 'Y',
+        NamedInSettlement: 'Y',
+      },
+      {
+        DefendantName: 'Olympic Pipe Line Company LLC',
+        NamedInComplaint: 'Y',
+        NamedInSettlement: 'Y',
+      },
+    ],
+    CaseMilestones: [
+      { Event: 'Enforcement Action Data Entered', ActualDate: '09/03/2026' },
+      { Event: 'Complaint Filed/Proposed Order', ActualDate: '09/30/2026' },
+      { Event: 'Final Order Issued', ActualDate: '09/30/2026' },
+    ],
+    Pollutants: [{ PollutantName: 'Gasoline', ChemicalAbstractNumber: '86290815' }],
+    NonPrimaryLaws: [],
+    RelatedActivities: [],
+    EnforcementConclusions: [
+      {
+        EnforcementConclusionId: '3600613803',
+        EnforcementConclusionNmbr: '1',
+        EnforcementConclusionType: 'Administrative Compliance Orders',
+        EnforcementConclusionName: 'OLYMPIC PIPELINE',
+        FacilitiesInSettlement: '110071860973',
+        SettlementEnteredDate: '09/30/2026',
+        SettlementLodgedDate: null,
+        FederalPenalty: '$0',
+        StatePenalty: null,
+        SEPCost: null,
+        ComplianceActionCost: '$843,500',
+        EnforcementActionClosedDate: null,
+        ActualTerminationDate: null,
+        CostRecovery: '$0',
+        PollutantReductions: [
+          {
+            ComplyingActionId: '3600098147',
+            EnvironmentalImpactId: '3600072949',
+            SEPId: null,
+            Pollutant: 'Gasoline',
+            AnnualAmount: '21,168',
+            Units: 'gal',
+            PollutantUnitDescription: 'Gallons',
+            Media: 'Land',
+            ComplyingActionType: 'Plan Implementation',
+            ComplyingActionCategory: 'Prevention of Future Releases',
+            EnvironmentalBenefitMetric: 'Volume of Oil Spills Prevented (gallons)',
+            SEPorComp: 'C',
+          },
+        ],
+        ComplianceSchedules: [],
+        ComplyingActions: [
+          {
+            ComplyingActionId: '3600098141',
+            ComplyingActionType: 'WEM',
+            ComplyingActionDescription: 'Environmental Management Review',
+            ComplyingActionCategory: 'Work Practices',
+          },
+          {
+            ComplyingActionId: '3600098142',
+            ComplyingActionType: 'WRP',
+            ComplyingActionDescription: 'Reporting',
+            ComplyingActionCategory: 'Work Practices',
+          },
+          {
+            ComplyingActionId: '3600098143',
+            ComplyingActionType: 'WWP',
+            ComplyingActionDescription: 'Work Practices',
+            ComplyingActionCategory: 'Work Practices',
+          },
+          {
+            ComplyingActionId: '3600098144',
+            ComplyingActionType: 'WTA',
+            ComplyingActionDescription: 'Training',
+            ComplyingActionCategory: 'Work Practices',
+          },
+          {
+            ComplyingActionId: '3600098145',
+            ComplyingActionType: 'WPL',
+            ComplyingActionDescription: 'Planning',
+            ComplyingActionCategory: 'Work Practices',
+          },
+          {
+            ComplyingActionId: '3600098146',
+            ComplyingActionType: 'WMO',
+            ComplyingActionDescription: 'Monitoring',
+            ComplyingActionCategory: 'Work Practices',
+          },
+          {
+            ComplyingActionId: '3600098147',
+            ComplyingActionType: 'XPI',
+            ComplyingActionDescription: 'Plan Implementation',
+            ComplyingActionCategory: 'Prevention of Future Releases',
+          },
+        ],
+        SupplementalEnvironmentalProjects: [],
+        EnfConFacilities: [
+          {
+            FacilityFRSID: '110071860973',
+            FacilityName: 'BP OLYMPIC PIPELINE',
+            FacilityAddress: ',',
+            FacilityCity: 'MOUNT VERNON',
+            FacilityState: 'WA',
+            FacilityZip: '98274',
+            SICCodes: '4612',
+            NAICSCodes: '486110',
+            ProgramID: '3601735460',
+            ProgramSystem: 'ICIS',
+            FacilityNoLongerExists: 'N',
+          },
+        ],
+        EnfConNPDESViolationsCount: '0',
+        EnfConNPDESViolationsDownloadURL:
+          'https://echodata.epa.gov/echo/case_rest_services.npdesvioenfconcl_download?p_enf_concl_id=3600613803',
+        EnfConNPDESViolations: [],
+      },
+    ],
+    CAEDDocuments: [],
+  },
+};
+
+/**
+ * `case_rest_services.get_case_report?p_id=WA-100446` (2026-11-01) — a state-led order with no
+ * defendants. Its conclusion's ComplianceSchedules (67 rows) cut to the first two; EJScreenURL and
+ * Over80CountUS dropped from facility rows.
+ */
+export const CASE_REPORT_WA_100446 = {
+  Results: {
+    Message: 'Success',
+    CaseInformation: {
+      ActivityId: '3400023378',
+      CaseNumber: 'WA-100446',
+      CaseName: 'Admin Order Amendment',
+      CaseType: 'AFR',
+      CaseStatus: 'Final Order Issued',
+      CaseStatusDate: '05/02/2011',
+      RegionalDocketNumber: null,
+      DOJDocketNumber: null,
+      Lead: 'State',
+      ReliefSought: null,
+      EnforcementOutcome: null,
+      HeadquartersDivision: null,
+      Branch: null,
+      ResultVolDisclosure: 'No',
+      MultiMediaCase: null,
+      EnforcementType: 'State CWA Non Penalty AO',
+      TotalFederalPenalty: '$0',
+      TotalStatePenalty: '$0',
+      PenaltyCollected: '$0',
+      TotalSEPCost: '$0',
+      TotalComplianceActionCost: '$0',
+      TotalCostRecovery: '$0',
+      CaseSummary: null,
+      Violations: null,
+    },
+    LawsAndSections: [
+      { Law: 'CWA', Sections: 'OTHER: Violations not covered elsewhere', Programs: 'Base Program' },
+    ],
+    Citations: [],
+    ProgramLinks: [{ FRSNumber: '110015554425', Program: 'NPDES', ProgramID: 'WA0021083' }],
+    Facilities: [
+      {
+        FRSNumber: '110015554425',
+        FacilityName: 'VADER STP',
+        FacilityAddress: 'SOUTH END OF A STREET',
+        FacilityCity: 'VADER',
+        FacilityState: 'WA',
+        FacilityZip: '98593-0178',
+        SICCodes: null,
+        NAICSCodes: null,
+        FacilityNoLongerExists: 'N',
+        ProgramAcronym: 'NPDES',
+        ProgramId: 'WA0021083',
+      },
+    ],
+    Defendants: [],
+    CaseMilestones: [
+      { Event: 'Final Order Issued', ActualDate: '05/02/2011' },
+      { Event: 'Enforcement Action Data Entered', ActualDate: '12/06/2012' },
+    ],
+    Pollutants: [],
+    NonPrimaryLaws: [{ StatuteCode: 'CWA', LawSectionCode: 'OTHER' }],
+    RelatedActivities: [],
+    EnforcementConclusions: [
+      {
+        EnforcementConclusionId: '3400000008',
+        EnforcementConclusionNmbr: '1',
+        EnforcementConclusionType: 'Administrative Compliance Orders',
+        EnforcementConclusionName: 'Admin Order Amendment',
+        FacilitiesInSettlement: '110015554425',
+        SettlementEnteredDate: '05/02/2011',
+        SettlementLodgedDate: null,
+        FederalPenalty: '$0',
+        StatePenalty: null,
+        SEPCost: null,
+        ComplianceActionCost: '$0',
+        EnforcementActionClosedDate: null,
+        ActualTerminationDate: null,
+        CostRecovery: '$0',
+        PollutantReductions: [],
+        ComplianceSchedules: [
+          {
+            FacilityFRSID: '110015554425',
+            Program: 'NPDES',
+            ProgamId: 'WA0021083',
+            ScheduleId: '3600000600',
+            ScheduleNumber: '11',
+            ScheduleCommentText: 'Progress Reports',
+            ScheduleEventId: '3600000700',
+            ScheduleEventDescription: 'Implement Corrective Actions',
+            ScheduleDate: '07/15/2011',
+            ActualDate: '08/01/2011',
+            EventAmount: null,
+          },
+          {
+            FacilityFRSID: '110015554425',
+            Program: 'NPDES',
+            ProgamId: 'WA0021083',
+            ScheduleId: '3600000600',
+            ScheduleNumber: '11',
+            ScheduleCommentText: 'Progress Reports',
+            ScheduleEventId: '3600000708',
+            ScheduleEventDescription: 'Implement Corrective Actions',
+            ScheduleDate: '10/15/2011',
+            ActualDate: '10/10/2011',
+            EventAmount: null,
+          },
+        ],
+        ComplyingActions: [],
+        SupplementalEnvironmentalProjects: [],
+        EnfConFacilities: [
+          {
+            FacilityFRSID: '110015554425',
+            FacilityName: 'VADER STP',
+            FacilityAddress: 'SOUTH END OF A STREET',
+            FacilityCity: 'VADER',
+            FacilityState: 'WA',
+            FacilityZip: '98593-0178',
+            SICCodes: null,
+            NAICSCodes: null,
+            ProgramID: 'WA0021083',
+            ProgramSystem: 'NPDES',
+            FacilityNoLongerExists: 'N',
+          },
+        ],
+        EnfConNPDESViolationsCount: '0',
+        EnfConNPDESViolationsDownloadURL:
+          'https://echodata.epa.gov/echo/case_rest_services.npdesvioenfconcl_download?p_enf_concl_id=3400000008',
+        EnfConNPDESViolations: [],
+      },
+    ],
+    CAEDDocuments: [],
+  },
+};
+
+/**
+ * `case_rest_services.get_case_report?p_id=06-2001-0066` (2026-11-01) — a judicial CAA case with
+ * two Supplemental Environmental Projects. Facilities (21 rows), ProgramLinks, and EnfConFacilities
+ * cut to their first rows; CaseSummary, EJScreenURL, and Over80CountUS dropped.
+ */
+export const CASE_REPORT_06_2001_0066 = {
+  Results: {
+    Message: 'Success',
+    CaseInformation: {
+      ActivityId: '40969',
+      CaseNumber: '06-2001-0066',
+      CaseName: 'AIR LIQUIDE AMERICA CORPORATION(NC)(LEAD)',
+      CaseType: 'JDC',
+      CaseStatus: 'Closed',
+      CaseStatusDate: '05/01/2017',
+      RegionalDocketNumber: 'H-01-2073',
+      DOJDocketNumber: '90-5-2-1-07132',
+      Lead: 'EPA',
+      ReliefSought: 'Injunctive Relief, Penalty',
+      EnforcementOutcome: 'Final Order With Penalty',
+      HeadquartersDivision: 'AIR',
+      Branch: '6RC-E',
+      ResultVolDisclosure: 'No',
+      MultiMediaCase: 'No',
+      EnforcementType: 'Civil Judicial Action',
+      TotalFederalPenalty: '$4,500,000',
+      TotalStatePenalty: '$0',
+      PenaltyCollected: '$4,500,000',
+      TotalSEPCost: '$500,000',
+      TotalComplianceActionCost: '$12,000,000',
+      TotalCostRecovery: '$0',
+      Violations: 'Stratosperic Ozone Protection Violation',
+    },
+    LawsAndSections: [
+      {
+        Law: 'CAA',
+        Sections: '608: National Recycling & Emission Reduction Program',
+        Programs: 'Recycling & Emission Reduction Programs',
+      },
+    ],
+    Citations: [{ Title: '40CFR', Part: '82', Section: '166(K)' }],
+    ProgramLinks: [
+      { FRSNumber: '110000449818', Program: 'ICIS', ProgramID: '2504' },
+      { FRSNumber: '110000449818', Program: 'ICIS', ProgramID: '14559' },
+    ],
+    Facilities: [
+      {
+        FRSNumber: '110000449818',
+        FacilityName: 'AIR LIQUIDE AMERICA CORPORATION',
+        FacilityAddress: '57805 EVERGREEN ROAD',
+        FacilityCity: 'PLAQUEMINE',
+        FacilityState: 'LA',
+        FacilityZip: '70764',
+        SICCodes: '2813',
+        NAICSCodes: null,
+        FacilityNoLongerExists: 'N',
+        ProgramAcronym: 'ICIS',
+        ProgramId: '24212',
+      },
+      {
+        FRSNumber: '110000458166',
+        FacilityName: 'AIR LIQUIDE AMERICA CORPORATION',
+        FacilityAddress: '722 FM 1845',
+        FacilityCity: 'LONGVIEW',
+        FacilityState: 'TX',
+        FacilityZip: '756038402',
+        SICCodes: '2813',
+        NAICSCodes: null,
+        FacilityNoLongerExists: 'N',
+        ProgramAcronym: 'ICIS',
+        ProgramId: '27181',
+      },
+    ],
+    Defendants: [
+      {
+        DefendantName: 'AIR LIQUIDE AMERICA CORPORATION',
+        NamedInComplaint: 'Y',
+        NamedInSettlement: 'Y',
+      },
+    ],
+    CaseMilestones: [
+      { Event: 'Enforcement Action Data Entered', ActualDate: '11/29/2000' },
+      { Event: 'Referred To Dept Of Justice', ActualDate: '12/11/2000' },
+      { Event: 'Complaint Filed With Court', ActualDate: '05/21/2001' },
+      { Event: 'Final Order Lodged', ActualDate: '05/21/2001' },
+      { Event: 'Final Order Entered', ActualDate: '06/21/2001' },
+      { Event: 'Concluded', ActualDate: '10/17/2001' },
+      { Event: 'Enforcement Action Closed', ActualDate: '05/01/2017' },
+    ],
+    Pollutants: [
+      { PollutantName: 'HCFC [hydrochlorofluorocarbons]', ChemicalAbstractNumber: null },
+    ],
+    NonPrimaryLaws: [],
+    RelatedActivities: [
+      {
+        SourceID: null,
+        CaseNumber: '06-2001-0066',
+        ActivityID: '69998',
+        ActivityName: 'AIR LIQUIDE AMERICA CORPORATION',
+        ResponsePolicyCode: null,
+        ActivityTypeCode: 'CMD',
+        Description: 'Case File',
+        ActualDate: null,
+        CaaViolationReportFlag: 'N',
+      },
+    ],
+    EnforcementConclusions: [
+      {
+        EnforcementConclusionId: '28857',
+        EnforcementConclusionNmbr: '1',
+        EnforcementConclusionType:
+          'Consent Decree or Court Order Resolving a Civil Judicial Action',
+        EnforcementConclusionName: 'AIR LIQUIDE AMERICA CORPORATION(NC)(LEAD)',
+        FacilitiesInSettlement:
+          '110000449818, 110000528082, 110001412597, 110001435395, 110001934934, 110002003091, 110009525139, 110010617975, 110012539244, 110013431152',
+        SettlementEnteredDate: '06/21/2001',
+        SettlementLodgedDate: '05/21/2001',
+        FederalPenalty: '$4,500,000',
+        StatePenalty: null,
+        SEPCost: '$500,000',
+        ComplianceActionCost: '$12,000,000',
+        EnforcementActionClosedDate: '05/01/2017',
+        ActualTerminationDate: '05/01/2017',
+        CostRecovery: '$0',
+        PollutantReductions: [
+          {
+            ComplyingActionId: '2600805814',
+            EnvironmentalImpactId: '9767',
+            SEPId: null,
+            Pollutant: 'HCFC [hydrochlorofluorocarbons]',
+            AnnualAmount: '15',
+            Units: 'tons',
+            PollutantUnitDescription: 'Tons',
+            Media: 'Air',
+            ComplyingActionType: 'Migrated Data (Direct)',
+            ComplyingActionCategory: 'Direct Environmental Reduction',
+            EnvironmentalBenefitMetric: null,
+            SEPorComp: 'C',
+          },
+        ],
+        ComplianceSchedules: [],
+        ComplyingActions: [
+          {
+            ComplyingActionId: '15454',
+            ComplyingActionType: 'IPC',
+            ComplyingActionDescription:
+              'Migrated Industrial/Municipal Process Change (Includes Flow Reduction)',
+            ComplyingActionCategory: 'Direct Environmental Reduction',
+          },
+          {
+            ComplyingActionId: '2600054890',
+            ComplyingActionType: 'USE',
+            ComplyingActionDescription: 'Migrated Use Reduction',
+            ComplyingActionCategory: 'Direct Environmental Reduction',
+          },
+          {
+            ComplyingActionId: '2600805814',
+            ComplyingActionType: 'MDD',
+            ComplyingActionDescription: 'Migrated Data (Direct)',
+            ComplyingActionCategory: 'Direct Environmental Reduction',
+          },
+        ],
+        SupplementalEnvironmentalProjects: [
+          {
+            Category: 'EPP',
+            Description: 'Emergency Planning and Preparedness',
+            SEPId: '2424',
+            SEPText:
+              'Donate and deed property to Fire Protection District No. Two of Ward Four of Calcasieu Parish for construction of a new two-bay fire and emergency response station.',
+            SEPAmount: '$78,000',
+          },
+          {
+            Category: 'PRD',
+            Description: 'Pollution Reduction',
+            SEPId: '2425',
+            SEPText:
+              'Donate and deed parcel of land to be used as  green space  to Calcasieu Parish.  Land located in EJ community will not be developed for industrial use.',
+            SEPAmount: '$422,000',
+          },
+        ],
+        EnfConFacilities: [
+          {
+            FacilityFRSID: '110000449818',
+            FacilityName: 'AIR LIQUIDE AMERICA CORPORATION',
+            FacilityAddress: '57805 EVERGREEN ROAD',
+            FacilityCity: 'PLAQUEMINE',
+            FacilityState: 'LA',
+            FacilityZip: '70764',
+            SICCodes: '2813',
+            NAICSCodes: null,
+            ProgramID: '24212',
+            ProgramSystem: 'ICIS',
+            FacilityNoLongerExists: 'N',
+          },
+        ],
+        EnfConNPDESViolationsCount: '0',
+        EnfConNPDESViolationsDownloadURL:
+          'https://echodata.epa.gov/echo/case_rest_services.npdesvioenfconcl_download?p_enf_concl_id=28857',
+        EnfConNPDESViolations: [],
+      },
+    ],
+    CAEDDocuments: [],
+  },
+};
+
+/** `case_rest_services.get_case_report?p_id=99-9999-9999` — HTTP 200, a top-level Error and no Results. */
+export const CASE_REPORT_INVALID = {
+  Error: { ErrorMessage: 'Case Number or Activity Id 99-9999-9999 is invalid.' },
+};
+
+/** `sdw_rest_services.get_qid?qid=161&pageno=1` — the three rows, cut to the columns qcolumns=2,57 returns. */
+export const SDW_PAGE_ZIP_59901_CURRENT = {
+  Results: {
+    Message: 'Working',
+    QueryRows: '3',
+    QueryID: '161',
+    PageNo: '1',
+    WaterSystems: [
+      { PWSName: 'HOLBROOK ESTATES', PWSId: 'MT0005154', CurrVioFlag: '1' },
+      { PWSName: 'ROLLINS RESTAURANT  RV PARK', PWSId: 'MT0001027', CurrVioFlag: '1' },
+      { PWSName: 'SKY RANCH WATER ASSOCIATION', PWSId: 'MT0004198', CurrVioFlag: '1' },
     ],
   },
 };

@@ -17,6 +17,7 @@ import { triGetFacilityReleasesTool } from '@/mcp-server/tools/definitions/tri-g
 import { triSearchReleasesTool } from '@/mcp-server/tools/definitions/tri-search-releases.tool.js';
 import { waterSearchSystemsTool } from '@/mcp-server/tools/definitions/water-search-systems.tool.js';
 import { initDmapService } from '@/services/dmap/dmap-service.js';
+import { textOf } from './helpers.js';
 
 describe('TRI successful empty-result recovery', () => {
   afterEach(() => {
@@ -68,7 +69,7 @@ describe('TRI successful empty-result recovery', () => {
           if (tool === triSearchReleasesTool)
             expect(guidance.includes('Remove county')).toBe(optional);
           else expect(guidance).toContain('triFacilityIds');
-          const text = call.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n');
+          const text = textOf(call.content);
           const renderedText = new MarkdownIt()
             .parse(text, {})
             .flatMap((token) => token.children ?? [])
@@ -81,7 +82,7 @@ describe('TRI successful empty-result recovery', () => {
     );
 
     it(`${tool.name} declares no unreachable no_releases_found reason`, () => {
-      expect(tool.errors).toBeUndefined();
+      expect(tool.errors?.map((entry) => entry.reason)).not.toContain('no_releases_found');
     });
 
     it.each([1986, 2031])(
@@ -92,9 +93,7 @@ describe('TRI successful empty-result recovery', () => {
         expect(call.isError).toBe(true);
         expect(call.structuredContent).toMatchObject({ error: { code: -32602 } });
         expect(request).not.toHaveBeenCalled();
-        expect(
-          call.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n'),
-        ).toContain('year');
+        expect(textOf(call.content)).toContain('year');
       },
     );
   }
@@ -135,9 +134,7 @@ describe('EPA domain recovery contracts', () => {
       expect(result.structuredContent).toMatchObject({
         error: { code: -32007, data: { reason, recovery: { hint } } },
       });
-      const text = result.content
-        .flatMap((block) => (block.type === 'text' ? [block.text] : []))
-        .join('\n');
+      const text = textOf(result.content);
       expect(text).toContain(reason);
       expect(text).toContain(hint);
     },
