@@ -25,6 +25,8 @@ Use this guide when an investigation crosses EPA programs or compares facilities
 
 Discover the facility with `epa_echo_search_facilities`, then use `epa_echo_get_facility` to confirm its location and retrieve its compliance history. Use the profile's TRI IDs for `epa_tri_get_facility_releases`; a facility can have IDs from successive operators. Choose the IDs relevant to the operator and reporting period being investigated rather than assuming the newest ID represents its entire history.
 
+If the ECHO profile is unavailable, record the compliance gap and discover TRI IDs with `epa_tri_search_releases`; confirm the facility name and location before retrieving release detail.
+
 For a regional comparison, use `epa_tri_search_releases` with a common reporting year. Request the release breakdown when comparing routine emissions, check the returned county names, and narrow searches whose caps or notices leave coverage incomplete. Preserve the facility, chemical, year, and release category in the comparison so different filings do not become an unexplained facility total.
 
 Use `epa_echo_search_violations` for area-level enforcement discovery. For an already identified facility, use its profile's enforcement history; a regional case list is not an automatic join to the facilities returned by another search.
