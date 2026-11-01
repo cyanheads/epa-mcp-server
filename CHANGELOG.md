@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.7.0](changelog/0.7.x/0.7.0.md) — 2026-10-31 · ⚠️ Breaking
+
+Superfund site detail with contaminant associations and complete proximity searches.
+
 ## [0.6.0](changelog/0.6.x/0.6.0.md) — 2026-10-24 · ⚠️ Breaking
 
 Program-grouped tool names and complete, nearest-first Superfund proximity searches.
