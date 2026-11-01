@@ -188,9 +188,9 @@ describe('echoGetFacilityTool', () => {
       '**Quarters in Violation (3yr):** 12',
       '',
       '### Program Compliance',
-      '- **CAA:** No Violation Identified | Quarters in noncompliance: 0 of 12 | in significant noncompliance: 0 | Inspections: 5 | last 03/10/2026 | Informal actions: 3 | Formal actions: 1 | Penalties: $2,000 | 3-year window from 10/01/2023 | 5-year window from 10/10/2021 | through 09/30/2026',
-      '- **CWA:** Violation Identified | Quarters in noncompliance: 12 of 12 | in significant noncompliance: 0 | Inspections: 2 | last 07/14/2026 | 3-year window from 07/01/2023 | 5-year window from 10/10/2021 | through 06/30/2026',
-      '- **RCRA:** No Violation Identified | Quarters in noncompliance: 0 of 12 | in significant noncompliance: 0 | Inspections: 1 | last 12/07/2022 | Informal actions: 1 | 3-year window from 10/01/2023 | 5-year window from 10/10/2021 | through 09/30/2026',
+      '- **CAA:** No Violation Identified \\| Quarters in noncompliance: 0 of 12 \\| in significant noncompliance: 0 \\| Inspections: 5 \\| last 03/10/2026 \\| Informal actions: 3 \\| Formal actions: 1 \\| Penalties: $2,000 \\| 3-year window from 10/01/2023 \\| 5-year window from 10/10/2021 \\| through 09/30/2026',
+      '- **CWA:** Violation Identified \\| Quarters in noncompliance: 12 of 12 \\| in significant noncompliance: 0 \\| Inspections: 2 \\| last 07/14/2026 \\| 3-year window from 07/01/2023 \\| 5-year window from 10/10/2021 \\| through 06/30/2026',
+      '- **RCRA:** No Violation Identified \\| Quarters in noncompliance: 0 of 12 \\| in significant noncompliance: 0 \\| Inspections: 1 \\| last 12/07/2022 \\| Informal actions: 1 \\| 3-year window from 10/01/2023 \\| 5-year window from 10/10/2021 \\| through 09/30/2026',
       '',
       '### Inspections (3)',
       '- 07/14/2026 — CWA WA0031305 — Inspection/Evaluation: Base Program - Evaluation (IU) — State lead',
@@ -198,7 +198,7 @@ describe('echoGetFacilityTool', () => {
       '- 05/04/2023 — RCRA WAD988487583 — Facility Self Disclosure — State lead — No Violations Or Compliance Issues Were Found',
       '',
       '### Formal Enforcement Actions',
-      '- 06/16/2022 — CAA WAPSC0005303300006 — Administrative Order | Penalty: $2,000 | Case WAPSCAF000000000000000409 | Settled 06/16/2022 | Local lead',
+      '- 06/16/2022 — CAA WAPSC0005303300006 — Administrative Order \\| Penalty: $2,000 \\| Case WAPSCAF000000000000000409 \\| Settled 06/16/2022 \\| Local lead',
       '',
       '### Air (CAA) Compliance',
       '**Program ID:** WAPSC0005303300006',
@@ -342,12 +342,12 @@ describe('echoGetFacilityTool', () => {
     expect(lines).toContain(
       '**TRI Facility IDs:** 9867WSNRWD1981S (most recent first; for epa_tri_get_facility_releases)',
     );
-    expect(lines).toContain('- **RCRA:** Significant Noncomplier | Formal actions: 2');
+    expect(lines).toContain('- **RCRA:** Significant Noncomplier \\| Formal actions: 2');
     expect(lines).toContain(
       '- 02/12/2025 — RCRA WAD027470111 — Compliance Evaluation Inspection — State lead — Violations Or Compliance Issues Were Found',
     );
     expect(lines).toContain(
-      '- 02/12/2026 — RCRA WAD027470111 — FINAL PENALTY | Settled 02/12/2026 | State lead',
+      '- 02/12/2026 — RCRA WAD027470111 — FINAL PENALTY \\| Settled 02/12/2026 \\| State lead',
     );
     expect(text).not.toContain('Case ');
   });

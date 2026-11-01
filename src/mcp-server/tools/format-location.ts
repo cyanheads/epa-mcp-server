@@ -3,6 +3,8 @@
  * @module mcp-server/tools/format-location
  */
 
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
+
 interface LocatedRecord {
   city?: string | undefined;
   county?: string | undefined;
@@ -18,9 +20,12 @@ interface LocatedRecord {
 export function formatLocationLines(r: LocatedRecord): string[] {
   const lines: string[] = [];
   const address = [r.street, r.city, r.state, r.zip].filter(Boolean).join(', ');
-  if (address) lines.push(`**Location:** ${address}`);
-  if (r.county) lines.push(`**County:** ${r.county}${r.fipsCode ? ` (FIPS: ${r.fipsCode})` : ''}`);
-  else if (r.fipsCode) lines.push(`**County FIPS:** ${r.fipsCode}`);
+  if (address) lines.push(`**Location:** ${escapeMarkdownInline(address)}`);
+  if (r.county)
+    lines.push(
+      `**County:** ${escapeMarkdownInline(r.county)}${r.fipsCode ? ` (FIPS: ${escapeMarkdownInline(r.fipsCode)})` : ''}`,
+    );
+  else if (r.fipsCode) lines.push(`**County FIPS:** ${escapeMarkdownInline(r.fipsCode)}`);
   if (r.latitude !== undefined && r.longitude !== undefined) {
     lines.push(`**Coordinates:** ${r.latitude}, ${r.longitude}`);
   } else if (r.latitude !== undefined) {

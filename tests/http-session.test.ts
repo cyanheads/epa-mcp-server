@@ -58,6 +58,7 @@ const KEYLESS_TOOL_NAMES = [
   'epa_echo_search_facilities',
   'epa_echo_search_violations',
   'epa_ejscreen_get_scores',
+  'epa_superfund_get_site',
   'epa_superfund_search_sites',
   'epa_tri_get_facility_releases',
   'epa_tri_search_releases',

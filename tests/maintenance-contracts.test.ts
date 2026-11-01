@@ -6,6 +6,7 @@
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import MarkdownIt from 'markdown-it';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { airnowGetConditionsTool } from '@/mcp-server/tools/definitions/airnow-get-conditions.tool.js';
 import { echoSearchFacilitiesTool } from '@/mcp-server/tools/definitions/echo-search-facilities.tool.js';
@@ -68,7 +69,13 @@ describe('TRI successful empty-result recovery', () => {
             expect(guidance.includes('Remove county')).toBe(optional);
           else expect(guidance).toContain('triFacilityIds');
           const text = call.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n');
-          expect(text).toContain(structured.message);
+          const renderedText = new MarkdownIt()
+            .parse(text, {})
+            .flatMap((token) => token.children ?? [])
+            .filter((token) => token.type === 'text')
+            .map((token) => token.content)
+            .join('\n');
+          expect(renderedText).toContain(structured.message);
         }
       },
     );

@@ -2,12 +2,12 @@
   <h1>@cyanheads/epa-mcp-server</h1>
   <p><b>Search and retrieve EPA environmental data: facility compliance (ECHO), toxic releases (TRI), Superfund sites, drinking water systems, environmental-justice screening (EJScreen), and real-time air quality (AirNow). STDIO or Streamable HTTP.</b>
   </p>
-  <div>9 Tools • 2 Resources</div>
+  <div>10 Tools • 2 Resources</div>
 </div>
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.6.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/epa-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/epa-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/epa-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.6.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/epa-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.4.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/epa-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/epa-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -42,6 +42,7 @@ EPA environmental data across five federal programs — facility compliance (ECH
 | `epa_tri_get_facility_releases` | Per-chemical Toxic Release Inventory data for a single facility |
 | `epa_tri_search_releases` | Toxic Release Inventory records across facilities in a state or county |
 | `epa_superfund_search_sites` | Search Superfund (CERCLA/SEMS) sites by location or NPL listing status |
+| `epa_superfund_get_site` | Exact Superfund site record and all contaminant associations |
 | `epa_water_search_systems` | Search drinking water systems (SDWIS) by state or ZIP code |
 | `epa_ejscreen_get_scores` | EJScreen environmental-justice indicators for a point and buffer |
 
@@ -50,9 +51,9 @@ EPA environmental data across five federal programs — facility compliance (ECH
 | Resource | Description |
 |:---|:---|
 | `epa://facility/{registry_id}` | Full compliance profile for a facility by EPA Registry ID (same data as `epa_echo_get_facility`) |
-| `epa://superfund/{site_id}` | Superfund site record by SEMS site ID |
+| `epa://superfund/{site_id}` | Superfund site record and contaminant associations by SEMS site ID |
 
-All resource data is also reachable via tools — use `epa_echo_get_facility` and `epa_superfund_search_sites` for programmatic access in tool-only MCP clients.
+All resource data is also reachable via tools — use `epa_echo_get_facility` and `epa_superfund_get_site` for programmatic access in tool-only MCP clients.
 
 ## Capability reference
 
@@ -108,8 +109,18 @@ All resource data is also reachable via tools — use `epa_echo_get_facility` an
 ### `epa_superfund_search_sites` <sub>tool</sub>
 
 - Provide `state`/`city`/`zip_code`, or `latitude` + `longitude` + `radius_miles` (0.1–500); up to 200 sites (default 50)
-- Returns site identifiers, location, NPL, and cleanup status; `npl_status` filters listed, not-listed, proposed, or all (default)
+- Returns site identifiers, location, raw NPL code and source label, plus sparse non-NPL assessment, archive, EPA ID, and federal facility metadata. `npl_status` filters listed (F/A), not-listed (N), proposed (P), deleted (D), removed (R), withdrawn (W), or all (default)
+- `exclude_archived: true` requires SEMS `archived_ind=N` before pagination or proximity selection; the default retains all archive statuses. Assessment labels do not describe cleanup progress
 - Proximity searches page latitude/longitude candidates to exhaustion, apply exact distance, and return the nearest sites first. A `notice` says how many matching sites the result limit omitted; sites without coordinates cannot be located. All candidate pages share a 50-second deadline — narrow the radius or add filters if it times out
+
+---
+
+### `epa_superfund_get_site` <sub>tool</sub>
+
+- Provide a `site_id` from `epa_superfund_search_sites`, preserving leading zeros
+- Returns `{ site, contaminants }`: site metadata plus every recorded contaminant association, including medium, operable unit, action, and type code when available. Repeated chemicals and duplicate source rows are retained
+- An existing site with no associations returns `contaminants: []`; a missing site returns NotFound. Site and paged contaminant reads share one 50-second deadline; upstream failures remain errors
+- Associations describe EPA action/media records, not current exposure, concentrations, or current risk
 
 ---
 
@@ -139,7 +150,7 @@ All resource data is also reachable via tools — use `epa_echo_get_facility` an
 ### `epa://superfund/{site_id}` <sub>resource</sub>
 
 - `site_id` comes from `epa_superfund_search_sites`
-- Returns the Superfund site record; errors when no SEMS record resolves
+- Returns the same data as `epa_superfund_get_site`, with site fields at the top level and an additive `contaminants` array; errors when no SEMS record resolves
 
 ## Features
 
@@ -161,7 +172,7 @@ Agent-friendly output:
 
 ### Public Hosted Instance
 
-A public instance is available at `https://epa.caseyjhand.com/mcp` — no installation required. It runs without an AirNow key, so `epa_airnow_get_conditions` is not available there; the other 8 tools are. Point any MCP client at it via Streamable HTTP:
+A public instance is available at `https://epa.caseyjhand.com/mcp` — no installation required. It runs without an AirNow key, so `epa_airnow_get_conditions` is not available there; the other 9 tools are. Point any MCP client at it via Streamable HTTP:
 
 ```json
 {
@@ -176,7 +187,7 @@ A public instance is available at `https://epa.caseyjhand.com/mcp` — no instal
 
 ### Self-Hosted / Local
 
-Add the following to your MCP client configuration file. An AirNow API key is optional — set `AIRNOW_API_KEY` to enable `epa_airnow_get_conditions` (register free at [docs.airnowapi.org](https://docs.airnowapi.org/account/request/)); without it the server starts with the other 8 tools. ECHO, DMAP, and EJScreen tools work without authentication.
+Add the following to your MCP client configuration file. An AirNow API key is optional — set `AIRNOW_API_KEY` to enable `epa_airnow_get_conditions` (register free at [docs.airnowapi.org](https://docs.airnowapi.org/account/request/)); without it the server starts with the other 9 tools. ECHO, DMAP, and EJScreen tools work without authentication.
 
 ```json
 {
@@ -243,7 +254,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 AIRNOW_API_KEY=... bun run start:http
 ### Prerequisites
 
 - [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+); development and Docker use Bun v1.4.4.
-- (Optional) An AirNow API key to enable `epa_airnow_get_conditions` — register free at [docs.airnowapi.org/account/request](https://docs.airnowapi.org/account/request/). Without it the server runs the other 8 tools. ECHO, DMAP, and EJScreen tools require no API key.
+- (Optional) An AirNow API key to enable `epa_airnow_get_conditions` — register free at [docs.airnowapi.org/account/request](https://docs.airnowapi.org/account/request/). Without it the server runs the other 9 tools. ECHO, DMAP, and EJScreen tools require no API key.
 
 ### Installation
 
@@ -339,7 +350,7 @@ The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `
 |:---|:---|
 | `src/index.ts` | `createApp()` entry point — registers tools/resources and inits services. |
 | `src/config` | Server-specific environment variable parsing and validation with Zod. |
-| `src/mcp-server/tools` | Tool definitions (`*.tool.ts`). Nine tools across ECHO, DMAP, EJAM, and AirNow. |
+| `src/mcp-server/tools` | Tool definitions (`*.tool.ts`). Ten tools across ECHO, DMAP, EJAM, and AirNow. |
 | `src/mcp-server/resources` | Resource definitions (`*.resource.ts`). Facility and Superfund URI handlers. |
 | `src/services/echo` | ECHO REST API service layer — facility search, facility detail, enforcement cases. |
 | `src/services/dmap` | Envirofacts DMAP service layer — TRI releases, Superfund sites, drinking water systems. |

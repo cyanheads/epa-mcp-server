@@ -6,6 +6,8 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
+import { formatHeading } from '@/mcp-server/tools/format-heading.js';
 import { getAirNowService } from '@/services/airnow/airnow-service.js';
 import type { AirNowLocation, AirQualityArea } from '@/services/airnow/types.js';
 
@@ -46,10 +48,14 @@ export const airnowGetConditionsTool = tool('epa_airnow_get_conditions', {
     zip_code: z.string().optional().describe('5-digit US ZIP code for the location'),
     latitude: z
       .number()
+      .min(-90)
+      .max(90)
       .optional()
       .describe('Latitude in decimal degrees (use with longitude instead of zip_code)'),
     longitude: z
       .number()
+      .min(-180)
+      .max(180)
       .optional()
       .describe('Longitude in decimal degrees (use with latitude instead of zip_code)'),
     mode: z
@@ -273,20 +279,23 @@ export const airnowGetConditionsTool = tool('epa_airnow_get_conditions', {
     const lines: string[] = [
       `## Air Quality Index — ${result.mode === 'forecast' ? 'Forecast' : 'Current Observations'} (mode: ${result.mode})`,
     ];
-    if (result.message) lines.push(`\n> ${result.message}`);
+    if (result.message) lines.push(`\n> ${escapeMarkdownInline(result.message)}`);
 
     for (const area of result.observations) {
-      lines.push(`\n### ${area.reportingArea ?? 'Unknown Area'}`);
+      lines.push(`\n### ${formatHeading(area.reportingArea ?? 'Unknown Area')}`);
       const meta = [
-        area.stateCode && `**State:** ${area.stateCode}`,
-        area.reportingAreaCode && `**Reporting area code:** ${area.reportingAreaCode}`,
+        area.stateCode && `**State:** ${escapeMarkdownInline(area.stateCode)}`,
+        area.reportingAreaCode &&
+          `**Reporting area code:** ${escapeMarkdownInline(area.reportingAreaCode)}`,
       ].filter(Boolean);
       if (meta.length > 0) lines.push(meta.join(' | '));
       if (area.dateObserved || area.hourObserved) {
         const time = area.hourObserved
-          ? ` at ${area.hourObserved}${area.localTimeZone ? ` ${area.localTimeZone}` : ''}`
+          ? ` at ${escapeMarkdownInline(area.hourObserved)}${area.localTimeZone ? ` ${escapeMarkdownInline(area.localTimeZone)}` : ''}`
           : '';
-        lines.push(`**Observed:** ${area.dateObserved ?? 'date not reported'}${time}`);
+        lines.push(
+          `**Observed:** ${escapeMarkdownInline(area.dateObserved ?? 'date not reported')}${time}`,
+        );
       }
       for (const r of area.readings) {
         const label = r.dateValid ? `${r.dateValid} ${r.parameterName}` : r.parameterName;
@@ -298,7 +307,7 @@ export const airnowGetConditionsTool = tool('epa_airnow_get_conditions', {
         const categoryOnly = r.aqi === undefined ? ' (category only, no AQI number)' : '';
         const site =
           r.siteName || r.siteID
-            ? ` — ${[r.siteName, r.siteID && `site ${r.siteID}`].filter(Boolean).join(', ')}`
+            ? ` — ${escapeMarkdownInline([r.siteName, r.siteID && `site ${r.siteID}`].filter(Boolean).join(', '))}`
             : '';
         const details = [
           r.reportingAgency,
@@ -309,13 +318,14 @@ export const airnowGetConditionsTool = tool('epa_airnow_get_conditions', {
           r.actionDay !== undefined && `action day: ${r.actionDay ? 'yes' : 'no'}`,
         ].filter(Boolean);
         lines.push(
-          `- **${label}:** ${value}${category}${categoryOnly}${site}${details.length > 0 ? ` · ${details.join(' · ')}` : ''}`,
+          `- **${escapeMarkdownInline(label)}:** ${escapeMarkdownInline(value)}${category}${categoryOnly}${site}${details.length > 0 ? ` · ${escapeMarkdownInline(details.join(' · '))}` : ''}`,
         );
       }
-      if (area.discussion) lines.push(`\n**Discussion:**\n${area.discussion}`);
+      if (area.discussion)
+        lines.push(`\n**Discussion:**\n${escapeMarkdownInline(area.discussion)}`);
     }
 
-    lines.push(`\n**Source:** ${result.attribution}`);
+    lines.push(`\n**Source:** ${escapeMarkdownInline(result.attribution)}`);
     return [{ type: 'text', text: lines.join('\n') }];
   },
 });

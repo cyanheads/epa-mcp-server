@@ -61,22 +61,26 @@ export interface RawTriReleaseQty {
 
 /** Raw row from sems.envirofacts_site table. */
 export interface RawSemsSite {
+  archived_ind?: string | null;
   city_name?: string;
-  cleanup_status?: string;
   county_name?: string;
+  epa_id?: string | null;
+  federal_facility_ind?: string | null;
   /** Actual FIPS field name — county_fips_code does not exist */
   fips_code?: string;
   fk_ref_state_code?: string;
   /** Actual site name field — site_name is null in SEMS */
   name?: string;
+  non_npl_status_name?: string | null;
   npl_status_code?: string;
+  npl_status_name?: string | null;
   primary_latitude_decimal_val?: string | number;
   primary_longitude_decimal_val?: string | number;
   site_id?: string;
   /** Actual street address field — street_address_1 does not exist */
   street_addr_txt?: string;
   zip_code?: string;
-  [key: string]: string | number | undefined;
+  [key: string]: string | number | null | undefined;
 }
 
 /** Raw row from sdwis.water_system table. */
@@ -132,18 +136,37 @@ export interface TriRelease {
 
 /** Normalized Superfund site record. */
 export interface SuperfundSite {
+  archivedInd?: string;
   city?: string;
-  cleanupStatus?: string;
   county?: string;
+  epaId?: string;
+  federalFacilityInd?: string;
   fipsCode?: string;
   latitude?: number;
   longitude?: number;
   name: string;
+  nonNplStatusName?: string;
   nplStatus?: string;
+  nplStatusName?: string;
   siteId: string;
   state?: string;
   street?: string;
   zip?: string;
+}
+
+/** One SEMS contaminant association; repeated chemicals retain their action/media context. */
+export interface SuperfundContaminant {
+  action?: string;
+  medium?: string;
+  name?: string;
+  operableUnit?: string;
+  typeCode?: string;
+}
+
+/** Exact site lookup and every associated contaminant row. */
+export interface SuperfundSiteDetail {
+  contaminants: SuperfundContaminant[];
+  site: SuperfundSite;
 }
 
 /** Normalized drinking water system record. */

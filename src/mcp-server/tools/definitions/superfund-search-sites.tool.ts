@@ -5,13 +5,16 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { formatLocationLines } from '@/mcp-server/tools/format-location.js';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
+import { superfundSiteSchema } from '@/mcp-server/superfund-site-schema.js';
+import { formatNotice } from '@/mcp-server/tools/format-notice.js';
+import { formatSuperfundSite } from '@/mcp-server/tools/format-superfund-site.js';
 import { getDmapService } from '@/services/dmap/dmap-service.js';
 
 export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
   title: 'Search Superfund Sites',
   description:
-    'Superfund: Search Superfund (CERCLA/SEMS) sites by location or NPL listing status. Returns site name, EPA site ID, NPL status (listed/not listed/proposed), cleanup status, coordinates, and county FIPS code. Accepts either state/city/ZIP or latitude+longitude+radius for proximity searches, ordered nearest first. Proximity searches exhaust candidate pages within a shared 50-second deadline; narrow the radius or add filters if the search times out. Use for "are there Superfund sites near X" questions.',
+    'Superfund: Search Superfund (CERCLA/SEMS) sites by location or NPL listing status. Returns site identifiers, source NPL status labels, non-NPL assessment and archive metadata when available, coordinates, and county FIPS code. Accepts either state/city/ZIP or latitude+longitude+radius for proximity searches, ordered nearest first. Proximity searches match only sites with usable coordinates and share a 50-second deadline; narrow the radius or add filters if the search times out. Use epa_superfund_get_site with a returned siteId for contaminant associations.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -26,10 +29,14 @@ export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
     zip_code: z.string().optional().describe('5-digit ZIP code to filter sites'),
     latitude: z
       .number()
+      .min(-90)
+      .max(90)
       .optional()
       .describe('Latitude for proximity search (use with longitude and radius_miles)'),
     longitude: z
       .number()
+      .min(-180)
+      .max(180)
       .optional()
       .describe('Longitude for proximity search (use with latitude and radius_miles)'),
     radius_miles: z
@@ -41,10 +48,16 @@ export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
         'Search radius in miles from the given coordinates. Required when using latitude+longitude.',
       ),
     npl_status: z
-      .enum(['listed', 'not-listed', 'proposed', 'all'])
+      .enum(['listed', 'not-listed', 'proposed', 'deleted', 'removed', 'withdrawn', 'all'])
       .default('all')
       .describe(
-        'Filter by NPL (National Priorities List) status: listed=final NPL, not-listed=not on NPL, proposed=proposed for listing, all=include all',
+        'Filter by NPL status: listed=final or part of an NPL site (F,A), not-listed=N, proposed=P, deleted=D, removed=R, withdrawn=W, all=include all',
+      ),
+    exclude_archived: z
+      .boolean()
+      .default(false)
+      .describe(
+        'Exclude archived sites by requiring SEMS archived_ind=N; false retains all archive statuses',
       ),
     limit: z
       .number()
@@ -56,29 +69,7 @@ export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
   }),
 
   output: z.object({
-    sites: z
-      .array(
-        z
-          .object({
-            siteId: z.string().describe('EPA SEMS site identifier'),
-            name: z.string().describe('Superfund site name'),
-            street: z.string().optional().describe('Street address'),
-            city: z.string().optional().describe('City'),
-            state: z.string().optional().describe('2-letter state abbreviation'),
-            zip: z.string().optional().describe('ZIP code'),
-            county: z.string().optional().describe('County name'),
-            fipsCode: z.string().optional().describe('5-digit county FIPS code'),
-            nplStatus: z
-              .string()
-              .optional()
-              .describe('NPL status code: NPL=listed, N=not listed, P=proposed'),
-            cleanupStatus: z.string().optional().describe('Current cleanup stage or status'),
-            latitude: z.number().optional().describe('Latitude in decimal degrees'),
-            longitude: z.number().optional().describe('Longitude in decimal degrees'),
-          })
-          .describe('Superfund site record with location, NPL status, and cleanup status'),
-      )
-      .describe('Matching Superfund sites'),
+    sites: z.array(superfundSiteSchema).describe('Matching Superfund sites'),
     totalCount: z
       .number()
       .describe('Number of sites returned (may be less than available if limit applied)'),
@@ -93,11 +84,19 @@ export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
       .string()
       .optional()
       .describe(
-        'Present when the result limit omits nearby sites or a non-proximity punctuated city filter reaches its page limit. Explains which matching sites were not returned.',
+        'Proximity coordinate-coverage limitation, combined with any omitted-match notice; also present when a non-proximity punctuated city filter reaches its page limit.',
       ),
   },
+  enrichmentTrailer: { notice: { render: formatNotice } },
 
   errors: [
+    {
+      reason: 'incomplete_proximity',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'Only part of latitude, longitude, and radius_miles was supplied, except latitude+longitude without radius_miles.',
+      recovery:
+        'Provide latitude, longitude, and radius_miles together, or omit all three for an administrative search.',
+    },
     {
       reason: 'no_location_filter',
       code: JsonRpcErrorCode.ValidationError,
@@ -117,17 +116,27 @@ export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
     const hasGeo = !!input.state?.trim() || !!input.city?.trim() || !!input.zip_code?.trim();
     const hasLatLng = input.latitude !== undefined && input.longitude !== undefined;
 
+    if (hasLatLng && input.radius_miles === undefined) {
+      throw ctx.fail(
+        'radius_required',
+        'Provide radius_miles when using latitude+longitude for proximity search.',
+      );
+    }
+    const hasProximityInput =
+      input.latitude !== undefined ||
+      input.longitude !== undefined ||
+      input.radius_miles !== undefined;
+    if (hasProximityInput && (!hasLatLng || input.radius_miles === undefined)) {
+      throw ctx.fail(
+        'incomplete_proximity',
+        'Provide latitude, longitude, and radius_miles together for a proximity search.',
+      );
+    }
+
     if (!hasGeo && !hasLatLng) {
       throw ctx.fail(
         'no_location_filter',
         'At least one location filter is required to search Superfund sites.',
-      );
-    }
-
-    if (hasLatLng && !input.radius_miles) {
-      throw ctx.fail(
-        'radius_required',
-        'Provide radius_miles when using latitude+longitude for proximity search.',
       );
     }
 
@@ -149,6 +158,7 @@ export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
         ...(input.longitude !== undefined && { longitude: input.longitude }),
         ...(input.radius_miles !== undefined && { radiusMiles: input.radius_miles }),
         ...(input.npl_status !== 'all' && { nplStatus: input.npl_status }),
+        ...(input.exclude_archived && { excludeArchived: true }),
         limit: input.limit,
       },
       ctx,
@@ -174,14 +184,10 @@ export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
     const lines: string[] = [];
     lines.push(`## Superfund Sites`);
     lines.push(`**Found:** ${result.totalCount}`);
-    if (result.message) lines.push(`\n> ${result.message}`);
+    if (result.message) lines.push(`\n> ${escapeMarkdownInline(result.message)}`);
 
     for (const s of result.sites) {
-      lines.push(`\n### ${s.name}`);
-      lines.push(`**Site ID:** ${s.siteId}`);
-      lines.push(...formatLocationLines(s));
-      if (s.nplStatus) lines.push(`**NPL Status:** ${s.nplStatus}`);
-      if (s.cleanupStatus) lines.push(`**Cleanup Status:** ${s.cleanupStatus}`);
+      lines.push('', ...formatSuperfundSite(s));
     }
 
     return [{ type: 'text', text: lines.join('\n') }];

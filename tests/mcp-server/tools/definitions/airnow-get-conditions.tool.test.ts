@@ -78,6 +78,41 @@ const textOf = (blocks: { type: string; text?: string }[]) =>
   blocks.map((block) => block.text ?? '').join('\n');
 
 describe('airnowGetConditionsTool', () => {
+  it('preserves valid ZIP precedence over valid coordinates on both surfaces', async () => {
+    mockGetCurrent.mockResolvedValue({ areas: [seattleObservation] });
+    const result = await runToolContract(airnowGetConditionsTool, {
+      zip_code: '98101',
+      latitude: 0,
+      longitude: 0,
+    });
+    expect(mockGetCurrent).toHaveBeenCalledWith(
+      { kind: 'zip', zipCode: '98101' },
+      expect.anything(),
+    );
+    expect(result.structuredContent).toMatchObject({ observations: [seattleObservation] });
+    expect(textOf(result.content)).toContain('Seattle-Bellevue-Kent Valley');
+  });
+  it('puts schema coordinate rejection on both surfaces before ZIP lookup', async () => {
+    const result = await runToolContract(airnowGetConditionsTool, {
+      zip_code: '98101',
+      latitude: 91,
+    });
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.InvalidParams },
+    });
+    expect(textOf(result.content)).toContain('latitude');
+    expect(mockGetCurrent).not.toHaveBeenCalled();
+  });
+  it.each([
+    { latitude: -90.01 },
+    { latitude: 90.01 },
+    { longitude: -180.01 },
+    { longitude: 180.01 },
+  ])('rejects impossible coordinates even beside a valid ZIP: %j', (coordinates) => {
+    expect(
+      airnowGetConditionsTool.input.safeParse({ zip_code: '98101', ...coordinates }).success,
+    ).toBe(false);
+  });
   beforeEach(() => {
     vi.clearAllMocks();
   });

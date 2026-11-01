@@ -5,8 +5,11 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
+import { formatHeading } from '@/mcp-server/tools/format-heading.js';
 import { formatLbs } from '@/mcp-server/tools/format-lbs.js';
 import { formatLocationLines } from '@/mcp-server/tools/format-location.js';
+import { formatNotice } from '@/mcp-server/tools/format-notice.js';
 import { getEchoService } from '@/services/echo/echo-service.js';
 
 export const echoGetFacilityTool = tool('epa_echo_get_facility', {
@@ -273,6 +276,7 @@ export const echoGetFacilityTool = tool('epa_echo_get_facility', {
         "Present when ECHO's facility search request failed, so complianceStatus and compliance are missing; every other field comes from the facility's detailed report.",
       ),
   },
+  enrichmentTrailer: { notice: { render: formatNotice } },
 
   errors: [
     {
@@ -301,11 +305,12 @@ export const echoGetFacilityTool = tool('epa_echo_get_facility', {
 
   format: (result) => {
     const lines: string[] = [];
-    lines.push(`## ${result.name}`);
-    lines.push(`**Registry ID:** ${result.registryId}`);
+    lines.push(`## ${formatHeading(result.name)}`);
+    lines.push(`**Registry ID:** ${escapeMarkdownInline(result.registryId)}`);
 
     lines.push(...formatLocationLines(result));
-    if (result.complianceStatus) lines.push(`**Compliance Status:** ${result.complianceStatus}`);
+    if (result.complianceStatus)
+      lines.push(`**Compliance Status:** ${escapeMarkdownInline(result.complianceStatus)}`);
 
     const activePrograms = Object.entries(result.programs)
       .filter(([, v]) => v)
@@ -315,7 +320,7 @@ export const echoGetFacilityTool = tool('epa_echo_get_facility', {
 
     if (result.triFacilityIds.length > 0) {
       lines.push(
-        `**TRI Facility IDs:** ${result.triFacilityIds.join(', ')} (most recent first; for epa_tri_get_facility_releases)`,
+        `**TRI Facility IDs:** ${escapeMarkdownInline(result.triFacilityIds.join(', '))} (most recent first; for epa_tri_get_facility_releases)`,
       );
     }
     if (result.triReleasesTransfersInLbs !== undefined) {
@@ -331,9 +336,11 @@ export const echoGetFacilityTool = tool('epa_echo_get_facility', {
     if (result.compliance) {
       lines.push('\n### Compliance Summary');
       if (result.compliance.mediaStatusCode)
-        lines.push(`**Status Code:** ${result.compliance.mediaStatusCode}`);
+        lines.push(`**Status Code:** ${escapeMarkdownInline(result.compliance.mediaStatusCode)}`);
       if (result.compliance.mediaStatusDescription)
-        lines.push(`**Description:** ${result.compliance.mediaStatusDescription}`);
+        lines.push(
+          `**Description:** ${escapeMarkdownInline(result.compliance.mediaStatusDescription)}`,
+        );
       if (result.compliance.quartersInViolation !== undefined) {
         lines.push(`**Quarters in Violation (3yr):** ${result.compliance.quartersInViolation}`);
       }
@@ -358,7 +365,9 @@ export const echoGetFacilityTool = tool('epa_echo_get_facility', {
           p.fiveYearPeriodStart && `5-year window from ${p.fiveYearPeriodStart}`,
           p.periodEnd && `through ${p.periodEnd}`,
         ].filter(Boolean);
-        lines.push(`- **${p.statute}:** ${parts.join(' | ') || 'no summary values'}`);
+        lines.push(
+          `- **${escapeMarkdownInline(p.statute)}:** ${escapeMarkdownInline(parts.join(' | ') || 'no summary values')}`,
+        );
       }
     }
 
@@ -378,7 +387,7 @@ export const echoGetFacilityTool = tool('epa_echo_get_facility', {
         ]
           .filter(Boolean)
           .join(' — ');
-        lines.push(`- ${parts || 'Inspection record (no detail)'}`);
+        lines.push(`- ${escapeMarkdownInline(parts || 'Inspection record (no detail)')}`);
       }
     }
 
@@ -398,26 +407,30 @@ export const echoGetFacilityTool = tool('epa_echo_get_facility', {
         ]
           .filter(Boolean)
           .join(' | ');
-        lines.push(`- ${where ? `${where} — ` : ''}${details}`);
+        lines.push(
+          `- ${where ? `${escapeMarkdownInline(where)} — ` : ''}${escapeMarkdownInline(details)}`,
+        );
       }
     }
 
     if (result.airCompliance) {
       lines.push('\n### Air (CAA) Compliance');
       if (result.airCompliance.programId)
-        lines.push(`**Program ID:** ${result.airCompliance.programId}`);
-      if (result.airCompliance.status) lines.push(`**Status:** ${result.airCompliance.status}`);
+        lines.push(`**Program ID:** ${escapeMarkdownInline(result.airCompliance.programId)}`);
+      if (result.airCompliance.status)
+        lines.push(`**Status:** ${escapeMarkdownInline(result.airCompliance.status)}`);
       if (result.airCompliance.statusDate)
-        lines.push(`**Status Date:** ${result.airCompliance.statusDate}`);
+        lines.push(`**Status Date:** ${escapeMarkdownInline(result.airCompliance.statusDate)}`);
     }
 
     if (result.waterCompliance) {
       lines.push('\n### Water (CWA) Compliance');
       if (result.waterCompliance.programId)
-        lines.push(`**Program ID:** ${result.waterCompliance.programId}`);
-      if (result.waterCompliance.status) lines.push(`**Status:** ${result.waterCompliance.status}`);
+        lines.push(`**Program ID:** ${escapeMarkdownInline(result.waterCompliance.programId)}`);
+      if (result.waterCompliance.status)
+        lines.push(`**Status:** ${escapeMarkdownInline(result.waterCompliance.status)}`);
       if (result.waterCompliance.permitId)
-        lines.push(`**NPDES Permit:** ${result.waterCompliance.permitId}`);
+        lines.push(`**NPDES Permit:** ${escapeMarkdownInline(result.waterCompliance.permitId)}`);
     }
 
     return [{ type: 'text', text: lines.join('\n') }];

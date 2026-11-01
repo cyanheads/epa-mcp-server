@@ -3,16 +3,16 @@
  * @module tests/mcp-server/resources/definitions/superfund-site.resource.test
  */
 
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, notFound } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { superfundSiteResource } from '@/mcp-server/resources/definitions/superfund-site.resource.js';
 
-const mockSearchSuperfundById = vi.fn();
+const mockGetSuperfundSite = vi.fn();
 
 vi.mock('@/services/dmap/dmap-service.js', () => ({
   getDmapService: () => ({
-    searchSuperfundById: mockSearchSuperfundById,
+    getSuperfundSite: mockGetSuperfundSite,
     searchSuperfund: vi.fn(),
     getTriReleases: vi.fn(),
     searchTriReleases: vi.fn(),
@@ -28,8 +28,8 @@ const hanfordSite = {
   zip: '99352',
   county: 'BENTON',
   fipsCode: '53005',
-  nplStatus: 'NPL',
-  cleanupStatus: 'Site Assessment',
+  nplStatus: 'F',
+  nplStatusName: 'Currently on the Final NPL',
   latitude: 46.652,
   longitude: -119.49,
 };
@@ -40,18 +40,28 @@ describe('superfundSiteResource', () => {
   });
 
   it('returns site when found by direct site ID query', async () => {
-    mockSearchSuperfundById.mockResolvedValue([hanfordSite]);
-    const ctx = createMockContext({ tenantId: 'test-tenant' });
+    mockGetSuperfundSite.mockResolvedValue({ site: hanfordSite, contaminants: [] });
+    const ctx = createMockContext({
+      tenantId: 'test-tenant',
+      errors: superfundSiteResource.errors,
+    });
     const params = superfundSiteResource.params!.parse({ site_id: 'WA1890090003' });
     const result = await superfundSiteResource.handler(params, ctx);
-    expect(result).toEqual(hanfordSite);
-    expect(mockSearchSuperfundById).toHaveBeenCalledTimes(1);
-    expect(mockSearchSuperfundById).toHaveBeenCalledWith('WA1890090003', ctx);
+    expect(result).toEqual({ ...hanfordSite, contaminants: [] });
+    expect(mockGetSuperfundSite).toHaveBeenCalledTimes(1);
+    expect(mockGetSuperfundSite).toHaveBeenCalledWith('WA1890090003', ctx);
   });
 
   it('throws NotFound when site not found', async () => {
-    mockSearchSuperfundById.mockResolvedValue([]);
-    const ctx = createMockContext({ tenantId: 'test-tenant' });
+    mockGetSuperfundSite.mockRejectedValue(
+      notFound('No Superfund site found with site ID "WA9999NOTREAL".', {
+        siteId: 'WA9999NOTREAL',
+      }),
+    );
+    const ctx = createMockContext({
+      tenantId: 'test-tenant',
+      errors: superfundSiteResource.errors,
+    });
     const params = superfundSiteResource.params!.parse({ site_id: 'WA9999NOTREAL' });
     await expect(superfundSiteResource.handler(params, ctx)).rejects.toMatchObject({
       code: JsonRpcErrorCode.NotFound,
@@ -61,28 +71,39 @@ describe('superfundSiteResource', () => {
   });
 
   it('throws NotFound for numeric site IDs (no state prefix)', async () => {
-    mockSearchSuperfundById.mockResolvedValue([]);
-    const ctx = createMockContext({ tenantId: 'test-tenant' });
+    mockGetSuperfundSite.mockRejectedValue(notFound('No site found'));
+    const ctx = createMockContext({
+      tenantId: 'test-tenant',
+      errors: superfundSiteResource.errors,
+    });
     const params = superfundSiteResource.params!.parse({ site_id: '0200048' });
     await expect(superfundSiteResource.handler(params, ctx)).rejects.toMatchObject({
       code: JsonRpcErrorCode.NotFound,
     });
-    expect(mockSearchSuperfundById).toHaveBeenCalledWith('0200048', expect.anything());
+    expect(mockGetSuperfundSite).toHaveBeenCalledWith('0200048', expect.anything());
   });
 
   it('propagates service errors upward', async () => {
-    mockSearchSuperfundById.mockRejectedValue(new Error('Service unavailable'));
-    const ctx = createMockContext({ tenantId: 'test-tenant' });
+    mockGetSuperfundSite.mockRejectedValue(new Error('Service unavailable'));
+    const ctx = createMockContext({
+      tenantId: 'test-tenant',
+      errors: superfundSiteResource.errors,
+    });
     const params = superfundSiteResource.params!.parse({ site_id: 'WA1234' });
     await expect(superfundSiteResource.handler(params, ctx)).rejects.toThrow('Service unavailable');
   });
 
-  it('returns first result when multiple sites returned', async () => {
-    const otherSite = { ...hanfordSite, siteId: 'WA9999', name: 'OTHER SITE' };
-    mockSearchSuperfundById.mockResolvedValue([hanfordSite, otherSite]);
-    const ctx = createMockContext({ tenantId: 'test-tenant' });
+  it('retains contaminant associations beside top-level site fields', async () => {
+    mockGetSuperfundSite.mockResolvedValue({
+      site: hanfordSite,
+      contaminants: [{ name: 'ARSENIC' }],
+    });
+    const ctx = createMockContext({
+      tenantId: 'test-tenant',
+      errors: superfundSiteResource.errors,
+    });
     const params = superfundSiteResource.params!.parse({ site_id: 'WA1890090003' });
     const result = await superfundSiteResource.handler(params, ctx);
-    expect(result).toMatchObject({ siteId: 'WA1890090003' });
+    expect(result).toMatchObject({ siteId: 'WA1890090003', contaminants: [{ name: 'ARSENIC' }] });
   });
 });

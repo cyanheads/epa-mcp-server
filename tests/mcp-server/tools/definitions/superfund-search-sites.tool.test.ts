@@ -27,13 +27,39 @@ const hanfordSite = {
   zip: '99352',
   county: 'BENTON',
   fipsCode: '53005',
-  nplStatus: 'NPL',
-  cleanupStatus: 'Site Assessment',
+  nplStatus: 'F',
+  nplStatusName: 'Currently on the Final NPL',
   latitude: 46.652,
   longitude: -119.49,
 };
 
 describe('superfundSearchSitesTool', () => {
+  it.each([
+    { latitude: -90.01 },
+    { latitude: 90.01 },
+    { longitude: -180.01 },
+    { longitude: 180.01 },
+  ])('rejects impossible supplied coordinates %j', (coordinates) => {
+    expect(superfundSearchSitesTool.input.safeParse({ state: 'WA', ...coordinates }).success).toBe(
+      false,
+    );
+  });
+  it.each([
+    [0, 0],
+    [-90, -180],
+    [90, 180],
+  ])('accepts valid coordinate endpoints %s,%s', async (latitude, longitude) => {
+    mockSearchSuperfund.mockResolvedValue([]);
+    const input = superfundSearchSitesTool.input.parse({ latitude, longitude, radius_miles: 1 });
+    await superfundSearchSitesTool.handler(
+      input,
+      createMockContext({ errors: superfundSearchSitesTool.errors }),
+    );
+    expect(mockSearchSuperfund).toHaveBeenCalledWith(
+      expect.objectContaining({ latitude, longitude, radiusMiles: 1 }),
+      expect.anything(),
+    );
+  });
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -141,8 +167,8 @@ describe('superfundSearchSitesTool', () => {
       '**Location:** RICHLAND, RICHLAND, WA, 99352',
       '**County:** BENTON (FIPS: 53005)',
       '**Coordinates:** 46.652, -119.49',
-      '**NPL Status:** NPL',
-      '**Cleanup Status:** Site Assessment',
+      '**NPL Status:** F',
+      '**NPL Status Name:** Currently on the Final NPL',
     ]) {
       expect(lines).toContain(line);
     }

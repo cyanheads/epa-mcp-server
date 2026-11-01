@@ -1,0 +1,30 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "epa-mcp-server",
+  "version": "0.6.0",
+  "description": "Search and retrieve EPA environmental data: facility compliance (ECHO), toxic releases (TRI), Superfund sites, drinking water systems, environmental-justice screening (EJScreen), and real-time air quality (AirNow). STDIO or Streamable HTTP.",
+  "author": {
+    "name": "Casey Hand",
+    "email": "casey@caseyjhand.com",
+    "url": "https://caseyjhand.com"
+  },
+  "homepage": "https://github.com/cyanheads/epa-mcp-server#readme",
+  "repository": "https://github.com/cyanheads/epa-mcp-server",
+  "license": "Apache-2.0",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "stdio",
+    "streamable-http",
+    "epa",
+    "environmental",
+    "air-quality",
+    "toxic-release-inventory",
+    "superfund",
+    "drinking-water",
+    "compliance",
+    "echo-epa",
+    "airnow"
+  ]
+}

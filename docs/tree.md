@@ -1,6 +1,6 @@
 # epa-mcp-server - Directory Structure
 
-Generated on: 2026-10-24 11:38:02
+Generated on: 2026-11-01 05:26:56
 
 ```text
 epa-mcp-server/
@@ -42,6 +42,8 @@ epa-mcp-server/
 │   ├── add-resource/
 │   │   └── SKILL.md
 │   ├── add-service/
+│   │   └── SKILL.md
+│   ├── add-skill/
 │   │   └── SKILL.md
 │   ├── add-test/
 │   │   └── SKILL.md
@@ -139,6 +141,9 @@ epa-mcp-server/
 │   ├── prune-musl-packages.ts
 │   ├── release-github.ts
 │   └── tree.ts
+├── skills/
+│   └── epa-guide/
+│       └── SKILL.md
 ├── src/
 │   ├── config/
 │   │   └── server-config.ts
@@ -150,21 +155,27 @@ epa-mcp-server/
 │   │   │       ├── facility.resource.ts
 │   │   │       ├── index.ts
 │   │   │       └── superfund-site.resource.ts
-│   │   └── tools/
-│   │       ├── definitions/
-│   │       │   ├── airnow-get-conditions.tool.ts
-│   │       │   ├── echo-get-facility.tool.ts
-│   │       │   ├── echo-search-facilities.tool.ts
-│   │       │   ├── echo-search-violations.tool.ts
-│   │       │   ├── ejscreen-get-scores.tool.ts
-│   │       │   ├── index.ts
-│   │       │   ├── superfund-search-sites.tool.ts
-│   │       │   ├── tri-get-facility-releases.tool.ts
-│   │       │   ├── tri-search-releases.tool.ts
-│   │       │   └── water-search-systems.tool.ts
-│   │       ├── format-lbs.ts
-│   │       ├── format-location.ts
-│   │       └── format-tri-release.ts
+│   │   ├── tools/
+│   │   │   ├── definitions/
+│   │   │   │   ├── airnow-get-conditions.tool.ts
+│   │   │   │   ├── echo-get-facility.tool.ts
+│   │   │   │   ├── echo-search-facilities.tool.ts
+│   │   │   │   ├── echo-search-violations.tool.ts
+│   │   │   │   ├── ejscreen-get-scores.tool.ts
+│   │   │   │   ├── index.ts
+│   │   │   │   ├── superfund-get-site.tool.ts
+│   │   │   │   ├── superfund-search-sites.tool.ts
+│   │   │   │   ├── tri-get-facility-releases.tool.ts
+│   │   │   │   ├── tri-search-releases.tool.ts
+│   │   │   │   └── water-search-systems.tool.ts
+│   │   │   ├── format-heading.ts
+│   │   │   ├── format-lbs.ts
+│   │   │   ├── format-location.ts
+│   │   │   ├── format-notice.ts
+│   │   │   ├── format-superfund-site.ts
+│   │   │   └── format-tri-release.ts
+│   │   ├── superfund-contaminants-schema.ts
+│   │   └── superfund-site-schema.ts
 │   ├── services/
 │   │   ├── airnow/
 │   │   │   ├── airnow-service.ts
@@ -189,19 +200,22 @@ epa-mcp-server/
 │   │   │       ├── facility.resource.test.ts
 │   │   │       └── superfund-site.resource.test.ts
 │   │   └── tools/
-│   │       └── definitions/
-│   │           ├── airnow-get-conditions.tool.test.ts
-│   │           ├── echo-get-facility.tool.test.ts
-│   │           ├── echo-search-facilities.tool.test.ts
-│   │           ├── echo-search-violations.tool.test.ts
-│   │           ├── ejscreen-get-scores.tool.test.ts
-│   │           ├── superfund-search-sites.tool.test.ts
-│   │           ├── tool-definitions.test.ts
-│   │           ├── tri-get-facility-releases.tool.test.ts
-│   │           ├── tri-search-releases.tool.test.ts
-│   │           └── water-search-systems.tool.test.ts
+│   │       ├── definitions/
+│   │       │   ├── airnow-get-conditions.tool.test.ts
+│   │       │   ├── echo-get-facility.tool.test.ts
+│   │       │   ├── echo-search-facilities.tool.test.ts
+│   │       │   ├── echo-search-violations.tool.test.ts
+│   │       │   ├── ejscreen-get-scores.tool.test.ts
+│   │       │   ├── superfund-search-sites.tool.test.ts
+│   │       │   ├── tool-definitions.test.ts
+│   │       │   ├── tri-get-facility-releases.tool.test.ts
+│   │       │   ├── tri-search-releases.tool.test.ts
+│   │       │   └── water-search-systems.tool.test.ts
+│   │       └── markdown-output.test.ts
 │   ├── prompts/
 │   ├── resources/
+│   ├── scripts/
+│   │   └── bundle-agent-docs.test.ts
 │   ├── services/
 │   │   ├── airnow/
 │   │   │   ├── airnow-fixtures.ts
@@ -210,7 +224,9 @@ epa-mcp-server/
 │   │   │   ├── fixtures/
 │   │   │   │   ├── newark-superfund-coordinates.json
 │   │   │   │   └── seattle-superfund-coordinates.json
-│   │   │   └── dmap-service.test.ts
+│   │   │   ├── dmap-service.test.ts
+│   │   │   ├── proximity-contract.test.ts
+│   │   │   └── superfund-detail.test.ts
 │   │   ├── echo/
 │   │   │   ├── echo-fixtures.ts
 │   │   │   └── echo-service.test.ts
@@ -219,7 +235,8 @@ epa-mcp-server/
 │   │   └── error-responses.test.ts
 │   ├── tools/
 │   ├── http-session.test.ts
-│   └── maintenance-contracts.test.ts
+│   ├── maintenance-contracts.test.ts
+│   └── startup-env.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitattributes
@@ -236,7 +253,9 @@ epa-mcp-server/
 ├── Dockerfile
 ├── LICENSE
 ├── manifest.json
+├── mcp.json
 ├── package.json
+├── plugin.json
 ├── README.md
 ├── server.json
 ├── tsconfig.build.json

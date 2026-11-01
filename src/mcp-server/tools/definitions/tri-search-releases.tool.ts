@@ -4,6 +4,9 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
+import { formatHeading } from '@/mcp-server/tools/format-heading.js';
+import { formatNotice } from '@/mcp-server/tools/format-notice.js';
 import { formatTriReleaseLines } from '@/mcp-server/tools/format-tri-release.js';
 import { getDmapService } from '@/services/dmap/dmap-service.js';
 
@@ -149,6 +152,7 @@ export const triSearchReleasesTool = tool('epa_tri_search_releases', {
         'Present when a punctuated county or chemical_name filter read its page limit before finding limit matches spelled as given, so more matching records may exist.',
       ),
   },
+  enrichmentTrailer: { notice: { render: formatNotice } },
 
   async handler(input, ctx) {
     ctx.log.info('epa_tri_search_releases', {
@@ -209,14 +213,16 @@ export const triSearchReleasesTool = tool('epa_tri_search_releases', {
 
   format: (result) => {
     const lines: string[] = [];
-    lines.push(`## TRI Releases — ${result.state}`);
+    lines.push(`## TRI Releases — ${formatHeading(result.state)}`);
     lines.push(`**Records:** ${result.releases.length}`);
-    if (result.message) lines.push(`\n> ${result.message}`);
+    if (result.message) lines.push(`\n> ${escapeMarkdownInline(result.message)}`);
 
     for (const r of result.releases) {
       const facilityLabel = r.facilityName ? `${r.facilityName} (${r.facilityId})` : r.facilityId;
-      lines.push(`\n### ${r.chemicalName} — ${facilityLabel} (${r.reportingYear})`);
-      if (r.countyName) lines.push(`**County:** ${r.countyName}`);
+      lines.push(
+        `\n### ${formatHeading(r.chemicalName)} — ${formatHeading(facilityLabel)} (${r.reportingYear})`,
+      );
+      if (r.countyName) lines.push(`**County:** ${escapeMarkdownInline(r.countyName)}`);
       lines.push(...formatTriReleaseLines(r));
     }
 

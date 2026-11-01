@@ -4,14 +4,26 @@
  */
 
 import { resource, z } from '@cyanheads/mcp-ts-core';
-import { notFound } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { superfundContaminantsSchema } from '@/mcp-server/superfund-contaminants-schema.js';
+import { superfundSiteSchema } from '@/mcp-server/superfund-site-schema.js';
 import { getDmapService } from '@/services/dmap/dmap-service.js';
 
 export const superfundSiteResource = resource('epa://superfund/{site_id}', {
   name: 'epa-superfund-site',
   description:
-    'Superfund site record from EPA SEMS by site ID. Returns NPL status, cleanup status, location, and coordinates.',
+    'Superfund site record from EPA SEMS by exact site ID. Returns source status and assessment metadata, location, coordinates, and every contaminant association. Associations do not establish current exposure or concentrations.',
   mimeType: 'application/json',
+  output: superfundSiteSchema.extend({ contaminants: superfundContaminantsSchema }),
+  errors: [
+    {
+      reason: 'site_not_found',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'No SEMS site matches the exact ID.',
+      recovery: 'Use epa_superfund_search_sites to discover valid SEMS site IDs and retry.',
+      thrownBy: 'service',
+    },
+  ],
   params: z.object({
     site_id: z
       .string()
@@ -21,17 +33,7 @@ export const superfundSiteResource = resource('epa://superfund/{site_id}', {
   async handler(params, ctx) {
     ctx.log.info('epa://superfund resource', { siteId: params.site_id });
 
-    // DMAP supports direct column equality filters — use site_id/equals/{id} directly
-    const sites = await getDmapService().searchSuperfundById(params.site_id, ctx);
-    const site = sites[0];
-
-    if (!site) {
-      throw notFound(
-        `No Superfund site found with site ID "${params.site_id}". Use epa_superfund_search_sites to discover valid site IDs.`,
-        { siteId: params.site_id },
-      );
-    }
-
-    return site;
+    const { site, contaminants } = await getDmapService().getSuperfundSite(params.site_id, ctx);
+    return { ...site, contaminants };
   },
 });

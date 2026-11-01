@@ -5,6 +5,9 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
+import { formatHeading } from '@/mcp-server/tools/format-heading.js';
+import { formatNotice } from '@/mcp-server/tools/format-notice.js';
 import { getDmapService } from '@/services/dmap/dmap-service.js';
 
 export const waterSearchSystemsTool = tool('epa_water_search_systems', {
@@ -110,6 +113,7 @@ export const waterSearchSystemsTool = tool('epa_water_search_systems', {
         'Present when the has_violation check read only part of what it needed — the first 1,000 open violation records for the state, the first 1,000 systems in the ZIP, or the first 1,000 open violation records for a group of the ZIP’s systems — so violating systems outside that part may be missing from the results.',
       ),
   },
+  enrichmentTrailer: { notice: { render: formatNotice } },
 
   errors: [
     {
@@ -167,18 +171,19 @@ export const waterSearchSystemsTool = tool('epa_water_search_systems', {
     const lines: string[] = [];
     lines.push(`## Drinking Water Systems`);
     lines.push(`**Found:** ${result.totalCount}`);
-    if (result.message) lines.push(`\n> ${result.message}`);
+    if (result.message) lines.push(`\n> ${escapeMarkdownInline(result.message)}`);
 
     for (const s of result.systems) {
       const violationFlag = s.hasViolation === true ? ' ⚠️ VIOLATION' : '';
-      lines.push(`\n### ${s.name}${violationFlag}`);
-      lines.push(`**PWSID:** ${s.pwsid}`);
+      lines.push(`\n### ${formatHeading(s.name)}${violationFlag}`);
+      lines.push(`**PWSID:** ${escapeMarkdownInline(s.pwsid)}`);
       const location = [s.city, s.state, s.zip].filter(Boolean).join(', ');
-      if (location) lines.push(`**Location:** ${location}`);
-      if (s.type) lines.push(`**Type:** ${s.type}`);
+      if (location) lines.push(`**Location:** ${escapeMarkdownInline(location)}`);
+      if (s.type) lines.push(`**Type:** ${escapeMarkdownInline(s.type)}`);
       if (s.populationServed !== undefined)
         lines.push(`**Population Served:** ${s.populationServed.toLocaleString()}`);
-      if (s.primarySourceCode) lines.push(`**Primary Source:** ${s.primarySourceCode}`);
+      if (s.primarySourceCode)
+        lines.push(`**Primary Source:** ${escapeMarkdownInline(s.primarySourceCode)}`);
       if (s.hasViolation !== undefined)
         lines.push(`**Open Violation:** ${s.hasViolation ? 'Yes' : 'No'}`);
       if (s.isActive !== undefined) lines.push(`**Active:** ${s.isActive ? 'Yes' : 'No'}`);

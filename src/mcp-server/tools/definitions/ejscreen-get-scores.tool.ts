@@ -6,6 +6,9 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline, markdownLink } from '@cyanheads/mcp-ts-core/utils';
+import { formatHeading } from '@/mcp-server/tools/format-heading.js';
+import { formatNotice } from '@/mcp-server/tools/format-notice.js';
 import { getEjscreenService } from '@/services/ejscreen/ejscreen-service.js';
 
 /** Miles-per-kilometer conversion factor. */
@@ -196,6 +199,7 @@ export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
         'Guidance when the point is outside EJScreen coverage and no indicators were returned.',
       ),
   },
+  enrichmentTrailer: { notice: { render: formatNotice } },
 
   errors: [
     {
@@ -257,22 +261,24 @@ export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
     const loc = result.location;
     const place = loc.stateName ?? loc.state;
     lines.push(
-      `## EJScreen Environmental Justice — ${loc.latitude}, ${loc.longitude}${place ? ` (${place})` : ''}`,
+      `## EJScreen Environmental Justice — ${loc.latitude}, ${loc.longitude}${place ? ` (${formatHeading(place)})` : ''}`,
     );
     lines.push(`**Buffer:** ${loc.bufferMiles} miles`);
-    if (loc.state) lines.push(`**State:** ${loc.state}`);
-    if (loc.stateName) lines.push(`**State name:** ${loc.stateName}`);
+    if (loc.state) lines.push(`**State:** ${escapeMarkdownInline(loc.state)}`);
+    if (loc.stateName) lines.push(`**State name:** ${escapeMarkdownInline(loc.stateName)}`);
     if (loc.population !== undefined) lines.push(`**Population in buffer:** ${loc.population}`);
     if (loc.blockGroupCount !== undefined) {
       lines.push(`**Block groups intersected:** ${loc.blockGroupCount}`);
     }
     lines.push(`**Coverage valid:** ${result.coverage.valid ? 'yes' : 'no'}`);
-    if (result.coverage.note) lines.push(`> ${result.coverage.note}`);
+    if (result.coverage.note) lines.push(`> ${escapeMarkdownInline(result.coverage.note)}`);
 
     if (result.environmental.length > 0) {
       lines.push('\n### Environmental indicators');
       for (const e of result.environmental) {
-        const parts = [`**${e.label}** (\`${e.code}\`): ${e.value}${e.unit ? ` ${e.unit}` : ''}`];
+        const parts = [
+          `**${escapeMarkdownInline(e.label)}** (\`${e.code}\`): ${e.value}${e.unit ? ` ${escapeMarkdownInline(e.unit)}` : ''}`,
+        ];
         if (e.usPercentile !== undefined) parts.push(`US pctile ${e.usPercentile}`);
         if (e.statePercentile !== undefined) parts.push(`state pctile ${e.statePercentile}`);
         if (e.ejIndex !== undefined) parts.push(`EJ Index ${e.ejIndex}`);
@@ -289,7 +295,7 @@ export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
     if (result.demographic.length > 0) {
       lines.push('\n### Demographic indicators');
       for (const d of result.demographic) {
-        const parts = [`**${d.label}** (\`${d.code}\`): ${d.percent}%`];
+        const parts = [`**${escapeMarkdownInline(d.label)}** (\`${d.code}\`): ${d.percent}%`];
         if (d.usPercentile !== undefined) parts.push(`US pctile ${d.usPercentile}`);
         if (d.statePercentile !== undefined) parts.push(`state pctile ${d.statePercentile}`);
         lines.push(`- ${parts.join(' · ')}`);
@@ -311,8 +317,9 @@ export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
       lines.push(parts.join(' · '));
     }
 
-    if (result.reportUrl) lines.push(`\n**EJScreen report:** ${result.reportUrl}`);
-    lines.push(`\n_Source: ${result.dataSource}_`);
+    if (result.reportUrl)
+      lines.push(`\n**EJScreen report:** ${markdownLink(result.reportUrl, result.reportUrl)}`);
+    lines.push(`\n_Source: ${escapeMarkdownInline(result.dataSource)}_`);
 
     return [{ type: 'text', text: lines.join('\n') }];
   },

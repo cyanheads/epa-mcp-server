@@ -344,7 +344,10 @@ describe('DmapService Superfund proximity candidates', () => {
       if (total > 200) {
         expect(structured.notice).toContain('nearest 200 of 203');
         expect(text).toContain(structured.notice);
-      } else expect(structured).not.toHaveProperty('notice');
+      } else
+        expect(structured.notice).toContain(
+          'Proximity searches match only sites with usable coordinates.',
+        );
     },
   );
 
@@ -527,7 +530,7 @@ describe('DmapService Superfund proximity candidates', () => {
       city_name: 'ST. LOUIS',
       fk_ref_state_code: 'MO',
       zip_code: '63101',
-      npl_status_code: 'NPL',
+      npl_status_code: 'F',
       primary_latitude_decimal_val: '40',
       primary_longitude_decimal_val: '0',
     };
@@ -550,7 +553,7 @@ describe('DmapService Superfund proximity candidates', () => {
     expect(urls).toHaveLength(4);
     for (const url of urls)
       expect(decodeURIComponent(url)).toContain(
-        '/fk_ref_state_code/equals/MO/and/city_name/contains/St_ Louis/and/zip_code/equals/63101/and/npl_status_code/equals/NPL/and/primary_latitude_decimal_val/beginsWith/',
+        '/fk_ref_state_code/equals/MO/and/city_name/contains/St_ Louis/and/zip_code/equals/63101/and/npl_status_code/in/F,A/and/primary_latitude_decimal_val/beginsWith/',
       );
   });
 
@@ -583,7 +586,9 @@ describe('DmapService Superfund proximity candidates', () => {
         expect(structured.notice).toContain('nearest 2 of 600');
         expect(text).toContain(structured.notice);
       } else {
-        expect(structured).not.toHaveProperty('notice');
+        expect(structured.notice).toContain(
+          'Proximity searches match only sites with usable coordinates.',
+        );
         expect(text).toContain('No Superfund sites found near');
       }
       expect(urls.every((url) => url.includes('/sort/sems.envirofacts_site.site_id:asc/'))).toBe(
@@ -593,7 +598,7 @@ describe('DmapService Superfund proximity candidates', () => {
     },
   );
 
-  it('carries uncapped proximity results without a notice on both surfaces', async () => {
+  it('carries uncapped proximity results with coordinate coverage on both surfaces', async () => {
     stubFakeDmap({
       'sems.envirofacts_site': [
         {
@@ -615,7 +620,11 @@ describe('DmapService Superfund proximity candidates', () => {
       sites: [{ siteId: 'ZERO', latitude: 0, longitude: 0 }],
       totalCount: 1,
     });
-    expect(call.structuredContent).not.toHaveProperty('notice');
+    expect(call.structuredContent).toMatchObject({
+      notice: expect.stringContaining(
+        'Proximity searches match only sites with usable coordinates.',
+      ),
+    });
     expect(call.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n')).toContain(
       '**Coordinates:** 0, 0',
     );
@@ -3342,8 +3351,8 @@ describe('DmapService water-system and Superfund call deadline', () => {
       code: JsonRpcErrorCode.Timeout,
       data: { reason: 'retry_deadline_exceeded', deadlineMs: 50_000 },
     });
-    expect(urls).toHaveLength(3);
-    expect(urls[1]).toBe(urls[2]);
+    expect(urls).toHaveLength(10);
+    expect(urls[1]).toBe(urls[8]);
     expect(urls[0]).not.toBe(urls[1]);
   });
 
@@ -3408,7 +3417,7 @@ describe('DmapService water-system and Superfund call deadline', () => {
     [
       'a Superfund search',
       () => makeService().searchSuperfund({ state: 'MT' }, createMockContext()),
-      'DMAP did not finish the Superfund site search within 50 seconds. Narrow it with zip_code, city, or npl_status, or call again later.',
+      'DMAP did not finish the Superfund site search within 50 seconds. Narrow it with radius_miles, zip_code, city, or npl_status, or call again later.',
     ],
     [
       'a Superfund site lookup',

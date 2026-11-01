@@ -8,6 +8,7 @@ export { echoGetFacilityTool } from './echo-get-facility.tool.js';
 export { echoSearchFacilitiesTool } from './echo-search-facilities.tool.js';
 export { echoSearchViolationsTool } from './echo-search-violations.tool.js';
 export { ejscreenGetScoresTool } from './ejscreen-get-scores.tool.js';
+export { superfundGetSiteTool } from './superfund-get-site.tool.js';
 export { superfundSearchSitesTool } from './superfund-search-sites.tool.js';
 export { triGetFacilityReleasesTool } from './tri-get-facility-releases.tool.js';
 export { triSearchReleasesTool } from './tri-search-releases.tool.js';
@@ -18,6 +19,7 @@ import { echoGetFacilityTool } from './echo-get-facility.tool.js';
 import { echoSearchFacilitiesTool } from './echo-search-facilities.tool.js';
 import { echoSearchViolationsTool } from './echo-search-violations.tool.js';
 import { ejscreenGetScoresTool } from './ejscreen-get-scores.tool.js';
+import { superfundGetSiteTool } from './superfund-get-site.tool.js';
 import { superfundSearchSitesTool } from './superfund-search-sites.tool.js';
 import { triGetFacilityReleasesTool } from './tri-get-facility-releases.tool.js';
 import { triSearchReleasesTool } from './tri-search-releases.tool.js';
@@ -34,6 +36,7 @@ export const coreToolDefinitions = [
   triGetFacilityReleasesTool,
   triSearchReleasesTool,
   superfundSearchSitesTool,
+  superfundGetSiteTool,
   waterSearchSystemsTool,
   ejscreenGetScoresTool,
 ] as const;

@@ -5,6 +5,8 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
+import { formatHeading } from '@/mcp-server/tools/format-heading.js';
 import { formatLbs } from '@/mcp-server/tools/format-lbs.js';
 import { formatLocationLines } from '@/mcp-server/tools/format-location.js';
 import { getEchoService } from '@/services/echo/echo-service.js';
@@ -242,13 +244,14 @@ export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
     const lines: string[] = [];
     lines.push(`## EPA Facility Search Results`);
     lines.push(`**Total Found:** ${result.totalCount} | **Returned:** ${result.facilities.length}`);
-    if (result.message) lines.push(`\n> ${result.message}`);
+    if (result.message) lines.push(`\n> ${escapeMarkdownInline(result.message)}`);
 
     for (const f of result.facilities) {
-      lines.push(`\n### ${f.name}`);
-      lines.push(`**Registry ID:** ${f.registryId}`);
+      lines.push(`\n### ${formatHeading(f.name)}`);
+      lines.push(`**Registry ID:** ${escapeMarkdownInline(f.registryId)}`);
       lines.push(...formatLocationLines(f));
-      if (f.complianceStatus) lines.push(`**Compliance Status:** ${f.complianceStatus}`);
+      if (f.complianceStatus)
+        lines.push(`**Compliance Status:** ${escapeMarkdownInline(f.complianceStatus)}`);
 
       const activePrograms = Object.entries(f.programs)
         .filter(([, v]) => v)

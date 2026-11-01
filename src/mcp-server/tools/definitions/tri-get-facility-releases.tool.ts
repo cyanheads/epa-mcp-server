@@ -4,6 +4,9 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
+import { formatHeading } from '@/mcp-server/tools/format-heading.js';
+import { formatNotice } from '@/mcp-server/tools/format-notice.js';
 import { formatTriReleaseLines } from '@/mcp-server/tools/format-tri-release.js';
 import { getDmapService } from '@/services/dmap/dmap-service.js';
 
@@ -113,6 +116,7 @@ export const triGetFacilityReleasesTool = tool('epa_tri_get_facility_releases', 
         'Present when a punctuated chemical_name filter read its page limit before finding every filing spelled as given, so more matching records may exist.',
       ),
   },
+  enrichmentTrailer: { notice: { render: formatNotice } },
 
   async handler(input, ctx) {
     ctx.log.info('epa_tri_get_facility_releases', {
@@ -163,13 +167,13 @@ export const triGetFacilityReleasesTool = tool('epa_tri_get_facility_releases', 
 
   format: (result) => {
     const lines: string[] = [];
-    lines.push(`## TRI Chemical Releases — Facility ${result.facilityId}`);
+    lines.push(`## TRI Chemical Releases — Facility ${formatHeading(result.facilityId)}`);
     lines.push(`**Records:** ${result.releases.length}`);
-    if (result.message) lines.push(`\n> ${result.message}`);
+    if (result.message) lines.push(`\n> ${escapeMarkdownInline(result.message)}`);
 
     for (const r of result.releases) {
-      lines.push(`\n### ${r.chemicalName} (${r.reportingYear})`);
-      lines.push(`**Facility ID:** ${r.facilityId}`);
+      lines.push(`\n### ${formatHeading(r.chemicalName)} (${r.reportingYear})`);
+      lines.push(`**Facility ID:** ${escapeMarkdownInline(r.facilityId)}`);
       lines.push(...formatTriReleaseLines(r));
     }
 

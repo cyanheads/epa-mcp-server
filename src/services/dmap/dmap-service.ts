@@ -4,10 +4,12 @@
  * @module services/dmap/dmap-service
  */
 
-import type { Context } from '@cyanheads/mcp-ts-core';
+import { type Context, z } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import {
   JsonRpcErrorCode,
+  notFound,
+  serializationError,
   serviceUnavailable,
   validationError,
 } from '@cyanheads/mcp-ts-core/errors';
@@ -23,6 +25,7 @@ import type {
   RawTriReleaseQty,
   RawTriReportingForm,
   SuperfundSite,
+  SuperfundSiteDetail,
   TriRelease,
   WaterSystem,
 } from './types.js';
@@ -137,6 +140,26 @@ const NEWEST_FIRST: DmapSortKey[] = [
   { column: 'tri.tri_reporting_form.reporting_year', direction: 'desc' },
   { column: 'tri.tri_reporting_form.doc_ctrl_num', direction: 'asc' },
 ];
+
+/** SEMS seq repeats across chemicals; the full exposed association tuple orders pages. */
+const CONTAMINANT_ORDER: DmapSortKey[] = [
+  'preferred_contaminant_name',
+  'media_name',
+  'operable_unit_num',
+  'action_name',
+  'type_code',
+  'seq',
+].map((column) => ({ column: `sems.envirofacts_contaminants.${column}`, direction: 'asc' }));
+const CONTAMINANT_PAGE_ROWS = 100;
+const contaminantRowsSchema = z.array(
+  z.object({
+    preferred_contaminant_name: z.string().nullish(),
+    media_name: z.string().nullish(),
+    operable_unit_num: z.string().nullish(),
+    action_name: z.string().nullish(),
+    type_code: z.string().nullish(),
+  }),
+);
 
 /**
  * Request-line budget for a batched `in` list, under DMAP_REQUEST_LINE_LIMIT. DMAP counts 11 bytes
@@ -316,7 +339,11 @@ function normalizeSemsSite(raw: RawSemsSite): SuperfundSite {
     // actual field is `fips_code`, not `county_fips_code`
     ...(raw.fips_code && { fipsCode: raw.fips_code as string }),
     ...(raw.npl_status_code && { nplStatus: raw.npl_status_code as string }),
-    ...(raw.cleanup_status && { cleanupStatus: raw.cleanup_status as string }),
+    ...(raw.npl_status_name != null && { nplStatusName: raw.npl_status_name }),
+    ...(raw.non_npl_status_name != null && { nonNplStatusName: raw.non_npl_status_name }),
+    ...(raw.archived_ind != null && { archivedInd: raw.archived_ind }),
+    ...(raw.epa_id != null && { epaId: raw.epa_id }),
+    ...(raw.federal_facility_ind != null && { federalFacilityInd: raw.federal_facility_ind }),
     ...(lat !== undefined && { latitude: lat }),
     ...(lng !== undefined && { longitude: lng }),
   };
@@ -816,6 +843,7 @@ export class DmapService {
       longitude?: number;
       radiusMiles?: number;
       nplStatus?: string;
+      excludeArchived?: boolean;
       limit?: number;
     },
     ctx: Context,
@@ -833,11 +861,25 @@ export class DmapService {
       filters.push({ column: 'zip_code', operator: 'equals', value: params.zipCode });
     }
     if (params.nplStatus && params.nplStatus !== 'all') {
-      const nplMap: Record<string, string> = { listed: 'NPL', 'not-listed': 'N', proposed: 'P' };
-      const nplCode = nplMap[params.nplStatus];
+      const nplMap = new Map([
+        ['listed', 'F,A'],
+        ['not-listed', 'N'],
+        ['proposed', 'P'],
+        ['deleted', 'D'],
+        ['removed', 'R'],
+        ['withdrawn', 'W'],
+      ]);
+      const nplCode = nplMap.get(params.nplStatus);
       if (nplCode) {
-        filters.push({ column: 'npl_status_code', operator: 'equals', value: nplCode });
+        filters.push({
+          column: 'npl_status_code',
+          operator: params.nplStatus === 'listed' ? 'in' : 'equals',
+          value: nplCode,
+        });
       }
+    }
+    if (params.excludeArchived) {
+      filters.push({ column: 'archived_ind', operator: 'equals', value: 'N' });
     }
 
     const { latitude, longitude, radiusMiles } = params;
@@ -852,16 +894,29 @@ export class DmapService {
     ctx.log.debug('DMAP Superfund query', { state: params.state, lat: params.latitude });
     const budget = dmapBudget(
       'Superfund site search',
-      'Narrow it with zip_code, city, or npl_status, or call again later.',
+      'Narrow it with radius_miles, zip_code, city, or npl_status, or call again later.',
     );
     let rows: RawSemsSite[];
     if (proximity) {
       const candidates = new Map<string, RawSemsSite>();
       const prefixes = proximityPrefixes(latitude, longitude, radiusMiles);
-      for (const latPrefix of prefixes.latitudes) {
-        for (const lonPrefix of prefixes.longitudes) {
+      /** Broad circles avoid multiplying latitude bands by many mostly empty longitude bins. */
+      const broad = prefixes.longitudes.length > 4;
+      const partitions = prefixes.latitudes.flatMap((latPrefix) =>
+        (broad ? [undefined] : prefixes.longitudes).map((lonPrefix) => ({ latPrefix, lonPrefix })),
+      );
+      const pageRows = broad ? 2000 : 500;
+      const siblings = new AbortController();
+      const signal = AbortSignal.any([ctx.signal, siblings.signal]);
+      const scanContext = { ...ctx, signal };
+      const pendingPartitions = partitions.values();
+      const scan = async () => {
+        while (!signal.aborted) {
+          const partition = pendingPartitions.next();
+          if (partition.done) return;
+          const { latPrefix, lonPrefix } = partition.value;
           const seen = new Set<string>();
-          for (let first = 1; ; first += 500) {
+          for (let first = 1; ; first += pageRows) {
             const page = await this.fetchTable<RawSemsSite>(
               this.buildTableUrl(
                 'sems',
@@ -883,10 +938,10 @@ export class DmapService {
                         },
                       ]),
                 ],
-                { first, last: first + 499 },
+                { first, last: first + pageRows - 1 },
                 { sort: [{ column: 'sems.envirofacts_site.site_id', direction: 'asc' }] },
               ),
-              ctx,
+              scanContext,
               budget,
             );
             if (
@@ -908,13 +963,35 @@ export class DmapService {
                       .includes(f.literal.toLowerCase()),
                 )
               ) {
-                candidates.set(row.site_id || JSON.stringify(row), row);
+                const site = normalizeSemsSite(row);
+                if (
+                  site.latitude !== undefined &&
+                  site.longitude !== undefined &&
+                  haversineDistanceMiles(latitude, longitude, site.latitude, site.longitude) <=
+                    radiusMiles
+                ) {
+                  candidates.set(row.site_id || JSON.stringify(row), row);
+                }
               }
             }
-            if (page.length < 500) break;
+            if (page.length < pageRows) break;
           }
         }
-      }
+      };
+      const workers = Array.from(
+        { length: broad ? Math.min(8, partitions.length) : 1 },
+        async () => {
+          try {
+            await scan();
+          } catch (error) {
+            if (!siblings.signal.aborted) siblings.abort(error);
+            throw error;
+          }
+        },
+      );
+      await Promise.allSettled(workers);
+      ctx.signal.throwIfAborted();
+      if (siblings.signal.aborted) throw siblings.signal.reason;
       rows = [...candidates.values()];
     } else {
       rows = await this.fetchMatchingRows<RawSemsSite>(
@@ -928,6 +1005,8 @@ export class DmapService {
     let sites = rows.map(normalizeSemsSite);
 
     if (proximity) {
+      const coverage =
+        'Proximity searches match only sites with usable coordinates. Administrative searches can also find sites without coordinates.';
       sites = sites
         .flatMap((site) => {
           if (site.latitude === undefined || site.longitude === undefined) return [];
@@ -943,8 +1022,10 @@ export class DmapService {
         .map(({ site }) => site);
       if (sites.length > limit) {
         ctx.enrich.notice(
-          `Showing the nearest ${limit} of ${sites.length} matching Superfund sites within the radius. ${limit < 200 ? 'Increase limit (maximum 200) or narrow the radius or other filters to retrieve more.' : 'Narrow the radius or add city, zip_code, or npl_status filters to retrieve a smaller set.'}`,
+          `${coverage} Showing the nearest ${limit} of ${sites.length} matching Superfund sites within the radius. ${limit < 200 ? 'Increase limit (maximum 200) or narrow the radius or other filters to retrieve more.' : 'Narrow the radius or add city, zip_code, or npl_status filters to retrieve a smaller set.'}`,
         );
+      } else {
+        ctx.enrich.notice(coverage);
       }
     }
 
@@ -952,7 +1033,19 @@ export class DmapService {
   }
 
   /** Fetch a single Superfund site by exact SEMS site ID. */
-  async searchSuperfundById(siteId: string, ctx: Context): Promise<SuperfundSite[]> {
+  searchSuperfundById(siteId: string, ctx: Context): Promise<SuperfundSite[]> {
+    return this.fetchSuperfundById(
+      siteId,
+      ctx,
+      dmapBudget('Superfund site lookup', 'Call again later.'),
+    );
+  }
+
+  private async fetchSuperfundById(
+    siteId: string,
+    ctx: Context,
+    budget: CallBudget,
+  ): Promise<SuperfundSite[]> {
     const url = this.buildTableUrl(
       'sems',
       'envirofacts_site',
@@ -960,12 +1053,53 @@ export class DmapService {
       { first: 1, last: 1 },
     );
     ctx.log.debug('DMAP Superfund by ID', { siteId });
-    const rows = await this.fetchTable<RawSemsSite>(
-      url,
-      ctx,
-      dmapBudget('Superfund site lookup', 'Call again later.'),
-    );
+    const rows = await this.fetchTable<RawSemsSite>(url, ctx, budget);
     return rows.map(normalizeSemsSite);
+  }
+
+  /** Fetch an exact site and exhaust its contaminant associations under one total deadline. */
+  async getSuperfundSite(siteId: string, ctx: Context): Promise<SuperfundSiteDetail> {
+    const budget = dmapBudget('Superfund site and contaminant lookup', 'Call again later.');
+    const [site] = await this.fetchSuperfundById(siteId, ctx, budget);
+    if (!site) {
+      throw notFound(
+        `No Superfund site found with site ID "${siteId}". Use epa_superfund_search_sites to discover valid site IDs.`,
+        { reason: 'site_not_found', siteId },
+      );
+    }
+    const contaminants: SuperfundSiteDetail['contaminants'] = [];
+    for (let first = 1; ; first += CONTAMINANT_PAGE_ROWS) {
+      const raw = await this.fetchTable<unknown>(
+        this.buildTableUrl(
+          'sems',
+          'envirofacts_contaminants',
+          [{ column: 'fk_site_id', operator: 'equals', value: siteId }],
+          { first, last: first + CONTAMINANT_PAGE_ROWS - 1 },
+          { sort: CONTAMINANT_ORDER },
+        ),
+        ctx,
+        budget,
+      );
+      const parsed = contaminantRowsSchema.safeParse(raw);
+      if (!parsed.success)
+        throw serializationError(
+          'EPA SEMS returned an invalid contaminant association. Call again later.',
+          undefined,
+          { cause: parsed.error },
+        );
+      const rows = parsed.data;
+      for (const row of rows) {
+        contaminants.push({
+          ...(row.preferred_contaminant_name != null && { name: row.preferred_contaminant_name }),
+          ...(row.media_name != null && { medium: row.media_name }),
+          ...(row.operable_unit_num != null && { operableUnit: row.operable_unit_num }),
+          ...(row.action_name != null && { action: row.action_name }),
+          ...(row.type_code != null && { typeCode: row.type_code }),
+        });
+      }
+      if (rows.length < CONTAMINANT_PAGE_ROWS) break;
+    }
+    return { site, contaminants };
   }
 
   /** Search drinking water systems by state or ZIP code. */

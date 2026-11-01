@@ -173,7 +173,7 @@ describe('ejscreenGetScoresTool', () => {
       '- **People of color** (`pctmin`): 63.07% · US pctile 74 · state pctile 62',
       '**Demographic Index:** 1.949 · US pctile 76 · state pctile 78',
       '**Supplemental Demographic Index:** 1.9334 · US pctile 71 · state pctile 81',
-      '**EJScreen report:** https://api.ejanalysis.com/report?lat=39.2904&lon=-76.6122&buffer=1',
+      '**EJScreen report:** [https://api.ejanalysis.com/report?lat=39.2904&lon=-76.6122&buffer=1](<https://api.ejanalysis.com/report?lat=39.2904&lon=-76.6122&buffer=1>)',
       '_Source: EJScreen v2.2 (2022 data) via the community-maintained EJAM API._',
     ]) {
       expect(lines).toContain(line);

@@ -5,6 +5,9 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
+import { formatHeading } from '@/mcp-server/tools/format-heading.js';
+import { formatNotice } from '@/mcp-server/tools/format-notice.js';
 import { getEchoService } from '@/services/echo/echo-service.js';
 
 /**
@@ -142,6 +145,7 @@ export const echoSearchViolationsTool = tool('epa_echo_search_violations', {
         'Present when a filing-date range with case_type "all" left criminal cases out of the results.',
       ),
   },
+  enrichmentTrailer: { notice: { render: formatNotice } },
 
   errors: [
     {
@@ -256,21 +260,22 @@ export const echoSearchViolationsTool = tool('epa_echo_search_violations', {
     const lines: string[] = [];
     lines.push(`## EPA Enforcement Cases`);
     lines.push(`**Total Found:** ${result.totalCount} | **Returned:** ${result.cases.length}`);
-    if (result.message) lines.push(`\n> ${result.message}`);
+    if (result.message) lines.push(`\n> ${escapeMarkdownInline(result.message)}`);
 
     for (const c of result.cases) {
-      lines.push(`\n### ${c.caseName ?? c.caseId ?? 'Unnamed Case'}`);
-      if (c.caseId) lines.push(`**Case ID:** ${c.caseId}`);
-      if (c.facilityName) lines.push(`**Facility:** ${c.facilityName}`);
-      if (c.registryId) lines.push(`**Registry ID:** ${c.registryId}`);
-      if (c.state) lines.push(`**State:** ${c.state}`);
-      if (c.programsViolated) lines.push(`**Programs:** ${c.programsViolated}`);
-      if (c.caseType) lines.push(`**Type:** ${c.caseType}`);
+      lines.push(`\n### ${formatHeading(c.caseName ?? c.caseId ?? 'Unnamed Case')}`);
+      if (c.caseId) lines.push(`**Case ID:** ${escapeMarkdownInline(c.caseId)}`);
+      if (c.facilityName) lines.push(`**Facility:** ${escapeMarkdownInline(c.facilityName)}`);
+      if (c.registryId) lines.push(`**Registry ID:** ${escapeMarkdownInline(c.registryId)}`);
+      if (c.state) lines.push(`**State:** ${escapeMarkdownInline(c.state)}`);
+      if (c.programsViolated)
+        lines.push(`**Programs:** ${escapeMarkdownInline(c.programsViolated)}`);
+      if (c.caseType) lines.push(`**Type:** ${escapeMarkdownInline(c.caseType)}`);
       if (c.penaltyAssessedInDollars !== undefined) {
         lines.push(`**Penalty:** $${c.penaltyAssessedInDollars.toLocaleString()}`);
       }
-      if (c.filedDate) lines.push(`**Filed:** ${c.filedDate}`);
-      if (c.settlementDate) lines.push(`**Settlement:** ${c.settlementDate}`);
+      if (c.filedDate) lines.push(`**Filed:** ${escapeMarkdownInline(c.filedDate)}`);
+      if (c.settlementDate) lines.push(`**Settlement:** ${escapeMarkdownInline(c.settlementDate)}`);
     }
 
     return [{ type: 'text', text: lines.join('\n') }];
