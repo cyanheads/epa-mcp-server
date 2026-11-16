@@ -14,7 +14,7 @@ export const effectiveQueryEnrichment = {
     .string()
     .optional()
     .describe(
-      'The search as the server sent it upstream, in this tool\'s input names: normalized values, how each text filter matched ("=" exact, "contains", "begins with", "has words"), and defaults that change what comes back. Terms are separated by "; ".',
+      'The search as sent upstream, in input names: values, match modes, and result-changing defaults, "; "-joined.',
     ),
 };
 

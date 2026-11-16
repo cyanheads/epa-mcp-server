@@ -232,6 +232,8 @@ export interface RawEchoDfrNaicsCode {
 export interface RawEchoDfrPermit {
   EPARegion?: string;
   EPASystem?: string;
+  /** Permit expiration date, MM/DD/YYYY; null for most non-permit IDs. */
+  ExpDate?: string | null;
   FacilityCity?: string;
   /** "King County"; null on the FRS entry, set on program entries. */
   FacilityCountyName?: string | null;
@@ -245,7 +247,64 @@ export interface RawEchoDfrPermit {
   Longitude?: string;
   SourceID?: string;
   Statute?: string;
+  /** Classification within the system, e.g. "Major Emissions", "LQG"; "" on the FRS entry. */
+  Universe?: string | null;
   [key: string]: string | null | undefined;
+}
+
+/** Quarter bounds (MM/DD/YYYY) of a get_dfr compliance section: Qtr1Start, Qtr1End, … */
+export type RawEchoDfrQuarterBounds = {
+  [bound: `Qtr${number}Start` | `Qtr${number}End`]: string | null | undefined;
+};
+
+/**
+ * One effluent exceedance series from get_dfr `CWAEffluentComplianceEXP.Sources[].Parameters[]`.
+ * Qtr1–Qtr13 cells hold the quarter's value ("1061%" or "LIMIT VIOLATION") and an "S" or "R"
+ * status; Mnth1–Mnth39 repeat them by month and are not read.
+ */
+export interface RawEchoDfrEffluentParameter {
+  DischargePoint?: string | null;
+  /** "Mthly", "NMth", or "Neither". */
+  MeasurementType?: string | null;
+  MonitoringLocation?: string | null;
+  ParameterCode?: string | null;
+  ParameterName?: string | null;
+  /** The NPDES permit. */
+  SourceID?: string | null;
+  [cell: `Qtr${number}Status` | `Qtr${number}Value`]: string | null | undefined;
+}
+
+/**
+ * One RCRA violation from get_dfr `RCRACompliance.Sources[].Violations[]`. Qtr1–Qtr12 cells hold
+ * the determined date, "--->" while open, and the return-to-compliance date, or one
+ * "determined-returned" range when both fall in one quarter.
+ */
+export interface RawEchoDfrRcraViolation {
+  /** A state code or "EPA". */
+  Agency?: string | null;
+  RCRAViolReportURL?: string | null;
+  /** The RCRA handler ID. */
+  SourceID?: string | null;
+  Violation?: string | null;
+  ViolationType?: string | null;
+  [cell: `Qtr${number}Status`]: string | null | undefined;
+}
+
+/**
+ * One Clean Air Act High Priority Violation from get_dfr
+ * `AirCompliance.Sources[].HPVProgramsPollutants[]`. Qtr1–Qtr12 cells hold the begin date (in Qtr1
+ * when it precedes the window), "--->" while unresolved, and the resolved date.
+ */
+export interface RawEchoDfrHpv {
+  Agency?: string | null;
+  /** Comma-separated pollutant codes. */
+  AirPollutants?: string | null;
+  /** Comma-separated air program codes, e.g. "CAATVP". */
+  AirPrograms?: string | null;
+  /** The ICIS-Air ID. */
+  SourceID?: string | null;
+  ViolationActivityID?: string | null;
+  [cell: `Qtr${number}Status`]: string | null | undefined;
 }
 
 /** Top-level response from dfr_rest_services.get_dfr. */
@@ -273,6 +332,15 @@ export interface RawEchoDfrFullResponse {
     TRIHistory?: { Sources?: Array<{ ReleaseYear?: RawEchoDfrTriYear[] }> };
     /** Drinking-water violations over ECHO's five-year window; `{}` for a facility with no SDWIS record. */
     ViolationsEnforcementActions?: { Sources?: Array<{ Violations?: RawEchoDfrSdwViolation[] }> };
+    /** CWA effluent exceedances over 13 quarters; `{}` for a facility with none. */
+    CWAEffluentComplianceEXP?: {
+      Header?: RawEchoDfrQuarterBounds;
+      Sources?: Array<{ Parameters?: RawEchoDfrEffluentParameter[] }>;
+    };
+    /** RCRA violations over 12 quarters, the quarter bounds at the section's top level; `{}` for none. */
+    RCRACompliance?: { Sources?: Array<{ Violations?: RawEchoDfrRcraViolation[] }> };
+    /** CAA compliance over 12 quarters; `{}` for a facility with no ICIS-Air record. */
+    AirCompliance?: { Sources?: Array<{ HPVProgramsPollutants?: RawEchoDfrHpv[] }> };
     Message?: string;
   };
 }
@@ -613,6 +681,65 @@ export interface EpaDrinkingWaterViolation {
   violationMeasure?: string;
 }
 
+/** One quarter of an effluent exceedance series. */
+export interface EpaEffluentQuarter {
+  /** MM/DD/YYYY; absent when the section carries no quarter bounds. */
+  end?: string;
+  start?: string;
+  /** ECHO's "S" or "R", relayed without an asserted meaning. */
+  status?: string;
+  /** Percent over the limit as ECHO writes it ("1061%"), or "LIMIT VIOLATION". */
+  value: string;
+}
+
+/** One CWA effluent exceedance series: a permit, outfall, monitoring location, parameter, and measurement type. */
+export interface EpaEffluentExceedance {
+  measurementType?: string;
+  monitoringLocation?: string;
+  outfall?: string;
+  parameterCode?: string;
+  parameterName?: string;
+  permitId?: string;
+  /** Quarters with an exceedance, oldest first. */
+  quarters: EpaEffluentQuarter[];
+}
+
+/** One RCRA violation in a facility profile; fields ECHO leaves empty are absent. */
+export interface EpaRcraViolation {
+  agency?: string;
+  /** Can precede ECHO's 12-quarter window. */
+  determinedDate?: string;
+  handlerId?: string;
+  reportUrl?: string;
+  /** Absent while the violation is open. */
+  returnedToComplianceDate?: string;
+  violation?: string;
+  violationType?: string;
+}
+
+/** One program ID FRS links to a facility, other than its Registry ID. */
+export interface EpaProgramId {
+  expirationDate?: string;
+  id: string;
+  status?: string;
+  statute?: string;
+  system: string;
+  universe?: string;
+}
+
+/** One Clean Air Act High Priority Violation in a facility profile. */
+export interface EpaHighPriorityViolation {
+  agency?: string;
+  airProgramId?: string;
+  /** Can precede ECHO's 12-quarter window. */
+  beginDate?: string;
+  pollutants?: string;
+  programs?: string;
+  /** Absent while unresolved. */
+  resolvedDate?: string;
+  violationId?: string;
+}
+
 /** One statute's ECHO enforcement and compliance summary. */
 export interface EpaProgramCompliance {
   currentStatus?: string;
@@ -651,6 +778,12 @@ export interface EpaFacilityProfile {
   drinkingWaterViolationsNextOffset?: number;
   /** Drinking-water violations in the report, across all pages. */
   drinkingWaterViolationsTotal: number;
+  /** One page of the report's effluent exceedance series, in permit, outfall, parameter order. */
+  effluentExceedances: EpaEffluentExceedance[];
+  /** Offset of the next page, present exactly when more series follow. */
+  effluentExceedancesNextOffset?: number;
+  /** Effluent exceedance series in the report, across all pages. */
+  effluentExceedancesTotal: number;
   fipsCode?: string;
   formalActions: Array<{
     actionDate?: string;
@@ -662,6 +795,8 @@ export interface EpaFacilityProfile {
     sourceId?: string;
     statute?: string;
   }>;
+  /** The report's Clean Air Act High Priority Violations, in ECHO's order. */
+  highPriorityViolations: EpaHighPriorityViolation[];
   /** One page of the report's compliance monitoring records, newest first. */
   inspections: Array<{
     activityDate?: string;
@@ -682,6 +817,8 @@ export interface EpaFacilityProfile {
   naics: EpaNaicsCode[];
   name: string;
   programCompliance: EpaProgramCompliance[];
+  /** Every program ID in Permits[] but the FRS entry, in ECHO's order. */
+  programIds: EpaProgramId[];
   programs: {
     air: boolean;
     water: boolean;
@@ -689,6 +826,12 @@ export interface EpaFacilityProfile {
     tri: boolean;
     sdwa: boolean;
   };
+  /** One page of the report's RCRA violations, newest determination first. */
+  rcraViolations: EpaRcraViolation[];
+  /** Offset of the next page, present exactly when more violations follow. */
+  rcraViolationsNextOffset?: number;
+  /** RCRA violations in the report, across all pages. */
+  rcraViolationsTotal: number;
   registryId: string;
   state?: string;
   street?: string;

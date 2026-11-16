@@ -9,15 +9,12 @@ export const superfundContaminantsSchema = z
   .array(
     z
       .object({
-        name: z.string().optional().describe('Preferred contaminant name'),
-        medium: z.string().optional().describe('Environmental medium associated with the action'),
-        operableUnit: z
-          .string()
-          .optional()
-          .describe('Operable unit identifier, preserving leading zeros'),
-        action: z.string().optional().describe('EPA action associated with the contaminant'),
-        typeCode: z.string().optional().describe('Raw SEMS action type code'),
+        name: z.string().optional().describe('Preferred name'),
+        medium: z.string().optional().describe('Environmental medium'),
+        operableUnit: z.string().optional().describe('Leading zeros kept'),
+        action: z.string().optional().describe('EPA action'),
+        typeCode: z.string().optional().describe('SEMS action type code'),
       })
-      .describe('One contaminant association; repeated chemicals and source rows are retained'),
+      .describe('One association; repeats are kept'),
   )
-  .describe('Every SEMS contaminant association for the site; empty when none are recorded');
+  .describe('Every SEMS contaminant association for the site');

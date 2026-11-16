@@ -131,6 +131,21 @@ describe('AirNow service', () => {
     },
   );
 
+  it('keeps the body of an AirNow HTTP error off both surfaces', async () => {
+    serve('{"WebServiceError":[{"Message":"upstream operator detail"}]}', 401);
+    const result = await runToolContract(airnowGetConditionsTool, {
+      latitude: 47.6,
+      longitude: -122.3,
+    });
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.Unauthorized, data: { status: 401 } },
+    });
+    expect(result.structuredContent).not.toHaveProperty('error.data.body');
+    expect(result.structuredContent).not.toHaveProperty('error.data.responseBody');
+    expect(JSON.stringify(result)).not.toContain('upstream operator detail');
+    expect(http.calls).toHaveLength(1);
+  });
+
   it('regression #9: every cache-key kind is a valid storage key and serves repeats from cache', async () => {
     serve('[]');
     const ctx = toolCtx('cache-keys');

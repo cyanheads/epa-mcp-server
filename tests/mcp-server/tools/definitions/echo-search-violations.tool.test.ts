@@ -55,7 +55,7 @@ describe('echoSearchViolationsTool', () => {
     const input = echoSearchViolationsTool.input.parse({ state: ' WA ' });
     const result = await echoSearchViolationsTool.handler(input, ctx);
     expect(mockSearchViolations).toHaveBeenCalledWith(
-      { state: 'WA', caseType: 'all', limit: 50, offset: 0 },
+      { states: ['WA'], caseType: 'all', limit: 25, offset: 0 },
       ctx,
     );
     expect(result).toEqual({ cases: [waCase], totalCount: 7 });
@@ -67,7 +67,7 @@ describe('echoSearchViolationsTool', () => {
     const input = echoSearchViolationsTool.input.parse({ zip_code: '98101' });
     const result = await echoSearchViolationsTool.handler(input, ctx);
     expect(mockSearchViolations).toHaveBeenCalledWith(
-      { zipCode: '98101', caseType: 'all', limit: 50, offset: 0 },
+      { zipCodes: ['98101'], caseType: 'all', limit: 25, offset: 0 },
       ctx,
     );
     expect(result.cases).toEqual([waCase]);
@@ -119,7 +119,7 @@ describe('echoSearchViolationsTool', () => {
     });
     await echoSearchViolationsTool.handler(input, ctx);
     expect(mockSearchViolations).toHaveBeenCalledWith(
-      { state: 'WA', caseType: 'all', limit: 50, offset: 0 },
+      { states: ['WA'], caseType: 'all', limit: 25, offset: 0 },
       ctx,
     );
     expect(getEnrichment(ctx)).not.toHaveProperty('notice');
@@ -134,7 +134,7 @@ describe('echoSearchViolationsTool', () => {
     });
     await echoSearchViolationsTool.handler(input, ctx);
     expect(mockSearchViolations).toHaveBeenCalledWith(
-      { state: 'WA', caseType: 'all', dateFiledStart: '2024-01-01', limit: 50, offset: 0 },
+      { states: ['WA'], caseType: 'all', dateFiledStart: '2024-01-01', limit: 25, offset: 0 },
       ctx,
     );
   });
@@ -499,7 +499,7 @@ describe('echoSearchViolationsTool', () => {
       const result = await runToolContract(echoSearchViolationsTool, { state: ' gm ' });
       expect(result.isError).toBeFalsy();
       expect(mockSearchViolations).toHaveBeenCalledWith(
-        expect.objectContaining({ state: 'GM' }),
+        expect.objectContaining({ states: ['GM'] }),
         expect.anything(),
       );
       expect(echoSearchViolationsTool.errors?.map((e) => e.reason)).not.toContain('invalid_state');
@@ -513,7 +513,7 @@ describe('echoSearchViolationsTool', () => {
         const input = echoSearchViolationsTool.input.parse({ zip_code: zip });
         await echoSearchViolationsTool.handler(input, ctx);
         expect(mockSearchViolations).toHaveBeenCalledWith(
-          expect.objectContaining({ zipCode: '98108' }),
+          expect.objectContaining({ zipCodes: ['98108'] }),
           ctx,
         );
         expect(getEnrichment(ctx)).toMatchObject({ effectiveQuery: 'zip_code=98108' });
@@ -526,10 +526,94 @@ describe('echoSearchViolationsTool', () => {
       const input = echoSearchViolationsTool.input.parse({ state: 'nn', case_type: 'criminal' });
       await echoSearchViolationsTool.handler(input, ctx);
       expect(mockSearchViolations).toHaveBeenCalledWith(
-        expect.objectContaining({ state: 'NN', caseType: 'criminal' }),
+        expect.objectContaining({ states: ['NN'], caseType: 'criminal' }),
         ctx,
       );
       expect(getEnrichment(ctx)).toMatchObject({ effectiveQuery: 'state=NN; case_type=criminal' });
+    });
+
+    // Through the framework's own argument parser, as a client's call arrives.
+    it.each([
+      [{ state: '', zip_code: '98108' }, 'zip_code=98108'],
+      [{ state: '   ', zip_code: '98108' }, 'zip_code=98108'],
+      [{ state: ' wa ' }, 'state=WA'],
+      [{ state: 'WA' }, 'state=WA'],
+      [{ state: 'WA', zip_code: '' }, 'state=WA'],
+      [{ zip_code: '98108-1234' }, 'zip_code=98108'],
+      [{ zip_code: '981081234' }, 'zip_code=98108'],
+      [{ zip_code: ' 98108 ' }, 'zip_code=98108'],
+      [{ zip_code: 98108 }, 'zip_code=98108'],
+    ])('answers the single-value form %o as 0.8.0 does', async (args, effectiveQuery) => {
+      mockSearchViolations.mockResolvedValue(servicePage([waCase], 1));
+      const result = await runToolContract(echoSearchViolationsTool, args as never);
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({ effectiveQuery });
+    });
+
+    it.each([{ state: 'WA OR' }, { state: 'Washington' }, { state: 'W' }, { zip_code: '9810' }])(
+      'rejects %o before any request, as 0.8.0 does',
+      async (args) => {
+        const result = await runToolContract(echoSearchViolationsTool, args);
+        expect(result.isError).toBe(true);
+        expect(mockSearchViolations).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  describe('regression #73: state and ZIP lists', () => {
+    const sent = () => mockSearchViolations.mock.calls[0]![0] as Record<string, unknown>;
+
+    it.each([
+      ['an array', ['RI', 'DE']],
+      ['a comma-joined string', 'RI, DE'],
+      ['a JSON-stringified array', '["RI","DE"]'],
+      ['a lowercase list with a repeat', ['ri', 'de', 'RI']],
+    ])(
+      'sends state as %s once per code, and echoes state=RI,DE on both surfaces',
+      async (_, state) => {
+        mockSearchViolations.mockResolvedValue(servicePage([waCase], 2379));
+        const result = await runToolContract(echoSearchViolationsTool, { state } as never);
+        expect(result.isError).toBeFalsy();
+        expect(sent()).toMatchObject({ states: ['RI', 'DE'] });
+        expect(result.structuredContent).toMatchObject({ effectiveQuery: 'state=RI,DE' });
+        const text = result.content
+          .map((block) => (block.type === 'text' ? block.text : ''))
+          .join('');
+        expect(text).toContain('`state=RI,DE`');
+      },
+    );
+
+    it('sends a ZIP list as first five digits beside a state list', async () => {
+      mockSearchViolations.mockResolvedValue(servicePage([waCase], 174));
+      const result = await runToolContract(echoSearchViolationsTool, {
+        state: ['WA', 'OR'],
+        zip_code: ['98108-1234', '97201'],
+      } as never);
+      expect(sent()).toMatchObject({ states: ['WA', 'OR'], zipCodes: ['98108', '97201'] });
+      expect(result.structuredContent).toMatchObject({
+        effectiveQuery: 'state=WA,OR; zip_code=98108,97201',
+      });
+    });
+
+    it.each([
+      ['a 101st state', { state: Array.from({ length: 101 }, (_, i) => `${i % 10}${i % 9}`) }],
+      ['a 301st ZIP', { zip_code: Array.from({ length: 301 }, (_, i) => String(10000 + i)) }],
+    ])('rejects %s before any request', async (_, args) => {
+      const result = await runToolContract(echoSearchViolationsTool, args as never);
+      expect(result.isError).toBe(true);
+      expect(mockSearchViolations).not.toHaveBeenCalled();
+    });
+
+    it('reads an empty list as omitted, so the search still needs a state or ZIP', async () => {
+      const result = await runToolContract(echoSearchViolationsTool, {
+        state: [],
+        zip_code: ' , ',
+      } as never);
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: { data: { reason: 'no_geographic_filter' } },
+      });
+      expect(mockSearchViolations).not.toHaveBeenCalled();
     });
   });
 
@@ -542,7 +626,7 @@ describe('echoSearchViolationsTool', () => {
         offset: 100,
       });
       expect(mockSearchViolations).toHaveBeenCalledWith(
-        expect.objectContaining({ state: 'TX', limit: 100, offset: 100 }),
+        expect.objectContaining({ states: ['TX'], limit: 100, offset: 100 }),
         expect.anything(),
       );
       expect(result.structuredContent).toMatchObject({
@@ -557,21 +641,52 @@ describe('echoSearchViolationsTool', () => {
       expect(text).toContain('Query: `state=TX`');
     });
 
-    it('clamps a limit above 100 to 100 with a notice', async () => {
+    it('regression #78: serves limit 1000 as asked, with no notice', async () => {
+      mockSearchViolations.mockResolvedValue(servicePage([waCase], 1));
+      const ctx = createMockContext({ errors: echoSearchViolationsTool.errors });
+      const input = echoSearchViolationsTool.input.parse({ state: 'WA', limit: 1000 });
+      await echoSearchViolationsTool.handler(input, ctx);
+      expect(mockSearchViolations).toHaveBeenCalledWith(
+        expect.objectContaining({ limit: 1000 }),
+        ctx,
+      );
+      expect(getEnrichment(ctx)).not.toHaveProperty('limitNotice');
+    });
+
+    it('regression #78: clamps a limit above 2,000 to 2,000 with a notice', async () => {
       mockSearchViolations.mockResolvedValue(servicePage([waCase], 1));
       const ctx = createMockContext({ errors: echoSearchViolationsTool.errors });
       const input = echoSearchViolationsTool.input.parse({ state: 'TX', limit: 5000 });
       await echoSearchViolationsTool.handler(input, ctx);
       expect(mockSearchViolations).toHaveBeenCalledWith(
-        expect.objectContaining({ limit: 100 }),
+        expect.objectContaining({ limit: 2000 }),
         ctx,
       );
       expect(getEnrichment(ctx)).toMatchObject({
         limitNotice:
-          "limit 5000 is above this tool's cap of 100, so at most 100 records were returned.",
+          "limit 5000 is above this tool's cap of 2000, so at most 2000 records were returned.",
       });
       expect(echoSearchViolationsTool.input.safeParse({ state: 'TX', limit: 5001 }).success).toBe(
-        false,
+        true,
+      );
+    });
+
+    it('regression #78: never asks ECHO for more rows than its 5,000-row responseset maximum', async () => {
+      mockSearchViolations.mockResolvedValue(servicePage([waCase], 1));
+      await runToolContract(echoSearchViolationsTool, {
+        state: 'TX',
+        limit: Number.MAX_SAFE_INTEGER,
+      });
+      const [params] = mockSearchViolations.mock.calls[0]!;
+      expect(params.limit).toBeLessThanOrEqual(5000);
+    });
+
+    it('regression #78: returns 25 cases when limit is omitted', async () => {
+      mockSearchViolations.mockResolvedValue(servicePage([waCase], 1));
+      await runToolContract(echoSearchViolationsTool, { state: 'TX' });
+      expect(mockSearchViolations).toHaveBeenCalledWith(
+        expect.objectContaining({ limit: 25 }),
+        expect.anything(),
       );
     });
 

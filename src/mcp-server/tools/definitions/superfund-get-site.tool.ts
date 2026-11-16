@@ -1,5 +1,6 @@
 /**
- * @fileoverview Retrieve a Superfund site and its contaminant associations by exact SEMS ID.
+ * @fileoverview Retrieve a Superfund site and its contaminant associations by exact SEMS site ID
+ * or EPA ID.
  * @module mcp-server/tools/definitions/superfund-get-site.tool
  */
 import { tool, z } from '@cyanheads/mcp-ts-core';
@@ -14,35 +15,38 @@ import { getDmapService } from '@/services/dmap/dmap-service.js';
 export const superfundGetSiteTool = tool('epa_superfund_get_site', {
   title: 'Get Superfund Site',
   description:
-    'Superfund: Retrieve a site by exact SEMS site ID from epa_superfund_search_sites, with all recorded contaminant associations and their media, operable units, and EPA actions. Repeated chemicals in different contexts and duplicate source rows are retained. An existing site without contaminant records returns an empty array. Associations do not establish current exposure, concentrations, or current risk. Site and contaminant requests share a 50-second deadline.',
+    'Superfund: Retrieve a site by exact SEMS site ID from epa_superfund_search_sites or by EPA ID, the SEMS program ID epa_echo_get_case lists, with all recorded contaminant associations and their media, operable units, and EPA actions. Repeated chemicals in different contexts and duplicate source rows are retained. An existing site without contaminant records returns an empty array. Associations do not establish current exposure, concentrations, or current risk. Site and contaminant requests share a 50-second deadline.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
     site_id: z
       .string()
       .trim()
       .min(1)
-      .describe('SEMS siteId from epa_superfund_search_sites; preserve leading zeros'),
+      .describe(
+        "SEMS siteId from epa_superfund_search_sites (7 digits; preserve leading zeros), or the site's EPA ID (2 letters and 10 letters or digits, any case)",
+      ),
   }),
   output: z.object({ site: superfundSiteSchema, contaminants: superfundContaminantsSchema }),
   errors: [
     {
       reason: 'site_not_found',
       code: JsonRpcErrorCode.NotFound,
-      when: 'No SEMS site matches the exact ID.',
-      recovery: 'Use epa_superfund_search_sites to discover valid SEMS site IDs and retry.',
+      when: 'No SEMS site has this site ID or EPA ID.',
+      recovery:
+        'Pass a SEMS site ID (7 digits) or an EPA ID (2 letters and 10 letters or digits), or find the site with epa_superfund_search_sites by name or location, and retry.',
       thrownBy: 'service',
     },
     {
       reason: 'unmatchable_filter',
       code: JsonRpcErrorCode.ValidationError,
-      when: "site_id holds a character EPA's DMAP service cannot match exactly.",
+      when: 'site_id holds a character DMAP cannot match exactly.',
       recovery: 'Pass one SEMS site ID exactly as epa_superfund_search_sites returns it.',
       thrownBy: 'service',
     },
     {
       reason: 'filter_too_long',
       code: JsonRpcErrorCode.ValidationError,
-      when: "site_id makes a request longer than EPA's DMAP service accepts.",
+      when: 'site_id makes the request too long.',
       recovery: 'Pass one SEMS site ID exactly as epa_superfund_search_sites returns it.',
       thrownBy: 'service',
     },

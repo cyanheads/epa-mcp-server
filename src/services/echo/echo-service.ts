@@ -24,21 +24,30 @@ import type {
   EpaCaseFacility,
   EpaCaseReport,
   EpaDrinkingWaterViolation,
+  EpaEffluentExceedance,
   EpaEnforcementConclusion,
   EpaFacility,
   EpaFacilityProfile,
+  EpaHighPriorityViolation,
   EpaNaicsCode,
   EpaProgramCompliance,
+  EpaProgramId,
+  EpaRcraViolation,
   RawEchoCase,
   RawEchoCaseFacility,
   RawEchoCaseInformation,
   RawEchoCaseReportResponse,
   RawEchoCaseResponse,
   RawEchoDfrCaseAction,
+  RawEchoDfrEffluentParameter,
   RawEchoDfrFormalAction,
   RawEchoDfrFullResponse,
+  RawEchoDfrHpv,
   RawEchoDfrInspection,
   RawEchoDfrNaicsCode,
+  RawEchoDfrPermit,
+  RawEchoDfrQuarterBounds,
+  RawEchoDfrRcraViolation,
   RawEchoDfrSdwViolation,
   RawEchoDfrTriYear,
   RawEchoFacility,
@@ -188,28 +197,41 @@ const STATUS_LOOKUP_NOTICE =
 
 /**
  * Default page and cap of a profile's compliance monitoring records, a local slice of the one
- * get_dfr response. A Texas refinery logs several hundred state investigations in five years (581
- * at registry 110041990913, about 130 KB unbounded).
+ * get_dfr response. A record runs about 174 B of structuredContent and 103 B of content[], so the
+ * cap keeps a full page near 1 MB. A Texas refinery logs several hundred state investigations in
+ * five years (581 at registry 110041990913).
  */
-export const INSPECTION_SLICE = { defaultLimit: 100, cap: 100 } as const;
+export const INSPECTION_SLICE = { defaultLimit: 25, cap: 5000 } as const;
 
 /**
  * Default page and cap of a profile's drinking-water violations, a local slice of the one get_dfr
- * response. A small system can carry hundreds: WA5389080 (27 people) lists 899. Measured on its
- * profile, 50 entries make a 17.6 KB structuredContent and 9.2 KB of content[]; the 200 cap
- * keeps a page near 100 KB on both surfaces together (500 measured 264 KB).
+ * response. A violation runs about 336 B of structuredContent and 187 B of content[], so the cap
+ * keeps a full page near 1 MB. A small system can carry hundreds: WA5389080 (27 people) lists 899.
  */
-export const DRINKING_WATER_VIOLATION_SLICE = { defaultLimit: 50, cap: 200 } as const;
+export const DRINKING_WATER_VIOLATION_SLICE = { defaultLimit: 25, cap: 3000 } as const;
+
+/**
+ * Default pages of a profile's CWA effluent exceedance series and RCRA violations, local slices of
+ * the one get_dfr response with no cap: the heaviest full lists measured, 91 series at
+ * 110012150858 (53 KB of structuredContent) and 50 violations at 110000459995 (15 KB), stay far
+ * below the ~1 MB page, so a larger limit returns the rest. A series carries up to 13 quarters.
+ */
+export const EFFLUENT_EXCEEDANCE_SLICE = { defaultLimit: 10 } as const;
+export const RCRA_VIOLATION_SLICE = { defaultLimit: 25 } as const;
 
 /** The slices of the lists a facility profile pages locally. */
 export interface FacilitySlices {
   drinkingWaterViolations: ListSlice;
+  effluentExceedances: ListSlice;
   inspections: ListSlice;
+  rcraViolations: ListSlice;
 }
 
 const DEFAULT_FACILITY_SLICES: FacilitySlices = {
   drinkingWaterViolations: { limit: DRINKING_WATER_VIOLATION_SLICE.defaultLimit, offset: 0 },
+  effluentExceedances: { limit: EFFLUENT_EXCEEDANCE_SLICE.defaultLimit, offset: 0 },
   inspections: { limit: INSPECTION_SLICE.defaultLimit, offset: 0 },
+  rcraViolations: { limit: RCRA_VIOLATION_SLICE.defaultLimit, offset: 0 },
 };
 
 /**
@@ -610,6 +632,138 @@ function normalizeSdwViolation(raw: RawEchoDfrSdwViolation): EpaDrinkingWaterVio
   });
 }
 
+/** Quarters in a get_dfr report's CWA effluent window; its RCRA and CAA windows have 12. */
+const EFFLUENT_QUARTERS = 13;
+const RCRA_CAA_QUARTERS = 12;
+
+/** An ECHO MM/DD/YYYY date inside a quarter cell. */
+const ECHO_DATE = /\d{2}\/\d{2}\/\d{4}/g;
+
+/** Code-unit order; an absent value sorts first. */
+const byText = (a = '', b = ''): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * The first date in a RCRA or HPV row's quarter cells and, when a later cell records another, the
+ * last: when the violation began, and when it ended. A cell holds a date, "--->" while the
+ * violation stays open, or a "begin-end" range within one quarter.
+ */
+function cellSpan(row: {
+  [cell: `Qtr${number}Status`]: string | null | undefined;
+}): [string | undefined, string | undefined] {
+  const dates = Array.from(
+    { length: RCRA_CAA_QUARTERS },
+    (_, i) => row[`Qtr${i + 1}Status`] ?? '',
+  ).flatMap((cell) => cell.match(ECHO_DATE) ?? []);
+  return [dates[0], dates.length > 1 ? dates.at(-1) : undefined];
+}
+
+/** A get_dfr effluent exceedance series, its quarters dated from the section's Header. */
+function normalizeEffluentSeries(
+  raw: RawEchoDfrEffluentParameter,
+  header: RawEchoDfrQuarterBounds | undefined,
+): EpaEffluentExceedance {
+  const quarters = Array.from({ length: EFFLUENT_QUARTERS }, (_, i) => i + 1).flatMap((n) => {
+    const value = echoText(raw[`Qtr${n}Value`]);
+    if (!value) return [];
+    return [
+      compact({
+        start: echoText(header?.[`Qtr${n}Start`]),
+        end: echoText(header?.[`Qtr${n}End`]),
+        value,
+        status: echoText(raw[`Qtr${n}Status`]),
+      }),
+    ];
+  });
+  return {
+    ...compact({
+      permitId: echoText(raw.SourceID),
+      parameterCode: echoText(raw.ParameterCode),
+      parameterName: echoText(raw.ParameterName),
+      outfall: echoText(raw.DischargePoint),
+      monitoringLocation: echoText(raw.MonitoringLocation),
+      measurementType: echoText(raw.MeasurementType),
+    }),
+    quarters,
+  };
+}
+
+/** Fields that identify an effluent series, in sort order; together unique within a report. */
+const EFFLUENT_SERIES_KEY = [
+  'permitId',
+  'outfall',
+  'parameterCode',
+  'monitoringLocation',
+  'measurementType',
+] as const satisfies ReadonlyArray<keyof EpaEffluentExceedance>;
+
+/** Ascending by EFFLUENT_SERIES_KEY, so every page of a re-sliced list holds the same series. */
+function bySeriesKey(a: EpaEffluentExceedance, b: EpaEffluentExceedance): number {
+  for (const key of EFFLUENT_SERIES_KEY) {
+    const order = byText(a[key], b[key]);
+    if (order !== 0) return order;
+  }
+  return 0;
+}
+
+/** A get_dfr RCRA violation as the profile carries it. */
+function normalizeRcraViolation(raw: RawEchoDfrRcraViolation): EpaRcraViolation {
+  const [determinedDate, returnedToComplianceDate] = cellSpan(raw);
+  return compact({
+    handlerId: echoText(raw.SourceID),
+    violationType: echoText(raw.ViolationType),
+    violation: echoText(raw.Violation),
+    agency: echoText(raw.Agency),
+    determinedDate,
+    returnedToComplianceDate,
+    reportUrl: echoText(raw.RCRAViolReportURL),
+  });
+}
+
+/**
+ * Newest determination first, then ascending report URL, unique per violation (its p_viol_seq),
+ * so every page of a re-sliced list holds the same violations.
+ */
+function newestDeterminationFirst(a: EpaRcraViolation, b: EpaRcraViolation): number {
+  return (
+    dateKey(b.determinedDate).localeCompare(dateKey(a.determinedDate)) ||
+    byText(a.reportUrl, b.reportUrl)
+  );
+}
+
+/** A get_dfr High Priority Violation as the profile carries it. */
+function normalizeHpv(raw: RawEchoDfrHpv): EpaHighPriorityViolation {
+  const [beginDate, resolvedDate] = cellSpan(raw);
+  return compact({
+    airProgramId: echoText(raw.SourceID),
+    violationId: echoText(raw.ViolationActivityID),
+    programs: echoText(raw.AirPrograms),
+    pollutants: echoText(raw.AirPollutants),
+    agency: echoText(raw.Agency),
+    beginDate,
+    resolvedDate,
+  });
+}
+
+/** Every Permits[] entry but the FRS one, the Registry ID itself; an entry without an ID is skipped. */
+function programIds(permits: RawEchoDfrPermit[]): EpaProgramId[] {
+  return permits.flatMap((permit) =>
+    permit.EPASystem && permit.EPASystem !== 'FRS' && permit.SourceID
+      ? [
+          {
+            system: permit.EPASystem,
+            id: permit.SourceID,
+            ...compact({
+              statute: echoText(permit.Statute),
+              status: echoText(permit.FacilityStatus),
+              universe: echoText(permit.Universe),
+              expirationDate: echoText(permit.ExpDate),
+            }),
+          },
+        ]
+      : [],
+  );
+}
+
 /**
  * Normalizes an ECHO facility row, read by the column names FACILITY_SEARCH_COLUMNS requests, to
  * the domain type. Program flags match the `p_med` filters: a TRI facility is one with a TRI ID
@@ -721,14 +875,16 @@ export class EchoService {
   /**
    * Search EPA-regulated facilities with ECHO get_facility_info, paged by
    * {@link fetchSearchPage}. The caller supplies at least one geographic filter; `county` needs
-   * `state`. Text filters go upstream as given: `facilityName` (p_fn) matches whole words of a
-   * name ECHO records for the facility, `county` (p_co) a county-name prefix, `naics` (p_ncs) a
-   * code prefix; `countyFips` (p_fips) is an exact 5-digit code.
+   * `states`. `states` and `zipCodes` each go upstream as one comma-joined filter (p_st, p_zip),
+   * which ECHO matches as any of them, counting a facility once. Text filters go upstream as
+   * given: `facilityName` (p_fn) matches whole words of a name ECHO records for the facility,
+   * `county` (p_co) a county-name prefix in each of `states`, `naics` (p_ncs) a code prefix;
+   * `countyFips` (p_fips) is an exact 5-digit code.
    */
   async searchFacilities(
     params: {
-      zipCode?: string;
-      state?: string;
+      zipCodes?: readonly string[];
+      states?: readonly string[];
       city?: string;
       county?: string;
       countyFips?: string;
@@ -747,7 +903,7 @@ export class EchoService {
   ): Promise<Page<EpaFacility> & { totalCount: number }> {
     const budget = searchBudget(
       'facility search',
-      'Narrow it with zip_code or county_fips instead of city or state, a smaller radius_miles, or a programs filter, or call again later.',
+      'Narrow it with zip_code or county_fips instead of city or state, a smaller radius_miles, a programs filter, or a shorter state or zip_code list (split a long one across calls), or call again later.',
     );
     const page = await this.fetchSearchPage<RawEchoFacilityResponse, RawEchoFacility>(
       {
@@ -756,8 +912,8 @@ export class EchoService {
         qcolumns: FACILITY_SEARCH_COLUMNS,
         // buildUrl drops undefined values; latitude/longitude of 0 are valid and sent.
         params: {
-          p_zip: params.zipCode,
-          p_st: params.state,
+          p_zip: params.zipCodes?.join(','),
+          p_st: params.states?.join(','),
           p_ct: params.city,
           p_co: params.county,
           p_fips: params.countyFips,
@@ -772,7 +928,7 @@ export class EchoService {
         },
         rows: (body) => body.Results?.Facilities,
       },
-      { limit: params.limit ?? 50, offset: params.offset ?? 0 },
+      { limit: params.limit ?? 25, offset: params.offset ?? 0 },
       ctx,
       budget,
     );
@@ -782,7 +938,7 @@ export class EchoService {
   /**
    * One page of an ECHO search. Each call runs discovery afresh with `responseset` = `limit`, so
    * get_qid page `offset / limit + 1` holds `offset`; an unaligned offset also reads the page
-   * after it. No QueryID is carried between calls: ECHO serves the same row order across
+   * after it. ECHO refuses a `responseset` above 5,000 in-band, so `limit` stays at or below it. No QueryID is carried between calls: ECHO serves the same row order across
    * discovery runs and page sizes. Discovery's inline rows, when ECHO sends them, stand in for
    * get_qid page 1.
    *
@@ -1017,6 +1173,23 @@ export class EchoService {
       lists.drinkingWaterViolations,
     );
 
+    // ECHO sends an empty section as {}, and can send one without Sources.
+    const effluent = results.CWAEffluentComplianceEXP;
+    const effluentExceedances = slicePage(
+      (effluent?.Sources ?? [])
+        .flatMap((source) => source.Parameters ?? [])
+        .map((row) => normalizeEffluentSeries(row, effluent?.Header))
+        .sort(bySeriesKey),
+      lists.effluentExceedances,
+    );
+    const rcraViolations = slicePage(
+      (results.RCRACompliance?.Sources ?? [])
+        .flatMap((source) => source.Violations ?? [])
+        .map(normalizeRcraViolation)
+        .sort(newestDeterminationFirst),
+      lists.rcraViolations,
+    );
+
     const air = base.programs.air ? programSummary('CAA') : undefined;
     const water = base.programs.water ? programSummary('CWA') : undefined;
     const quartersInViolation = parseEchoNumber(statusRow?.FacQtrsWithNC);
@@ -1063,6 +1236,20 @@ export class EchoService {
           permitId: soleSourceId('ICIS-NPDES'),
         }),
       }),
+      effluentExceedances: effluentExceedances.items,
+      effluentExceedancesTotal: effluentExceedances.totalCount,
+      ...(effluentExceedances.nextOffset !== undefined && {
+        effluentExceedancesNextOffset: effluentExceedances.nextOffset,
+      }),
+      rcraViolations: rcraViolations.items,
+      rcraViolationsTotal: rcraViolations.totalCount,
+      ...(rcraViolations.nextOffset !== undefined && {
+        rcraViolationsNextOffset: rcraViolations.nextOffset,
+      }),
+      highPriorityViolations: (results.AirCompliance?.Sources ?? [])
+        .flatMap((source) => source.HPVProgramsPollutants ?? [])
+        .map(normalizeHpv),
+      programIds: programIds(permits),
     };
     return status.failed ? { profile, notice: STATUS_LOOKUP_NOTICE } : { profile };
   }
@@ -1215,7 +1402,9 @@ export class EchoService {
   /**
    * Search EPA enforcement cases with ECHO get_case_info, paged by {@link fetchSearchPage}: a
    * large match is read from get_qid, and ECHO answers a small one inline in discovery. The
-   * default row carries every column normalizeCase maps, so no `qcolumns` is sent.
+   * default row carries every column normalizeCase maps, so no `qcolumns` is sent. `states` and
+   * `zipCodes` each go upstream as one comma-joined filter (p_state, p_fac_zip), which ECHO
+   * matches as any of them, counting a case that spans several states once.
    *
    * Filing dates are validated YYYY-MM-DD strings. A date bound sends both MM/DD/YYYY ends ECHO
    * requires — an open end reads 01/01/1900 or today (UTC), and each end is clamped to that span —
@@ -1225,8 +1414,8 @@ export class EchoService {
    */
   async searchViolations(
     params: {
-      state?: string;
-      zipCode?: string;
+      states?: readonly string[];
+      zipCodes?: readonly string[];
       program?: string;
       caseType?: CaseType;
       dateFiledStart?: string;
@@ -1240,7 +1429,7 @@ export class EchoService {
   > {
     const budget = searchBudget(
       'case search',
-      'Narrow it with zip_code, program, or a filing-date range, or call again later.',
+      'Narrow it with zip_code, program, a filing-date range, or a shorter state or zip_code list (split a long one across calls), or call again later.',
     );
     const { dateFiledStart, dateFiledEnd } = params;
     const dated = dateFiledStart !== undefined || dateFiledEnd !== undefined;
@@ -1258,8 +1447,8 @@ export class EchoService {
         endpoint: 'case_rest_services.get_case_info',
         label: 'case search',
         params: {
-          p_state: params.state,
-          p_fac_zip: params.zipCode,
+          p_state: params.states?.join(','),
+          p_fac_zip: params.zipCodes?.join(','),
           p_law: params.program,
           p_civil_criminal_indicator: params.caseType && CASE_TYPE_CODES[params.caseType],
           ...(dated && {
@@ -1270,7 +1459,7 @@ export class EchoService {
         },
         rows: (body) => body.Results?.Cases,
       },
-      { limit: params.limit ?? 50, offset: params.offset ?? 0 },
+      { limit: params.limit ?? 25, offset: params.offset ?? 0 },
       ctx,
       budget,
     );

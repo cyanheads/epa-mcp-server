@@ -37,7 +37,9 @@ export interface RawTriReportingForm {
   one_time_release_qty?: string | number;
   reporting_year?: string | number;
   /**
-   * TRI chemical or category ID. N150 (dioxin and dioxin-like compounds) is reported in grams;
+   * TRI chemical or category ID: a CAS number zero-padded to 10 digits (`0000071432`), an
+   * N-prefixed category code (`N420`), or a placeholder; DMAP's `equals` matches a CAS number only
+   * in the padded form. N150 (dioxin and dioxin-like compounds) is reported in grams;
    * every other chemical in pounds. The reporting-form and release-quantity tables carry no unit
    * column, so this is the marker on their rows (tri.tri_chem_info.unit_of_measure records Grams
    * for N150).
@@ -122,6 +124,10 @@ export interface RawSdwisWaterSystem {
  * has facilities report in grams is converted, and `reportedUnit` says so.
  */
 export interface TriRelease {
+  /** CAS Registry Number, hyphenated, derived from a numeric `chemicalId`; absent otherwise */
+  casNumber?: string;
+  /** tri_chem_id as TRI records it: a 10-digit zero-padded CAS number, an N-prefixed category code, or a placeholder (MIXTURE, TRD SECRT, NA, INVALID) */
+  chemicalId?: string;
   chemicalName: string;
   facilityId: string;
   /** Form R Section 8.8 one-time release quantity (one_time_release_qty) in lbs */
@@ -169,6 +175,12 @@ export interface SuperfundSite {
   state?: string;
   street?: string;
   zip?: string;
+}
+
+/** A Superfund search row: the site, and on a proximity search its distance from the point. */
+export interface SuperfundSearchSite extends SuperfundSite {
+  /** Unrounded great-circle miles from the search point, the value the match is ranked on */
+  distanceMiles?: number;
 }
 
 /** One SEMS contaminant association; repeated chemicals retain their action/media context. */

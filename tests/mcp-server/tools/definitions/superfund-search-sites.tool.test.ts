@@ -85,7 +85,7 @@ describe('superfundSearchSitesTool', () => {
     const input = superfundSearchSitesTool.input.parse({ state: ' WA ' });
     const result = await superfundSearchSitesTool.handler(input, ctx);
     // npl_status defaults to "all", which sends no NPL filter.
-    expect(mockSearchSuperfund).toHaveBeenCalledWith({ state: 'WA', offset: 0, limit: 50 }, ctx);
+    expect(mockSearchSuperfund).toHaveBeenCalledWith({ state: 'WA', offset: 0, limit: 25 }, ctx);
     expect(result).toEqual({ sites: [hanfordSite] });
   });
 
@@ -100,7 +100,7 @@ describe('superfundSearchSitesTool', () => {
       state: 'NJ',
       zipCode: '07631',
       offset: 0,
-      limit: 50,
+      limit: 25,
     });
   });
 
@@ -115,7 +115,7 @@ describe('superfundSearchSitesTool', () => {
     expect(mockSearchSuperfund.mock.calls[0]![0]).toEqual({
       city: 'Richland',
       offset: 0,
-      limit: 50,
+      limit: 25,
     });
   });
 
@@ -148,7 +148,7 @@ describe('superfundSearchSitesTool', () => {
     });
     const result = await superfundSearchSitesTool.handler(input, ctx);
     expect(mockSearchSuperfund).toHaveBeenCalledWith(
-      { state: 'WA', city: 'RICHLAND', nplStatus: 'listed', offset: 0, limit: 50 },
+      { state: 'WA', city: 'RICHLAND', nplStatus: 'listed', offset: 0, limit: 25 },
       ctx,
     );
     expect(result.sites).toEqual([hanfordSite]);
@@ -164,7 +164,7 @@ describe('superfundSearchSitesTool', () => {
     });
     const result = await superfundSearchSitesTool.handler(input, ctx);
     expect(mockSearchSuperfund).toHaveBeenCalledWith(
-      { latitude: 46.652, longitude: -119.49, radiusMiles: 50, offset: 0, limit: 50 },
+      { latitude: 46.652, longitude: -119.49, radiusMiles: 50, offset: 0, limit: 25 },
       ctx,
     );
     expect(result).toEqual({ sites: [hanfordSite], totalCount: 1 });
@@ -184,6 +184,69 @@ describe('superfundSearchSitesTool', () => {
     await expect(superfundSearchSitesTool.handler(input, ctx)).rejects.toMatchObject({
       data: { reason: 'no_location_filter' },
     });
+  });
+
+  it('searches by name alone, trimmed, with no location filter', async () => {
+    mockSearchSuperfund.mockResolvedValue({ items: [hanfordSite] });
+    const call = await runToolContract(superfundSearchSitesTool, { name: ' HANFORD ' });
+    expect(call.isError).toBeFalsy();
+    expect(mockSearchSuperfund.mock.calls[0]![0]).toEqual({
+      name: 'HANFORD',
+      offset: 0,
+      limit: 25,
+    });
+    expect(call.structuredContent).toMatchObject({
+      sites: [hanfordSite],
+      effectiveQuery: 'name contains HANFORD',
+    });
+    expect(textOf(call.content)).toContain('Query: `name contains HANFORD`');
+  });
+
+  it('passes name beside state and proximity filters', async () => {
+    mockSearchSuperfund.mockResolvedValue({ items: [hanfordSite], totalCount: 1 });
+    const call = await runToolContract(superfundSearchSitesTool, {
+      state: 'WA',
+      name: 'hanford',
+      latitude: 46.652,
+      longitude: -119.49,
+      radius_miles: 50,
+    });
+    expect(call.isError).toBeFalsy();
+    expect(mockSearchSuperfund.mock.calls[0]![0]).toEqual({
+      state: 'WA',
+      name: 'hanford',
+      latitude: 46.652,
+      longitude: -119.49,
+      radiusMiles: 50,
+      offset: 0,
+      limit: 25,
+    });
+  });
+
+  it('fails no_location_filter for a blank name with no other filter, naming name in its recovery', async () => {
+    const call = await runToolContract(superfundSearchSitesTool, {
+      name: '   ',
+      npl_status: 'listed',
+    });
+    expect(call.structuredContent).toMatchObject({
+      error: {
+        code: JsonRpcErrorCode.ValidationError,
+        data: {
+          reason: 'no_location_filter',
+          recovery: {
+            hint: 'Provide at least one of state, city, zip_code, name, or latitude+longitude+radius_miles.',
+          },
+        },
+      },
+    });
+    expect(mockSearchSuperfund).not.toHaveBeenCalled();
+  });
+
+  it("bounds name at 4,094 characters, DMAP's whole request-line limit, and says punctuation matches as written", () => {
+    const parse = (name: string) => superfundSearchSitesTool.input.safeParse({ name }).success;
+    expect(parse('x'.repeat(4094))).toBe(true);
+    expect(parse('x'.repeat(4095))).toBe(false);
+    expect(superfundSearchSitesTool.input.shape.name.description).toContain('matched as written');
   });
 
   it('throws radius_required when lat/lng provided without radius_miles', async () => {
@@ -209,6 +272,18 @@ describe('superfundSearchSitesTool', () => {
     });
   });
 
+  it('suggests a shorter name when a name search finds no sites', async () => {
+    mockSearchSuperfund.mockResolvedValue({ items: [] });
+    const ctx = createMockContext({ errors: superfundSearchSitesTool.errors });
+    const input = superfundSearchSitesTool.input.parse({ name: 'HANFORD 100-AREA' });
+    const result = await superfundSearchSitesTool.handler(input, ctx);
+    expect(result).toEqual({
+      sites: [],
+      message:
+        'No Superfund sites found. Try a shorter name, expanding the area, removing NPL status filter, or using a different location.',
+    });
+  });
+
   describe('query echo', () => {
     const echoOf = async (args: Record<string, unknown>, items: unknown[] = [hanfordSite]) => {
       mockSearchSuperfund.mockResolvedValue({ items });
@@ -228,6 +303,12 @@ describe('superfundSearchSitesTool', () => {
         }),
       ).toBe(
         'state=NJ; city contains Newark; zip_code begins with 07105; npl_status=F,A; exclude_archived=true',
+      );
+    });
+
+    it('echoes name as a contains term after city', async () => {
+      expect(await echoOf({ state: 'CA', city: 'Hanford', name: ' PG&E ' })).toBe(
+        'state=CA; city contains Hanford; name contains PG&E',
       );
     });
 
@@ -251,23 +332,41 @@ describe('superfundSearchSitesTool', () => {
   });
 
   describe('paging', () => {
-    it('clamps an over-cap limit to 200 with a notice and passes offset through', async () => {
+    it('clamps an over-cap limit to 2,500 with a notice and passes offset through', async () => {
       mockSearchSuperfund.mockResolvedValue({ items: [hanfordSite] });
       const ctx = createMockContext({ errors: superfundSearchSitesTool.errors });
-      const input = superfundSearchSitesTool.input.parse({ state: 'WA', limit: 500, offset: 400 });
+      const input = superfundSearchSitesTool.input.parse({ state: 'WA', limit: 5000, offset: 400 });
       await superfundSearchSitesTool.handler(input, ctx);
       expect(mockSearchSuperfund).toHaveBeenCalledWith(
-        { state: 'WA', offset: 400, limit: 200 },
+        { state: 'WA', offset: 400, limit: 2500 },
         ctx,
       );
       expect(getEnrichment(ctx).limitNotice).toBe(
-        "limit 500 is above this tool's cap of 200, so at most 200 records were returned.",
+        "limit 5000 is above this tool's cap of 2500, so at most 2500 records were returned.",
       );
     });
 
-    it('rejects a limit above the 5,000 ceiling and a negative offset at the schema', () => {
+    it('serves limit 2,500 as asked, with no limitNotice', async () => {
+      mockSearchSuperfund.mockResolvedValue({ items: [hanfordSite] });
+      const ctx = createMockContext({ errors: superfundSearchSitesTool.errors });
+      const input = superfundSearchSitesTool.input.parse({ state: 'CA', limit: 2500 });
+      await superfundSearchSitesTool.handler(input, ctx);
+      expect(mockSearchSuperfund).toHaveBeenCalledWith(
+        { state: 'CA', offset: 0, limit: 2500 },
+        ctx,
+      );
+      expect(getEnrichment(ctx)).not.toHaveProperty('limitNotice');
+    });
+
+    it('advertises default 25 and the 2,500 cap in the limit description', () => {
+      expect(superfundSearchSitesTool.input.shape.limit.description).toBe(
+        'Number of sites to return in one call. Default 25; a larger value returns at most 2,500 and says so. Page past it with offset and nextOffset.',
+      );
+    });
+
+    it('accepts any limit (no schema maximum) and rejects a negative offset at the schema', () => {
       expect(superfundSearchSitesTool.input.safeParse({ state: 'WA', limit: 5001 }).success).toBe(
-        false,
+        true,
       );
       expect(superfundSearchSitesTool.input.safeParse({ state: 'WA', offset: -1 }).success).toBe(
         false,
@@ -356,21 +455,35 @@ describe('superfundSearchSitesTool', () => {
         'a city with no letter or digit',
         { state: 'WA', city: "'''" },
         'unmatchable_filter',
-        'Include a letter or digit in city, or search by state or zip_code instead.',
+        'Include a letter or digit in city or name, or search by state or zip_code instead.',
         'has no letter or digit',
       ],
       [
         'a city past the request line',
         { city: 'a'.repeat(4030), limit: 1 },
         'filter_too_long',
-        'Shorten city to a distinctive part of its name and retry.',
+        'Shorten city or name to a distinctive part of it and retry.',
         'too long',
       ],
       [
         'a proximity city past the request line',
         { city: 'a'.repeat(4030), latitude: 47.6, longitude: -122.3, radius_miles: 1 },
         'filter_too_long',
-        'Shorten city to a distinctive part of its name and retry.',
+        'Shorten city or name to a distinctive part of it and retry.',
+        'too long',
+      ],
+      [
+        'a name with no letter or digit',
+        { name: '&()' },
+        'unmatchable_filter',
+        'Include a letter or digit in city or name, or search by state or zip_code instead.',
+        'has no letter or digit',
+      ],
+      [
+        'a name past the request line',
+        { name: 'a'.repeat(4030), limit: 1 },
+        'filter_too_long',
+        'Shorten city or name to a distinctive part of it and retry.',
         'too long',
       ],
     ])(
@@ -384,6 +497,63 @@ describe('superfundSearchSitesTool', () => {
         expect(fetchSpy).not.toHaveBeenCalled();
       },
     );
+  });
+
+  describe('distanceMiles', () => {
+    it('reports each proximity row to two decimals on both surfaces, keeping the service order', async () => {
+      mockSearchSuperfund.mockResolvedValue({
+        items: [
+          { ...hanfordSite, siteId: 'NEAR', distanceMiles: 0.8685 },
+          { ...hanfordSite, siteId: 'TIE', distanceMiles: 0.8749 },
+          { ...hanfordSite, siteId: 'FAR', distanceMiles: 4.99999 },
+        ],
+        totalCount: 3,
+      });
+      const call = await runToolContract(superfundSearchSitesTool, {
+        latitude: 46.652,
+        longitude: -119.49,
+        radius_miles: 5,
+      });
+      expect(call.isError).toBeFalsy();
+      const { sites } = call.structuredContent as {
+        sites: Array<{ siteId: string; distanceMiles?: number }>;
+      };
+      expect(sites.map((s) => [s.siteId, s.distanceMiles])).toEqual([
+        ['NEAR', 0.87],
+        ['TIE', 0.87],
+        ['FAR', 5],
+      ]);
+      const text = textOf(call.content);
+      expect(text.match(/\*\*Distance:\*\* [\d.]+ mi/g)).toEqual([
+        '**Distance:** 0.87 mi',
+        '**Distance:** 0.87 mi',
+        '**Distance:** 5 mi',
+      ]);
+    });
+
+    it('is absent from administrative rows on both surfaces', async () => {
+      mockSearchSuperfund.mockResolvedValue({ items: [hanfordSite] });
+      const call = await runToolContract(superfundSearchSitesTool, { state: 'WA' });
+      expect((call.structuredContent as { sites: object[] }).sites[0]).not.toHaveProperty(
+        'distanceMiles',
+      );
+      expect(textOf(call.content)).not.toContain('Distance');
+    });
+
+    it('extends the search row only: the shared site schema and the get tool carry no distanceMiles', async () => {
+      const { superfundSiteSchema } = await import('@/mcp-server/superfund-site-schema.js');
+      const { superfundGetSiteTool } = await import(
+        '@/mcp-server/tools/definitions/superfund-get-site.tool.js'
+      );
+      expect(Object.keys(superfundSiteSchema.shape)).not.toContain('distanceMiles');
+      expect(Object.keys(superfundGetSiteTool.output.shape.site.shape)).not.toContain(
+        'distanceMiles',
+      );
+      const row = superfundSearchSitesTool.output.shape.sites.element;
+      expect(row.shape.distanceMiles.description).toBe(
+        'Great-circle miles from the search point, to two decimals; absent without a search point or row coordinates.',
+      );
+    });
   });
 
   it('formats output with site ID, NPL status, and coordinates', () => {

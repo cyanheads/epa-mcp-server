@@ -12,7 +12,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { echoGetFacilityTool } from '@/mcp-server/tools/definitions/echo-get-facility.tool.js';
 import type { FacilitySlices } from '@/services/echo/echo-service.js';
 import { describeLocationRendering, textOf } from '../../../helpers.js';
-import { DFR_SDWIS_WA5300484 } from '../../../services/echo/echo-fixtures.js';
+import {
+  DFR_BOEING_110017848105,
+  DFR_BOEING_COMPLIANCE_SECTIONS_110017848105,
+  DFR_EFFLUENT_SERIES_S_R_AND_LIMIT_VIOLATION,
+  DFR_HPV_OPEN_110059763536,
+  DFR_HPV_RESOLVED_110008170237,
+  DFR_SDWIS_WA5300484,
+} from '../../../services/echo/echo-fixtures.js';
 
 const mockGetFacility = vi.fn();
 
@@ -27,14 +34,26 @@ vi.mock('@/services/echo/echo-service.js', async (importOriginal) => ({
 
 /** The slice argument a default call passes to getFacility. */
 const DEFAULT_SLICE = {
-  drinkingWaterViolations: { limit: 50, offset: 0 },
-  inspections: { limit: 100, offset: 0 },
+  drinkingWaterViolations: { limit: 25, offset: 0 },
+  inspections: { limit: 25, offset: 0 },
+  effluentExceedances: { limit: 10, offset: 0 },
+  rcraViolations: { limit: 25, offset: 0 },
+};
+
+/** The #75 lists as a report with no effluent, RCRA, HPV, or Permits[] records yields them. */
+const noComplianceDetail = {
+  effluentExceedances: [],
+  effluentExceedancesTotal: 0,
+  rcraViolations: [],
+  rcraViolationsTotal: 0,
+  highPriorityViolations: [],
+  programIds: [],
 };
 
 /**
  * The profile EchoService.getFacility builds from the get_dfr body for registry 110015969941
  * (tests/services/echo/echo-fixtures.ts), with complianceStatus and compliance as a p_frs
- * facility row supplies them.
+ * facility row supplies them, and programIds cut to its first three entries.
  */
 const fullProfile = {
   registryId: '110015969941',
@@ -147,6 +166,12 @@ const fullProfile = {
     statusDate: '09/30/2026',
   },
   waterCompliance: { status: 'Violation Identified', permitId: 'WA0031305' },
+  ...noComplianceDetail,
+  programIds: [
+    { system: 'ICIS', id: '13265' },
+    { system: 'ICIS-Air', id: 'WAPSC0005303300006', statute: 'CAA', status: 'Operating' },
+    { system: 'CEDRI', id: 'CEDRI10207719', statute: 'CAA' },
+  ],
 };
 
 describe('echoGetFacilityTool', () => {
@@ -236,6 +261,17 @@ describe('echoGetFacilityTool', () => {
       '### Water (CWA) Compliance',
       '**Status:** Violation Identified',
       '**NPDES Permit:** WA0031305',
+      '',
+      '### CWA Effluent Exceedances (0)',
+      '',
+      '### RCRA Violations (0)',
+      '',
+      '### CAA High Priority Violations (0)',
+      '',
+      '### Program IDs (3)',
+      '- ICIS 13265',
+      '- ICIS-Air WAPSC0005303300006 — CAA — Operating',
+      '- CEDRI CEDRI10207719 — CAA',
     ]);
   });
 
@@ -355,14 +391,14 @@ describe('echoGetFacilityTool', () => {
 
       const result = await runToolContract(echoGetFacilityTool, {
         registry_id: '110015969941',
-        drinking_water_violations_limit: 900,
+        drinking_water_violations_limit: 3001,
       });
 
       const notice =
-        "drinking_water_violations_limit 900 is above this tool's cap of 200, so at most 200 records were returned.";
+        "drinking_water_violations_limit 3001 is above this tool's cap of 3000, so at most 3000 records were returned.";
       expect(mockGetFacility).toHaveBeenCalledWith('110015969941', expect.anything(), {
         ...DEFAULT_SLICE,
-        drinkingWaterViolations: { limit: 200, offset: 0 },
+        drinkingWaterViolations: { limit: 3000, offset: 0 },
       });
       expect(structured(result).limitNotice).toBe(notice);
       expect(textOf(result.content)).toContain(notice);
@@ -373,12 +409,6 @@ describe('echoGetFacilityTool', () => {
         'a limit of 0',
         { drinking_water_violations_limit: 0 },
         'too_small',
-        'drinking_water_violations_limit',
-      ],
-      [
-        'a limit above the 5,000 ceiling',
-        { drinking_water_violations_limit: 5001 },
-        'too_big',
         'drinking_water_violations_limit',
       ],
       [
@@ -411,6 +441,7 @@ describe('echoGetFacilityTool', () => {
         inspections: [],
         inspectionsTotal: 0,
         formalActions: [],
+        ...noComplianceDetail,
       };
       const none = (
         echoGetFacilityTool.format!({
@@ -459,6 +490,7 @@ describe('echoGetFacilityTool', () => {
           inspections: [],
           inspectionsTotal: 0,
           formalActions: [],
+          ...noComplianceDetail,
           drinkingWaterViolations: [
             {
               violationId: '3410601',
@@ -489,6 +521,7 @@ describe('echoGetFacilityTool', () => {
           inspections: [],
           inspectionsTotal: 0,
           formalActions: [],
+          ...noComplianceDetail,
           drinkingWaterViolations: [
             {
               contaminantName: value,
@@ -578,6 +611,7 @@ describe('echoGetFacilityTool', () => {
           drinkingWaterViolations: [],
           drinkingWaterViolationsTotal: 0,
           formalActions: [],
+          ...noComplianceDetail,
           ...fields,
         })[0] as { text: string }
       ).text,
@@ -596,6 +630,7 @@ describe('echoGetFacilityTool', () => {
       drinkingWaterViolations: [],
       drinkingWaterViolationsTotal: 0,
       formalActions: [],
+      ...noComplianceDetail,
     };
     const blocks = echoGetFacilityTool.format!(sparse);
     const text = (blocks[0] as { type: string; text: string }).text;
@@ -630,6 +665,7 @@ describe('echoGetFacilityTool', () => {
         inspectionsTotal: 1,
         drinkingWaterViolations: [],
         drinkingWaterViolationsTotal: 0,
+        ...noComplianceDetail,
         formalActions: [
           {
             settlementDate: '02/12/2026',
@@ -680,6 +716,7 @@ describe('echoGetFacilityTool', () => {
         drinkingWaterViolations: [],
         drinkingWaterViolationsTotal: 0,
         formalActions: [],
+        ...noComplianceDetail,
       })[0] as { text: string }
     ).text;
     expect(text.split('\n')).toEqual(
@@ -782,6 +819,7 @@ describe('echoGetFacilityTool', () => {
 
       const result = await runToolContract(echoGetFacilityTool, {
         registry_id: '110041990913',
+        inspections_limit: 50,
         inspections_offset: 100,
       });
 
@@ -793,15 +831,15 @@ describe('echoGetFacilityTool', () => {
       expect(textOf(result.content)).not.toContain('pass as inspections_offset');
     });
 
-    it('the default page is the newest 100, flagged as cut', async () => {
+    it('regression #78: the default page is the newest 25, flagged as cut', async () => {
       await serveRefinery();
 
       const result = await runToolContract(echoGetFacilityTool, { registry_id: '110041990913' });
 
       const sc = structured(result);
-      expect(sc.inspections).toHaveLength(100);
-      expect(sc).toMatchObject({ inspectionsNextOffset: 100, truncated: true });
-      expect(textOf(result.content)).toContain('### Inspections (1–100 of 150)');
+      expect(sc.inspections.map((record) => record.activityDate)).toEqual(newestFirst.slice(0, 25));
+      expect(sc).toMatchObject({ inspectionsNextOffset: 25, truncated: true });
+      expect(textOf(result.content)).toContain('### Inspections (1–25 of 150)');
     });
 
     it('an offset past the end returns an empty page that still states the total', async () => {
@@ -824,27 +862,39 @@ describe('echoGetFacilityTool', () => {
 
       const result = await runToolContract(echoGetFacilityTool, {
         registry_id: '110015969941',
-        inspections_limit: 500,
-        drinking_water_violations_limit: 900,
+        inspections_limit: 5001,
+        drinking_water_violations_limit: 3001,
       });
 
       expect(mockGetFacility).toHaveBeenCalledWith('110015969941', expect.anything(), {
-        drinkingWaterViolations: { limit: 200, offset: 0 },
-        inspections: { limit: 100, offset: 0 },
+        ...DEFAULT_SLICE,
+        drinkingWaterViolations: { limit: 3000, offset: 0 },
+        inspections: { limit: 5000, offset: 0 },
       });
       expect(structured(result).limitNotice).toBe(
-        "drinking_water_violations_limit 900 is above this tool's cap of 200, so at most 200 records were returned. inspections_limit 500 is above this tool's cap of 100, so at most 100 records were returned.",
+        "drinking_water_violations_limit 3001 is above this tool's cap of 3000, so at most 3000 records were returned. inspections_limit 5001 is above this tool's cap of 5000, so at most 5000 records were returned.",
       );
+    });
+
+    it('regression #78: serves inspections_limit 5000 and drinking_water_violations_limit 3000 unclamped', async () => {
+      mockGetFacility.mockResolvedValue(fullProfile);
+
+      const result = await runToolContract(echoGetFacilityTool, {
+        registry_id: '110015969941',
+        inspections_limit: 5000,
+        drinking_water_violations_limit: 3000,
+      });
+
+      expect(mockGetFacility).toHaveBeenCalledWith('110015969941', expect.anything(), {
+        ...DEFAULT_SLICE,
+        drinkingWaterViolations: { limit: 3000, offset: 0 },
+        inspections: { limit: 5000, offset: 0 },
+      });
+      expect(result.structuredContent).not.toHaveProperty('limitNotice');
     });
 
     it.each([
       ['a limit of 0', { inspections_limit: 0 }, 'too_small', 'inspections_limit'],
-      [
-        'a limit above the 5,000 ceiling',
-        { inspections_limit: 5001 },
-        'too_big',
-        'inspections_limit',
-      ],
       ['a negative offset', { inspections_offset: -1 }, 'too_small', 'inspections_offset'],
     ])('rejects %s at its bound before any request', async (_label, args, code, field) => {
       const result = await runToolContract(echoGetFacilityTool, {
@@ -857,6 +907,422 @@ describe('echoGetFacilityTool', () => {
         error: { data: { issues: [expect.objectContaining({ code, path: [field] })] } },
       });
       expect(mockGetFacility).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('regression #75: effluent exceedances, RCRA violations, HPVs, and program IDs', () => {
+    const { Header } = DFR_BOEING_COMPLIANCE_SECTIONS_110017848105.CWAEffluentComplianceEXP;
+    const [copper] =
+      DFR_BOEING_COMPLIANCE_SECTIONS_110017848105.CWAEffluentComplianceEXP.Sources[0]!.Parameters;
+
+    /** Routes getFacility to the real service over Boeing's report, `sections` replacing its own. */
+    async function serveBoeing(sections: Record<string, unknown> = {}) {
+      const { EchoService } = await vi.importActual<
+        typeof import('@/services/echo/echo-service.js')
+      >('@/services/echo/echo-service.js');
+      const echo = new EchoService(
+        { pkg: { name: '@cyanheads/epa-mcp-server', version: '0.0.0-test' } } as AppConfig,
+        {} as StorageService,
+      );
+      mockGetFacility.mockImplementation((id: string, ctx: Context, slices: FacilitySlices) =>
+        echo.getFacility(id, ctx, slices),
+      );
+      const dfr = {
+        Results: {
+          ...DFR_BOEING_110017848105.Results,
+          ...DFR_BOEING_COMPLIANCE_SECTIONS_110017848105,
+          ...sections,
+        },
+      };
+      vi.spyOn(globalThis, 'fetch').mockImplementation((input) =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify(
+              String(input).includes('get_dfr') ? dfr : { Results: { Facilities: [] } },
+            ),
+          ),
+        ),
+      );
+    }
+    const structured = (result: { structuredContent?: unknown }) =>
+      result.structuredContent as {
+        effluentExceedances: Array<{ quarters: Array<Record<string, string>> }>;
+        effluentExceedancesTotal: number;
+        effluentExceedancesNextOffset?: number;
+        rcraViolations: Array<Record<string, string>>;
+        rcraViolationsTotal: number;
+        rcraViolationsNextOffset?: number;
+        highPriorityViolations: Array<Record<string, string>>;
+        programIds: Array<Record<string, string>>;
+        truncated?: boolean;
+        limitNotice?: string;
+      };
+    /** Every leaf value of a list, nested quarters included. */
+    const leaves = (entries: object[]): unknown[] =>
+      entries.flatMap((entry) =>
+        Object.values(entry).flatMap((value) =>
+          Array.isArray(value) ? leaves(value as object[]) : [value],
+        ),
+      );
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("carries Boeing Plant 2's exceedance, RCRA violations, and program IDs on both surfaces", async () => {
+      await serveBoeing();
+
+      const result = await runToolContract(echoGetFacilityTool, { registry_id: '110017848105' });
+
+      expect(result.isError).toBeFalsy();
+      const sc = structured(result);
+      expect(sc).toMatchObject({
+        effluentExceedancesTotal: 1,
+        rcraViolationsTotal: 7,
+        highPriorityViolations: [],
+      });
+      expect(sc.programIds).toHaveLength(20);
+      // Permits[] records a universe on 15 of these entries and an expiration date on 9.
+      expect(sc.programIds.filter((p) => p.universe)).toHaveLength(15);
+      expect(sc.programIds.filter((p) => p.expirationDate)).toHaveLength(9);
+      expect(sc).not.toHaveProperty('truncated');
+      const text = textOf(result.content);
+      const lines = text.split('\n');
+      expect(lines).toEqual(
+        expect.arrayContaining([
+          '### CWA Effluent Exceedances (1)',
+          '- WAR314396 — outfall P33 - 01 — 01042 Copper, total \\[as Cu\\] — monitoring location See Comments — NMth',
+          '  - 10/01/2025–12/31/2025: 1061%',
+          '### RCRA Violations (7)',
+          '- WAD009256819 — 262.A Generators - General — WA — determined 03/27/2025 — returned to compliance 05/23/2025 — [violation report](<https://echo.epa.gov/violation-report?p_id=WAD009256819&p_viol_activity_location=WA&p_viol_seq=5002&p_viol_determined_by_agency=S>)',
+          '### CAA High Priority Violations (0)',
+        ]),
+      );
+      // Each entry's statute, status, universe, and expiration date, as get_dfr's Permits[] lists them.
+      const heading = lines.indexOf('### Program IDs (20)');
+      expect(lines.slice(heading, heading + 21)).toEqual([
+        '### Program IDs (20)',
+        '- ICIS 600019551',
+        '- ICIS 39469',
+        '- ICIS-Air WAPSC0005303321147 — CAA — Operating — Major Emissions',
+        '- ICIS-Air WAPSC0005303300156 — CAA — Permanently Closed — Major Emissions',
+        '- ICIS-Air WAPSC0005303329499 — CAA — Permanently Closed — Minor Emissions',
+        '- CEDRI CEDRI125271 — CAA',
+        '- EIS 11593711 — CAA',
+        '- ICIS-NPDES WAR304380 — CWA — Terminated; Compliance Tracking Off — Non-Major: General Permit Covered Facility — expires 12/31/2020',
+        '- ICIS-NPDES WAR012502 — CWA — Terminated; Compliance Tracking Off — Non-Major: General Permit Covered Facility — expires 12/31/2015',
+        '- ICIS-NPDES WAR000482 — CWA — Effective — Non-Major: General Permit Covered Facility — expires 12/31/2029',
+        '- ICIS-NPDES WAR127234 — CWA — Terminated; Compliance Tracking Off — Non-Major: General Permit Covered Facility — expires 12/31/2015',
+        '- ICIS-NPDES WAR315626 — CWA — Effective — Non-Major: General Permit Covered Facility — expires 12/31/2030',
+        '- ICIS-NPDES WAR314396 — CWA — Terminated; Compliance Tracking Off — Non-Major: General Permit Covered Facility — expires 12/31/2030',
+        '- ICIS-NPDES WAR125956 — CWA — Terminated; Compliance Tracking Off — Non-Major: General Permit Covered Facility — expires 12/31/2015',
+        '- ICIS-NPDES WAR126089 — CWA — Terminated; Compliance Tracking Off — Non-Major: General Permit Covered Facility — expires 12/31/2015',
+        '- ICIS-NPDES WAR000226 — CWA — Effective — Non-Major: General Permit Covered Facility — expires 12/31/2029',
+        '- TRI 98108THBNG7500E — EP313 — Last Reported for 2024 — Toxics Release Inventory',
+        '- RCRAInfo WAD980982037 — RCRA — Active (H   S) — LQG',
+        '- RCRAInfo WAD009256819 — RCRA — Active (HPA S) — LQG, Legacy TSDF',
+        '- TSCA TSCA9381 — TSCA',
+      ]);
+      // Every value on structuredContent, nested quarters included, reaches content[].
+      const unescaped = text.replaceAll('\\', '');
+      for (const value of leaves([
+        ...sc.effluentExceedances,
+        ...sc.rcraViolations,
+        ...sc.programIds,
+      ])) {
+        expect(unescaped).toContain(String(value));
+      }
+    });
+
+    it('renders each quarter status, LIMIT VIOLATION, and the HPV dates on both surfaces', async () => {
+      await serveBoeing({
+        CWAEffluentComplianceEXP: {
+          Header,
+          Sources: [{ Parameters: DFR_EFFLUENT_SERIES_S_R_AND_LIMIT_VIOLATION }],
+        },
+        AirCompliance: {
+          Sources: [
+            { HPVProgramsPollutants: DFR_HPV_RESOLVED_110008170237 },
+            { HPVProgramsPollutants: DFR_HPV_OPEN_110059763536 },
+          ],
+        },
+      });
+
+      const result = await runToolContract(echoGetFacilityTool, { registry_id: '110017848105' });
+
+      const sc = structured(result);
+      expect(sc.highPriorityViolations).toHaveLength(4);
+      const lines = textOf(result.content).split('\n');
+      expect(lines).toEqual(
+        expect.arrayContaining([
+          '  - 07/01/2023–09/30/2023: LIMIT VIOLATION',
+          '  - 04/01/2026–06/30/2026: 343% (status S)',
+          '  - 07/01/2023–09/30/2023: 7532% (status R)',
+          '### CAA High Priority Violations (4)',
+          '- TX0000004803900041 — violation 3601295927 — programs CAATVP — pollutants FACIL — TX — from 11/17/2017 — resolved 04/02/2025',
+          '- TX0000004816700001 — violation 3603017001 — programs CAATVP — pollutants FACIL — TX — from 09/08/2008',
+        ]),
+      );
+      const text = textOf(result.content).replaceAll('\\', '');
+      for (const value of leaves([...sc.effluentExceedances, ...sc.highPriorityViolations])) {
+        expect(text).toContain(String(value));
+      }
+    });
+
+    it('reads RCRA and HPV dates recorded in the newest of the twelve quarter cells', async () => {
+      /** Every quarter cell empty, as get_dfr sends a row's quarters with nothing in them. */
+      const noQuarters = Object.fromEntries(
+        Array.from({ length: 12 }, (_, i) => [`Qtr${i + 1}Status`, null]),
+      );
+      const [rcraRow] =
+        DFR_BOEING_COMPLIANCE_SECTIONS_110017848105.RCRACompliance.Sources[0]!.Violations;
+      const [hpvRow] = DFR_HPV_RESOLVED_110008170237;
+      const reportUrl = (seq: number) =>
+        `https://echo.epa.gov/violation-report?p_id=WAD009256819&p_viol_activity_location=WA&p_viol_seq=${seq}&p_viol_determined_by_agency=S`;
+      await serveBoeing({
+        RCRACompliance: {
+          Sources: [
+            {
+              Violations: [
+                // Determined in the newest quarter (10/01–12/31/2026) and still open.
+                {
+                  ...rcraRow,
+                  ...noQuarters,
+                  Qtr12Status: '10/20/2026',
+                  RCRAViolReportURL: reportUrl(6001),
+                },
+                // Determined two quarters earlier, returned to compliance in the newest.
+                {
+                  ...rcraRow,
+                  ...noQuarters,
+                  Qtr10Status: '05/12/2026',
+                  Qtr11Status: '--->',
+                  Qtr12Status: '11/02/2026',
+                  RCRAViolReportURL: reportUrl(6002),
+                },
+              ],
+            },
+          ],
+        },
+        AirCompliance: {
+          Sources: [
+            {
+              HPVProgramsPollutants: [
+                {
+                  ...hpvRow,
+                  ...noQuarters,
+                  Qtr12Status: '10/14/2026',
+                  ViolationActivityID: '3609000001',
+                },
+                {
+                  ...hpvRow,
+                  ...noQuarters,
+                  Qtr9Status: '02/03/2026',
+                  Qtr10Status: '--->',
+                  Qtr11Status: '--->',
+                  Qtr12Status: '11/05/2026',
+                  ViolationActivityID: '3609000002',
+                },
+              ],
+            },
+          ],
+        },
+      });
+
+      const result = await runToolContract(echoGetFacilityTool, { registry_id: '110017848105' });
+
+      const sc = structured(result);
+      const handler = {
+        handlerId: 'WAD009256819',
+        violationType: '262.A',
+        violation: 'Generators - General',
+        agency: 'WA',
+      };
+      expect(sc.rcraViolations).toEqual([
+        { ...handler, determinedDate: '10/20/2026', reportUrl: reportUrl(6001) },
+        {
+          ...handler,
+          determinedDate: '05/12/2026',
+          returnedToComplianceDate: '11/02/2026',
+          reportUrl: reportUrl(6002),
+        },
+      ]);
+      const hpv = {
+        airProgramId: 'TX0000004803900041',
+        programs: 'CAATVP',
+        pollutants: 'FACIL',
+        agency: 'TX',
+      };
+      expect(sc.highPriorityViolations).toEqual([
+        { ...hpv, violationId: '3609000001', beginDate: '10/14/2026' },
+        { ...hpv, violationId: '3609000002', beginDate: '02/03/2026', resolvedDate: '11/05/2026' },
+      ]);
+      expect(textOf(result.content).split('\n')).toEqual(
+        expect.arrayContaining([
+          `- WAD009256819 — 262.A Generators - General — WA — determined 10/20/2026 — [violation report](<${reportUrl(6001)}>)`,
+          `- WAD009256819 — 262.A Generators - General — WA — determined 05/12/2026 — returned to compliance 11/02/2026 — [violation report](<${reportUrl(6002)}>)`,
+          '- TX0000004803900041 — violation 3609000001 — programs CAATVP — pollutants FACIL — TX — from 10/14/2026',
+          '- TX0000004803900041 — violation 3609000002 — programs CAATVP — pollutants FACIL — TX — from 02/03/2026 — resolved 11/05/2026',
+        ]),
+      );
+    });
+
+    it('pages RCRA violations with their offset, flags the cut, and states the total past the end', async () => {
+      await serveBoeing();
+
+      const first = await runToolContract(echoGetFacilityTool, {
+        registry_id: '110017848105',
+        rcra_violations_limit: 3,
+      });
+      const last = await runToolContract(echoGetFacilityTool, {
+        registry_id: '110017848105',
+        rcra_violations_limit: 3,
+        rcra_violations_offset: 6,
+      });
+      const past = await runToolContract(echoGetFacilityTool, {
+        registry_id: '110017848105',
+        rcra_violations_offset: 10,
+      });
+
+      expect(structured(first)).toMatchObject({ rcraViolationsNextOffset: 3, truncated: true });
+      expect(structured(first).rcraViolations).toHaveLength(3);
+      expect(textOf(first.content).split('\n')).toEqual(
+        expect.arrayContaining([
+          '### RCRA Violations (1–3 of 7)',
+          '**Next offset:** 3 (pass as rcra_violations_offset)',
+          '**Truncated:** true',
+        ]),
+      );
+      expect(structured(last).rcraViolations.map((v) => v.violationType)).toEqual(['XXS']);
+      expect(structured(last)).not.toHaveProperty('rcraViolationsNextOffset');
+      expect(structured(last)).not.toHaveProperty('truncated');
+      expect(textOf(last.content)).toContain('### RCRA Violations (7–7 of 7)');
+      expect(structured(past)).toMatchObject({ rcraViolations: [], rcraViolationsTotal: 7 });
+      expect(textOf(past.content)).toContain('### RCRA Violations (none on this page of 7)');
+    });
+
+    it('pages effluent series with their offset and flags the cut', async () => {
+      await serveBoeing({
+        CWAEffluentComplianceEXP: {
+          Header,
+          Sources: [{ Parameters: [copper, ...DFR_EFFLUENT_SERIES_S_R_AND_LIMIT_VIOLATION] }],
+        },
+      });
+
+      const result = await runToolContract(echoGetFacilityTool, {
+        registry_id: '110017848105',
+        effluent_exceedances_limit: 1,
+        effluent_exceedances_offset: 1,
+      });
+
+      const sc = structured(result);
+      expect(sc).toMatchObject({
+        effluentExceedancesTotal: 3,
+        effluentExceedancesNextOffset: 2,
+        truncated: true,
+      });
+      expect(sc.effluentExceedances).toEqual([
+        expect.objectContaining({ permitId: 'WAR314396', parameterCode: '01042' }),
+      ]);
+      expect(textOf(result.content).split('\n')).toEqual(
+        expect.arrayContaining([
+          '### CWA Effluent Exceedances (2–2 of 3)',
+          '**Next offset:** 2 (pass as effluent_exceedances_offset)',
+        ]),
+      );
+    });
+
+    it('passes a whole-list limit through with no clamp and no limitNotice', async () => {
+      mockGetFacility.mockResolvedValue(fullProfile);
+
+      const result = await runToolContract(echoGetFacilityTool, {
+        registry_id: '110017848105',
+        effluent_exceedances_limit: 100_000,
+        rcra_violations_limit: 1000,
+      });
+
+      expect(mockGetFacility).toHaveBeenCalledWith('110017848105', expect.anything(), {
+        ...DEFAULT_SLICE,
+        effluentExceedances: { limit: 100_000, offset: 0 },
+        rcraViolations: { limit: 1000, offset: 0 },
+      });
+      expect(result.structuredContent).not.toHaveProperty('limitNotice');
+    });
+
+    it.each([
+      ['an effluent limit of 0', { effluent_exceedances_limit: 0 }, 'effluent_exceedances_limit'],
+      [
+        'a negative effluent offset',
+        { effluent_exceedances_offset: -1 },
+        'effluent_exceedances_offset',
+      ],
+      ['an RCRA limit of 0', { rcra_violations_limit: 0 }, 'rcra_violations_limit'],
+      ['a negative RCRA offset', { rcra_violations_offset: -1 }, 'rcra_violations_offset'],
+    ])('rejects %s before any request', async (_label, args, field) => {
+      const result = await runToolContract(echoGetFacilityTool, {
+        registry_id: '110017848105',
+        ...args,
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          data: { issues: [expect.objectContaining({ code: 'too_small', path: [field] })] },
+        },
+      });
+      expect(mockGetFacility).not.toHaveBeenCalled();
+    });
+
+    it('renders upstream text in the new sections literally; the one link is the violation report', () => {
+      const value = 'A *plant* [name](https://example.com) <b>raw</b>\n# second line';
+      const source = (
+        echoGetFacilityTool.format!({
+          registryId: '1',
+          name: 'X',
+          programs: { air: false, water: false, rcra: false, tri: false, sdwa: false },
+          triFacilityIds: [],
+          naics: [],
+          programCompliance: [],
+          inspections: [],
+          inspectionsTotal: 0,
+          drinkingWaterViolations: [],
+          drinkingWaterViolationsTotal: 0,
+          formalActions: [],
+          effluentExceedances: [{ parameterName: value, quarters: [{ value, status: value }] }],
+          effluentExceedancesTotal: 1,
+          rcraViolations: [
+            { violation: value, reportUrl: 'https://echo.epa.gov/violation-report' },
+          ],
+          rcraViolationsTotal: 1,
+          highPriorityViolations: [{ pollutants: value }],
+          programIds: [{ system: value, id: value, universe: value }],
+        })[0] as { text: string }
+      ).text;
+      const tokens = new MarkdownIt().parse(source, {});
+      const inline = tokens.flatMap((token) => token.children ?? []);
+
+      expect(inline.some((t) => t.type === 'html_inline')).toBe(false);
+      expect(inline.filter((t) => t.type === 'link_open').map((t) => t.attrGet('href'))).toEqual([
+        'https://echo.epa.gov/violation-report',
+      ]);
+      // One heading for the facility, one per section; none from upstream text.
+      expect(tokens.filter((t) => t.type === 'heading_open')).toHaveLength(5);
+      const text = inline
+        .filter((t) => t.type === 'text')
+        .map((t) => t.content)
+        .join('\n');
+      // All eight upstream values: parameter name, quarter value and status, violation, pollutants,
+      // system, ID, and universe.
+      expect(text.split(value)).toHaveLength(9);
+    });
+
+    it('describes the effluent status code without asserting what S or R means', () => {
+      const quarter =
+        echoGetFacilityTool.output.shape.effluentExceedances.element.shape.quarters.element.shape;
+      expect(quarter.status.description).toContain('S or R');
+      expect(JSON.stringify(echoGetFacilityTool.output.shape.effluentExceedances)).not.toMatch(
+        /significant|SNC|RNC|reportable|noncompliance/i,
+      );
     });
   });
 
@@ -874,6 +1340,7 @@ describe('echoGetFacilityTool', () => {
         drinkingWaterViolations: [],
         drinkingWaterViolationsTotal: 0,
         formalActions: [],
+        ...noComplianceDetail,
       })[0] as { text: string }
     ).text;
     expect(text.split('\n')).toContain('**NAICS:** 3364; 336411 Aircraft Manufacturing');

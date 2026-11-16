@@ -56,7 +56,7 @@ describe('waterSearchSystemsTool', () => {
     const input = waterSearchSystemsTool.input.parse({ state: ' WA ' });
     const result = await waterSearchSystemsTool.handler(input, ctx);
     expect(result).toEqual({ systems: [seattleWaterSystem], totalCount: 1 });
-    expect(mockSearchWaterSystems).toHaveBeenCalledWith({ state: 'WA', offset: 0, limit: 50 }, ctx);
+    expect(mockSearchWaterSystems).toHaveBeenCalledWith({ state: 'WA', offset: 0, limit: 25 }, ctx);
   });
 
   it('returns water systems for valid zip_code', async () => {
@@ -66,7 +66,7 @@ describe('waterSearchSystemsTool', () => {
     const result = await waterSearchSystemsTool.handler(input, ctx);
     expect(result).toEqual({ systems: [seattleWaterSystem] });
     expect(mockSearchWaterSystems).toHaveBeenCalledWith(
-      { zipCode: '98104', offset: 0, limit: 50 },
+      { zipCode: '98104', offset: 0, limit: 25 },
       ctx,
     );
   });
@@ -78,7 +78,7 @@ describe('waterSearchSystemsTool', () => {
     });
     const call = await runToolContract(waterSearchSystemsTool, { state: '09' });
     expect(call.isError).toBeFalsy();
-    expect(serviceParams()).toEqual({ state: '09', offset: 0, limit: 50 });
+    expect(serviceParams()).toEqual({ state: '09', offset: 0, limit: 25 });
     expect(call.structuredContent).toMatchObject({ totalCount: 1 });
   });
 
@@ -86,7 +86,7 @@ describe('waterSearchSystemsTool', () => {
     mockSearchWaterSystems.mockResolvedValue({ items: [seattleWaterSystem] });
     const call = await runToolContract(waterSearchSystemsTool, { zip_code });
     expect(call.isError).toBeFalsy();
-    expect(serviceParams()).toEqual({ zipCode: '98108', offset: 0, limit: 50 });
+    expect(serviceParams()).toEqual({ zipCode: '98108', offset: 0, limit: 25 });
     expect(call.structuredContent).toMatchObject({ effectiveQuery: 'zip_code begins with 98108' });
   });
 
@@ -150,7 +150,7 @@ describe('waterSearchSystemsTool', () => {
       async (county) => {
         mockSearchWaterSystems.mockResolvedValue({ items: [seattleWaterSystem] });
         const call = await runToolContract(waterSearchSystemsTool, { state: 'wa', county });
-        expect(serviceParams()).toEqual({ state: 'WA', county: 'KING', offset: 0, limit: 50 });
+        expect(serviceParams()).toEqual({ state: 'WA', county: 'KING', offset: 0, limit: 25 });
         expect(call.structuredContent).toMatchObject({ effectiveQuery: 'state=WA; county=KING' });
       },
     );
@@ -158,7 +158,7 @@ describe('waterSearchSystemsTool', () => {
     it('reads a blank county as omitted', async () => {
       mockSearchWaterSystems.mockResolvedValue({ items: [seattleWaterSystem] });
       const call = await runToolContract(waterSearchSystemsTool, { state: 'WA', county: '  ' });
-      expect(serviceParams()).toEqual({ state: 'WA', offset: 0, limit: 50 });
+      expect(serviceParams()).toEqual({ state: 'WA', offset: 0, limit: 25 });
       expect(call.structuredContent).toMatchObject({ effectiveQuery: 'state=WA' });
     });
 
@@ -201,7 +201,7 @@ describe('waterSearchSystemsTool', () => {
         pwsType: 'community',
         currentViolators: expect.any(Function),
         offset: 0,
-        limit: 50,
+        limit: 25,
       });
       const budget = { remainingMs: () => 1000, rethrow: vi.fn() } as unknown as CallBudget;
       const lookup = params.currentViolators as CurrentViolatorLookup;
@@ -234,7 +234,7 @@ describe('waterSearchSystemsTool', () => {
         zip_code: '98104',
         active_only: true,
       });
-      expect(serviceParams()).toEqual({ zipCode: '98104', activeOnly: true, offset: 0, limit: 50 });
+      expect(serviceParams()).toEqual({ zipCode: '98104', activeOnly: true, offset: 0, limit: 25 });
       expect(on.structuredContent).toMatchObject({
         effectiveQuery: 'zip_code begins with 98104; active_only=true',
       });
@@ -244,7 +244,7 @@ describe('waterSearchSystemsTool', () => {
         zip_code: '98104',
         active_only: false,
       });
-      expect(serviceParams()).toEqual({ zipCode: '98104', offset: 0, limit: 50 });
+      expect(serviceParams()).toEqual({ zipCode: '98104', offset: 0, limit: 25 });
       expect(off.structuredContent).toMatchObject({ effectiveQuery: 'zip_code begins with 98104' });
     });
   });
@@ -270,22 +270,37 @@ describe('waterSearchSystemsTool', () => {
       expect(text).toContain('> More records follow; call again with offset 71 to continue.');
     });
 
-    it('clamps a limit above the cap of 200 with a notice', async () => {
+    it('clamps a limit above the cap of 1,000 with a notice', async () => {
       mockSearchWaterSystems.mockResolvedValue({ items: [seattleWaterSystem] });
-      const call = await runToolContract(waterSearchSystemsTool, { state: 'CA', limit: 500 });
-      expect(serviceParams()).toMatchObject({ limit: 200 });
+      const call = await runToolContract(waterSearchSystemsTool, { state: 'CA', limit: 1001 });
+      expect(serviceParams()).toMatchObject({ limit: 1000 });
       expect(call.structuredContent).toMatchObject({
         limitNotice:
-          "limit 500 is above this tool's cap of 200, so at most 200 records were returned.",
+          "limit 1001 is above this tool's cap of 1000, so at most 1000 records were returned.",
       });
     });
 
-    it('rejects a limit above 5,000 at the schema', async () => {
+    it('serves limit 1,000 as asked, with no limitNotice', async () => {
+      mockSearchWaterSystems.mockResolvedValue({ items: [seattleWaterSystem] });
+      const call = await runToolContract(waterSearchSystemsTool, { state: 'CA', limit: 1000 });
+      expect(serviceParams()).toMatchObject({ limit: 1000 });
+      expect(call.structuredContent).not.toHaveProperty('limitNotice');
+    });
+
+    it('advertises default 25 and the 1,000 cap in the limit description', () => {
+      expect(waterSearchSystemsTool.input.shape.limit.description).toBe(
+        'Number of systems to return in one call. Default 25; a larger value returns at most 1,000 and says so. Page past it with offset and nextOffset.',
+      );
+    });
+
+    it('serves a limit above 5,000 at the cap instead of rejecting it at the schema', async () => {
+      mockSearchWaterSystems.mockResolvedValue({ items: [] });
       const call = await runToolContract(waterSearchSystemsTool, { state: 'CA', limit: 5001 });
-      expect(call.structuredContent).toMatchObject({
-        error: { code: JsonRpcErrorCode.InvalidParams },
-      });
-      expect(mockSearchWaterSystems).not.toHaveBeenCalled();
+      expect(call.isError).toBeFalsy();
+      expect(mockSearchWaterSystems.mock.calls[0]![0]).toMatchObject({ limit: 1000 });
+      expect((call.structuredContent as { limitNotice?: string }).limitNotice).toContain(
+        'limit 5001',
+      );
     });
 
     it('explains an empty page past the end without a nextOffset', async () => {

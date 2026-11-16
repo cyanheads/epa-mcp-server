@@ -114,7 +114,6 @@ describe('epa://superfund/{site_id} over JSON-RPC', () => {
     // An unreachable DMAP base URL: a request that escaped the pre-request checks fails loudly.
     const { origin, stop } = await startHttpServer({
       EPA_DMAP_BASE_URL: 'http://127.0.0.1:9/dmapservice',
-      LOGS_DIR: '/tmp/epa-superfund-resource-test-logs',
     });
     try {
       const read = async (uri: string) => {

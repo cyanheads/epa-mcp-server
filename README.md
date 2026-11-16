@@ -36,14 +36,14 @@ EPA environmental data across five federal programs — facility compliance (ECH
 | Tool | Description |
 |:---|:---|
 | `epa_echo_search_facilities` | Search EPA-regulated facilities by location, county, name, NAICS code, environmental program, or compliance status across CAA, CWA, RCRA, TRI, and SDWA |
-| `epa_echo_get_facility` | Full compliance profile for one facility by EPA Registry ID or program ID — compliance status, inspections, enforcement actions, penalties, drinking-water violations, and TRI IDs |
+| `epa_echo_get_facility` | Full compliance profile for one facility by EPA Registry ID or program ID — compliance status, inspections, enforcement actions, penalties, drinking-water violations, Clean Water Act effluent exceedances, RCRA violations, Clean Air Act High Priority Violations, program IDs, and TRI IDs |
 | `epa_echo_search_violations` | Search EPA civil and criminal enforcement cases by state, ZIP code, program, case type, or date range |
 | `epa_echo_get_case` | One civil enforcement case with its facilities, defendants, and settlements |
 | `epa_airnow_get_conditions` | Current AQI observations or the issued AQI forecast from AirNow |
 | `epa_tri_get_facility_releases` | Per-chemical Toxic Release Inventory data for a single facility |
 | `epa_tri_search_releases` | Toxic Release Inventory records across facilities in a state or county |
-| `epa_superfund_search_sites` | Search Superfund (CERCLA/SEMS) sites by location or NPL listing status |
-| `epa_superfund_get_site` | Exact Superfund site record and all contaminant associations |
+| `epa_superfund_search_sites` | Search Superfund (CERCLA/SEMS) sites by location, site name, or NPL listing status |
+| `epa_superfund_get_site` | Superfund site record and all contaminant associations, by SEMS site ID or EPA ID |
 | `epa_water_search_systems` | Search drinking water systems (SDWIS) by state, ZIP code, or county served |
 | `epa_ejscreen_get_scores` | EJScreen environmental-justice indicators for a point and buffer |
 
@@ -52,7 +52,7 @@ EPA environmental data across five federal programs — facility compliance (ECH
 | Resource | Description |
 |:---|:---|
 | `epa://facility/{registry_id}` | Full compliance profile for a facility by EPA Registry ID or program ID (the default pages of `epa_echo_get_facility`) |
-| `epa://superfund/{site_id}` | Superfund site record and contaminant associations by SEMS site ID |
+| `epa://superfund/{site_id}` | Superfund site record and contaminant associations by SEMS site ID or EPA ID |
 
 All resource data is also reachable via tools — use `epa_echo_get_facility` and `epa_superfund_get_site` for programmatic access in tool-only MCP clients.
 
@@ -60,9 +60,9 @@ All resource data is also reachable via tools — use `epa_echo_get_facility` an
 
 ### `epa_echo_search_facilities` <sub>tool</sub>
 
-- Provide ZIP code, state, city (prefix match, preferably with state), `county` (prefix match on the recorded name; needs `state`), 5-digit `county_fips`, or latitude + longitude + radius_miles (max 100 miles). `facility_name` (whole words in any order, no commas; also matches other names ECHO records for the facility) and `naics` (2–6 digits, prefix match) narrow a geographic search
-- Up to 100 facilities per call (default 50); a larger `limit`, up to 5,000, returns 100 with a `limitNotice`. Page with `offset` and `nextOffset`; `totalCount` is the match before `limit` and `offset`
-- Returns `registryId` for `epa_echo_get_facility`, `triFacilityIds` for `epa_tri_get_facility_releases`, county and `fipsCode`, coordinates, per-program flags, and five-year inspection and penalty totals. `effectiveQuery` echoes the filters as sent
+- Provide ZIP codes, states, city (prefix match, preferably with state), `county` (prefix match on the recorded name; needs `state`, and matches in each listed state), 5-digit `county_fips`, or latitude + longitude + radius_miles (max 100 miles). `zip_code` takes up to 200 ZIP codes and `state` up to 100 state codes, as a list or a comma-joined string, and matches any of them. `facility_name` (whole words in any order, no commas; also matches other names ECHO records for the facility) and `naics` (2–6 digits, prefix match) narrow a geographic search
+- Up to 2,500 facilities per call (default 25); a larger `limit` returns 2,500 with a `limitNotice`. Page with `offset` and `nextOffset`; `totalCount` is the match before `limit` and `offset`
+- Returns `registryId` for `epa_echo_get_facility`, `triFacilityIds` for `epa_tri_get_facility_releases`, county and `fipsCode`, coordinates, per-program flags, and five-year inspection and penalty totals. Proximity rows add `distanceMiles` from the search point, to two decimals, in ECHO's order. `effectiveQuery` echoes the filters as sent
 - `programs` takes one of CAA, CWA, RCRA, TRI, or SDWA; `has_violation` keeps facilities in significant noncompliance; `active_only` keeps facilities with an active permit
 
 ---
@@ -71,14 +71,15 @@ All resource data is also reachable via tools — use `epa_echo_get_facility` an
 
 - `registry_id` is a Registry ID from `epa_echo_search_facilities` or a program ID ECHO resolves to one: a PWSID from `epa_water_search_systems`, a TRI facility ID, an NPDES permit, or a RCRA handler ID. The profile carries the resolved `registryId`
 - Returns `complianceStatus`, the `naics` codes its programs record, a per-statute `programCompliance` summary, five years of enforcement actions with penalties (`caseId` feeds `epa_echo_get_case`), the latest TRI total with `triReleasesTransfersYear`, and `triFacilityIds` for `epa_tri_get_facility_releases`
-- Two paged lists: inspections from the last five years, newest first (`inspections_limit` default and cap 100, `inspections_offset`; `inspectionsTotal` counts them all and `inspectionsNextOffset` continues), and `drinkingWaterViolations` for a public water system, newest compliance period first, each with contaminant, measured level, MCL, status, and enforcement actions (`drinking_water_violations_limit` default 50, cap 200, `drinking_water_violations_offset`; `drinkingWaterViolationsTotal` and `drinkingWaterViolationsNextOffset`). A larger `limit` returns the cap with a `limitNotice`, and `truncated` is true while either list has more
+- Four paged lists: inspections from the last five years, newest first (`inspections_limit` default 25, cap 5,000, `inspections_offset`; `inspectionsTotal` counts them all and `inspectionsNextOffset` continues); `drinkingWaterViolations` for a public water system, newest compliance period first, each with contaminant, measured level, MCL, status, and enforcement actions (`drinking_water_violations_limit` default 25, cap 3,000, `drinking_water_violations_offset`; `drinkingWaterViolationsTotal` and `drinkingWaterViolationsNextOffset`); `effluentExceedances`, the Clean Water Act effluent limit exceedances by pollutant and outfall, one series per entry with its quarters (`effluent_exceedances_limit` default 10, `effluent_exceedances_offset`; `effluentExceedancesTotal` and `effluentExceedancesNextOffset`); and `rcraViolations` (`rcra_violations_limit` default 25, `rcra_violations_offset`; `rcraViolationsTotal` and `rcraViolationsNextOffset`). A `limit` above an inspections or drinking-water cap returns the cap with a `limitNotice`; the effluent and RCRA lists have no cap, so a larger value returns the rest. `truncated` is true while any of the four lists has more
+- `highPriorityViolations` (Clean Air Act High Priority Violations) and `programIds` (every program ID linked to the facility, with its system, statute, and status) come whole. When a facility has several ICIS-Air or ICIS-NPDES IDs, `airCompliance.programId` and `waterCompliance.permitId` are absent and `programIds` names them all
 - If the status lookup fails, the profile returns without `complianceStatus` and a `notice` says so; an unknown ID fails as `facility_not_found`
 
 ---
 
 ### `epa_echo_search_violations` <sub>tool</sub>
 
-- Requires `state` or `zip_code`; up to 100 cases per call (default 50), and a larger `limit` up to 5,000 returns 100 with a `limitNotice`. Page with `offset` and `nextOffset`; `effectiveQuery` echoes the filters as sent
+- Requires `state` or `zip_code`, each a list (up to 100 state codes, 200 ZIP codes) or a comma-joined string that matches any of them; a case spanning several listed states is returned once. Up to 2,000 cases per call (default 25), and a larger `limit` returns 2,000 with a `limitNotice`. Page with `offset` and `nextOffset`; `effectiveQuery` echoes the filters as sent
 - `program` filters CAA, CWA, RCRA, SDWA, CERCLA, EPCRA, FIFRA, or TSCA, matching any law a case cites; `case_type` is civil, criminal, or all (default)
 - `date_filed_start` / `date_filed_end` (YYYY-MM-DD, inclusive) bound the filing date. Only civil cases carry filing dates, so with a date `all` returns civil cases with a `notice`, and `criminal` is rejected
 - Returns `caseId`, `caseName`, `caseType`, `caseStatus`, `enforcementOutcome`, `leadAgency`, the primary law (`programsViolated`) and `primarySection`, federal and state/local penalties, cost recovery, compliance action and SEP costs, and filed, settlement, and closed dates. Criminal cases omit status, outcome, state/local penalty, and cost fields
@@ -92,7 +93,7 @@ All resource data is also reachable via tools — use `epa_echo_get_facility` an
 - Returns the case's category code, enforcement type, status, lead agency, relief sought, outcome, court and DOJ docket numbers, summary, and penalty, cost-recovery, compliance-action, and SEP totals, plus `lawsAndSections`, `defendants`, `pollutants`, and `milestones`
 - `facilities` lists the facilities the case names, one per Registry ID, with address, NAICS and SIC codes, and the program IDs the case links; pass a `registryId` to `epa_echo_get_facility`
 - `enforcementConclusions` lists each order, consent decree, or other settlement with its facilities, dates, penalties and costs, complying actions, pollutant reductions, and Supplemental Environmental Projects
-- The report is not paged: a case naming 115 facilities and 117 settlements returns about 120 KB across both response surfaces
+- `facilities` and `enforcementConclusions` are paged (`facilities_limit` default 25, `enforcement_conclusions_limit` default 10, with `facilities_offset` and `enforcement_conclusions_offset`); the other parts of the report come whole on every page. `facilitiesTotal` and `enforcementConclusionsTotal` count each list, `facilitiesNextOffset` and `enforcementConclusionsNextOffset` continue it, and `truncated` is true while either has more. Neither list has a cap, so a larger limit returns the rest of it. Each call re-reads the whole case report, so one larger-limit call costs less than several pages. Check `facilitiesNextOffset` before concluding a facility is not on a case
 
 ---
 
@@ -107,35 +108,36 @@ All resource data is also reachable via tools — use `epa_echo_get_facility` an
 
 ### `epa_tri_get_facility_releases` <sub>tool</sub>
 
-- `facility_id` is the TRI `facilityId` from `epa_tri_search_releases` or `epa_echo_get_facility` `triFacilityIds`; optional `year` (1987–2030) and partial `chemical_name`
-- Returns per-chemical on-site releases to air, water, land, and underground injection, their sum `totalOnSiteReleasesInLbs`, and the Form R Section 8.8 `oneTimeReleaseInLbs`, which the media quantities already include, newest reporting year first
-- `limit` defaults to and is capped at 500 filings; a larger value up to 5,000 returns 500 with a `limitNotice`. Page with `offset` and `nextOffset`; `truncated`, `shown`, `cap`, and `guidance` mark a page with more
+- `facility_id` is the 15-character TRI `facilityId` from `epa_tri_search_releases` or `epa_echo_get_facility` `triFacilityIds`; case, surrounding whitespace, and end slashes are ignored, and a 12-digit Registry ID or any other length is rejected with the form it expects. Optional `year` (1987–2030), partial `chemical_name`, and `chemical_id`
+- `chemical_id` matches one chemical exactly where `chemical_name` matches any name containing its text: a CAS Registry Number (hyphens and leading zeros optional, check digit verified), a TRI category code such as `N420` in any case, or a `chemicalId` an earlier result returned
+- Returns per-chemical on-site releases to air, water, land, and underground injection, their sum `totalOnSiteReleasesInLbs`, and the Form R Section 8.8 `oneTimeReleaseInLbs`, which the media quantities already include, newest reporting year first. Each record carries `chemicalId` and `casNumber` (absent for a category code or placeholder)
+- `limit` defaults to 25 filings and is capped at 699; a larger value returns 699 with a `limitNotice`. Page with `offset` and `nextOffset`; `truncated`, `shown`, `cap`, and `guidance` mark a page with more
 - Quantities are in pounds; dioxin records reported in grams are converted and carry `reportedUnit: "grams"`
 
 ---
 
 ### `epa_tri_search_releases` <sub>tool</sub>
 
-- Requires 2-letter `state` (any case); optional `county` (case-insensitive partial match on the bare name; a trailing County, Parish, Borough, City and Borough, Census Area, or Municipality is dropped), partial `chemical_name`, and `year`; newest reporting year first when `year` is omitted
-- Up to 200 records per call (default 50); a larger `limit` up to 5,000 returns 200 with a `limitNotice`. Page with `offset` and `nextOffset`; `effectiveQuery` echoes the filters as sent. Records come in reporting-year order, not ranked by quantity
-- Returns `facilityId` for `epa_tri_get_facility_releases`, `registryId` for `epa_echo_get_facility`, `parentCompany`, and the Form R Section 8.8 `oneTimeReleaseInLbs`; `include_release_breakdown: true` adds on-site releases to air, water, land, and underground injection plus `totalOnSiteReleasesInLbs`, at the cost of one more upstream request (up to ~20 seconds when EPA has not cached it)
+- Requires 2-letter `state` (any case); optional `county` (case-insensitive partial match on the bare name; a trailing County, Parish, Borough, City and Borough, Census Area, or Municipality is dropped), partial `chemical_name`, exact `chemical_id` (a CAS number, category code, or earlier `chemicalId`, as for `epa_tri_get_facility_releases`), and `year`; newest reporting year first when `year` is omitted
+- Up to 699 records per call (default 25); a larger `limit` returns 699 with a `limitNotice`. Page with `offset` and `nextOffset`; `effectiveQuery` echoes the filters as sent. Records come in reporting-year order, not ranked by quantity
+- Returns `facilityId` for `epa_tri_get_facility_releases`, `registryId` for `epa_echo_get_facility`, `parentCompany`, `chemicalId` and `casNumber`, and the Form R Section 8.8 `oneTimeReleaseInLbs`; `include_release_breakdown: true` adds on-site releases to air, water, land, and underground injection plus `totalOnSiteReleasesInLbs`, at the cost of up to three more upstream requests made side by side (about 20 seconds when EPA has not cached them)
 - Dioxin records reported in grams are converted to pounds and carry `reportedUnit: "grams"`
 
 ---
 
 ### `epa_superfund_search_sites` <sub>tool</sub>
 
-- Provide `state`/`city`/`zip_code` (a ZIP+4 searches its 5-digit ZIP), or `latitude` + `longitude` + `radius_miles` (0.1–500); up to 200 sites per call (default 50), and a larger `limit` up to 5,000 returns 200 with a `limitNotice`. Page with `offset` and `nextOffset`; `effectiveQuery` echoes the filters as sent
+- Provide `state`/`city`/`zip_code` (a ZIP+4 searches its 5-digit ZIP), `name`, or `latitude` + `longitude` + `radius_miles` (0.1–500). `name` is a case-insensitive partial match on the site name, with punctuation matched as written, and works alone or beside any other filter. Up to 2,500 sites per call (default 25), and a larger `limit` returns 2,500 with a `limitNotice`. Page with `offset` and `nextOffset`; `effectiveQuery` echoes the filters as sent
 - Returns site identifiers, location, raw NPL code and source label, plus sparse non-NPL assessment, archive, EPA ID, and federal facility metadata. `npl_status` filters listed (F/A), not-listed (N), proposed (P), deleted (D), removed (R), withdrawn (W), or all (default)
 - `exclude_archived: true` requires SEMS `archived_ind=N` before pagination or proximity selection; the default retains all archive statuses. Assessment labels do not describe cleanup progress
 - Administrative searches return sites in SEMS site ID order and carry no `totalCount`, since DMAP reports no match count; follow `nextOffset`
-- Proximity searches rescan every latitude/longitude candidate on each call, apply exact distance, and page the nearest-first order (site ID breaks ties). `totalCount` is the number of matching sites, and a `notice` gives the page's place in it ("Showing sites a–b of N") and says sites without coordinates cannot be located. All candidate pages share a 50-second deadline — narrow the radius or add filters if it times out
+- Proximity searches rescan every latitude/longitude candidate on each call, apply exact distance, and page the nearest-first order (site ID breaks ties). Each row carries `distanceMiles` to two decimals; administrative rows carry none. `totalCount` is the number of matching sites, and a `notice` gives the page's place in it ("Showing sites a–b of N") and says sites without coordinates cannot be located. All candidate pages share a 50-second deadline — narrow the radius or add filters if it times out
 
 ---
 
 ### `epa_superfund_get_site` <sub>tool</sub>
 
-- Provide a `site_id` from `epa_superfund_search_sites`, preserving leading zeros
+- Provide a `site_id` from `epa_superfund_search_sites`, preserving leading zeros, or the site's EPA ID (2 letters and 10 letters or digits, any case), such as the SEMS program ID `epa_echo_get_case` lists for a facility
 - Returns `{ site, contaminants }`: site metadata plus every recorded contaminant association, including medium, operable unit, action, and type code when available. Repeated chemicals and duplicate source rows are retained
 - An existing site with no associations returns `contaminants: []`; a missing site returns NotFound. Site and paged contaminant reads share one 50-second deadline; upstream failures remain errors
 - Associations describe EPA action/media records, not current exposure, concentrations, or current risk
@@ -144,7 +146,7 @@ All resource data is also reachable via tools — use `epa_echo_get_facility` an
 
 ### `epa_water_search_systems` <sub>tool</sub>
 
-- Requires `state` (a 2-letter code, or an EPA region code 01–10 for tribal systems) or `zip_code`; up to 200 systems per call (default 50) in PWSID order, and a larger `limit` up to 5,000 returns 200 with a `limitNotice`. Page with `offset` and `nextOffset`; `totalCount` appears when the call saw the whole match; `effectiveQuery` echoes the filters as sent
+- Requires `state` (a 2-letter code, or an EPA region code 01–10 for tribal systems) or `zip_code`; up to 1,000 systems per call (default 25) in PWSID order, and a larger `limit` returns 1,000 with a `limitNotice`. Page with `offset` and `nextOffset`; `totalCount` appears when the call saw the whole match; `effectiveQuery` echoes the filters as sent
 - `zip_code` matches each system's address of record by prefix, so stored ZIP+4s match, and not its service area. `county` (needs `state`) finds the systems serving a county: a trailing County, Parish, Borough, City and Borough, Census Area, or Municipality is dropped, and a system matches only when one county it serves is that county, so `Harris` does not match Harrison
 - `has_violation` keeps systems with a current SDWA violation in ECHO, which applies EPA's Enforcement Response Policy and so flags fewer systems than SDWIS's unresolved violation records; `pws_type` is community, non-transient, or transient, returned as CWS / NTNCWS / TNCWS in `type`; `active_only` keeps systems SDWIS lists as active
 - A ZIP or county `has_violation` check reads up to 1,000 systems per call; when that fills before the page does, a `notice` says so and `nextOffset` continues
@@ -164,13 +166,13 @@ All resource data is also reachable via tools — use `epa_echo_get_facility` an
 ### `epa://facility/{registry_id}` <sub>resource</sub>
 
 - `registry_id` is a Registry ID from `epa_echo_search_facilities` or a program ID ECHO resolves to one, such as a PWSID from `epa_water_search_systems`
-- Returns the `epa_echo_get_facility` compliance profile at its default pages of inspections and drinking-water violations (`inspectionsNextOffset` and `drinkingWaterViolationsNextOffset` mark more; page them with the tool); errors when no facility resolves
+- Returns the `epa_echo_get_facility` compliance profile at its default pages: 25 inspections, 25 drinking-water violations, 10 effluent exceedance series, and 25 RCRA violations (`inspectionsNextOffset`, `drinkingWaterViolationsNextOffset`, `effluentExceedancesNextOffset`, and `rcraViolationsNextOffset` mark more; page them with the tool); errors when no facility resolves
 
 ---
 
 ### `epa://superfund/{site_id}` <sub>resource</sub>
 
-- `site_id` comes from `epa_superfund_search_sites`
+- `site_id` comes from `epa_superfund_search_sites`; the site's EPA ID is also accepted
 - Returns the same data as `epa_superfund_get_site`, with site fields at the top level and an additive `contaminants` array; errors when no SEMS record resolves
 
 ## Features
@@ -186,7 +188,9 @@ EPA-specific:
 Agent-friendly output:
 
 - Search results carry the IDs the next tool needs: `registryId`, `fipsCode`, `facilityId`, `triFacilityIds`, `caseId`, and `pwsid`
-- Every search pages with `offset` and `nextOffset`, and `epa_echo_get_facility` pages its inspections and drinking-water violations with `inspections_offset` and `drinking_water_violations_offset`; a `limit` above a tool's cap, up to 5,000, returns the cap with a `limitNotice`
+- Every search pages with `offset` and `nextOffset`, `epa_echo_get_facility` pages its inspections, drinking-water violations, effluent exceedances, and RCRA violations with `inspections_offset`, `drinking_water_violations_offset`, `effluent_exceedances_offset`, and `rcra_violations_offset`, and `epa_echo_get_case` pages its facilities and enforcement conclusions with `facilities_offset` and `enforcement_conclusions_offset`
+- Count inputs carry no schema maximum: a `limit` above a tool's cap returns the cap with a `limitNotice`, and `EPA_CLAMP_LIMITS=false` makes each cap a strict maximum that fails validation instead. The effluent, RCRA, case-facility, and case-conclusion lists have no cap, so a larger value returns the rest of the list
+- Proximity rows from `epa_echo_search_facilities` and `epa_superfund_search_sites` carry `distanceMiles`
 - Searches return `effectiveQuery`, the filters as the server sent them upstream, so a result states what it matched
 - `epa_echo_get_facility` returns a partial profile with a `notice` when the status lookup fails
 - Empty searches return a `message` that suggests how to broaden them
@@ -276,7 +280,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 AIRNOW_API_KEY=... bun run start:http
 
 ### Prerequisites
 
-- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+); development and Docker use Bun v1.4.4.
+- [Bun v1.4.4](https://bun.sh/) or higher (or Node.js v24+).
 - (Optional) An AirNow API key to enable `epa_airnow_get_conditions` — register free at [docs.airnowapi.org/account/request](https://docs.airnowapi.org/account/request/). Without it the server runs the other 10 tools. ECHO, DMAP, and EJScreen tools require no API key.
 
 ### Installation
@@ -317,6 +321,7 @@ All configuration is validated at startup via Zod schemas in `src/config/`. Key 
 | `EPA_DMAP_BASE_URL` | Envirofacts DMAP API base URL | `https://data.epa.gov/dmapservice` |
 | `EPA_AIRNOW_BASE_URL` | AirNow API base URL | `https://www.airnowapi.org/aq` |
 | `EJSCREEN_API_BASE_URL` | EJScreen (EJAM) API base URL | `https://api.ejanalysis.com` |
+| `EPA_CLAMP_LIMITS` | Serve a count input above its cap at the cap, with a `limitNotice`. `false` advertises each cap as a strict schema maximum, so a larger value fails validation. | `true` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http` | `stdio` |
 | `MCP_HTTP_PORT` | HTTP server port | `3010` |
 | `MCP_HTTP_ENDPOINT_PATH` | HTTP endpoint path | `/mcp` |

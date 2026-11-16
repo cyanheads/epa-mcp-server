@@ -19,6 +19,7 @@ import { getServerConfig } from '@/config/server-config.js';
 import { type CallBudget, callBudget } from '@/services/call-budget.js';
 import { bareCountyName } from '@/services/county-name.js';
 import type { SdwViolatorScope, WaterSystemType } from '@/services/echo/echo-service.js';
+import { EARTH_RADIUS_MILES, greatCircleMiles } from '@/services/great-circle.js';
 import { type Page, slicePage } from '@/services/page.js';
 import type {
   RawSdwisWaterSystem,
@@ -26,6 +27,7 @@ import type {
   RawTriFacility,
   RawTriReleaseQty,
   RawTriReportingForm,
+  SuperfundSearchSite,
   SuperfundSite,
   SuperfundSiteDetail,
   TriRelease,
@@ -130,6 +132,26 @@ function exactFilter(filter: DmapFilter): DmapFilter {
   return exact;
 }
 
+/** The tri.tri_reporting_form filters the TRI tools share: year, exact chemical ID, chemical name. */
+function triFormFilters(params: {
+  year?: number | undefined;
+  chemicalId?: string | undefined;
+  chemicalName?: string | undefined;
+}): DmapFilter[] {
+  const filters: DmapFilter[] = [];
+  if (params.year !== undefined) {
+    filters.push({ column: 'reporting_year', operator: 'equals', value: String(params.year) });
+  }
+  if (params.chemicalId) {
+    filters.push({ column: 'tri_chem_id', operator: 'equals', value: params.chemicalId });
+  }
+  if (params.chemicalName) {
+    // actual field is cas_chem_name, not chemical_name_text
+    filters.push(containsFilter('cas_chem_name', params.chemicalName));
+  }
+  return filters;
+}
+
 /** Rows read per page while a wildcard filter's exact matches are collected. */
 const EXACT_TEXT_PAGE_ROWS = 100;
 
@@ -206,8 +228,8 @@ const IN_LIST_REQUEST_LINE_BUDGET = 3800;
 
 /**
  * Breakdown chunks in flight at once. An uncached tri.tri_release_qty request takes ~18 s however
- * many submissions it names, so chunks run side by side: getTriReleases' 500 forms make at most
- * three chunks, one wave.
+ * many submissions it names, so chunks run side by side: a page at the TRI tools' 699-record cap
+ * makes at most three chunks of 233 thirteen-digit submissions, one wave; 700 would make four.
  */
 const BREAKDOWN_CONCURRENCY = 3;
 
@@ -228,6 +250,45 @@ const RELEASE_QTY_ROWS_PER_SUBMISSION = 30;
 function requestLineBytes(url: string): number {
   const { pathname, search } = new URL(url);
   return Buffer.byteLength(`GET ${pathname}${search} HTTP/1.1`);
+}
+
+/** The bytes of `url`'s request line that DMAP counts against DMAP_REQUEST_LINE_LIMIT. */
+function countedRequestLineBytes(url: string): number {
+  return requestLineBytes(url) - DMAP_UNCOUNTED_BYTES;
+}
+
+/** Rows one read of fetchMatchingRows asks for: `wanted`, or at least a wildcard walk's page. */
+function rowsPerRead(wanted: number, wildcarded: boolean): number {
+  return wildcarded ? Math.max(wanted, EXACT_TEXT_PAGE_ROWS) : wanted;
+}
+
+/**
+ * The largest limit, at most `limit`, whose first row range (`offset+1:offset+limit+1`, or a
+ * wildcard walk's wider page) still fits DMAP's request line. The range's digits count toward
+ * the line, so a raised limit beside a near-limit text filter can push it over. `limit` itself
+ * when that range fits, or when one record's does not either: the filters alone are too long,
+ * and the read fails `filter_too_long`.
+ */
+function fitLimit(
+  urlForRange: (range: { first: number; last: number }) => string,
+  wildcarded: boolean,
+  offset: number,
+  limit: number,
+): number {
+  const fits = (candidate: number) =>
+    countedRequestLineBytes(
+      urlForRange({ first: offset + 1, last: offset + rowsPerRead(candidate + 1, wildcarded) }),
+    ) <= DMAP_REQUEST_LINE_LIMIT;
+  if (fits(limit) || !fits(1)) return limit;
+  // Invariant: `low` fits and `high` does not; a longer range never takes fewer bytes.
+  let low = 1;
+  let high = limit;
+  while (high - low > 1) {
+    const middle = Math.floor((low + high) / 2);
+    if (fits(middle)) low = middle;
+    else high = middle;
+  }
+  return low;
 }
 
 /** Parse a numeric field, returning undefined if absent/NaN. */
@@ -263,13 +324,25 @@ function gramsToPounds(grams: number): number {
   return roundQuantity(grams / GRAMS_PER_POUND);
 }
 
+/**
+ * The hyphenated CAS Registry Number of a numeric tri_chem_id. Live (2026-11-15), each of the 822
+ * numeric IDs in tri.tri_chem_info, unpadded and hyphenated, is its cas_registry_number.
+ */
+function casNumberOf(chemicalId: string): string {
+  const digits = chemicalId.replace(/^0+/, '');
+  return `${digits.slice(0, -3)}-${digits.slice(-3, -1)}-${digits.slice(-1)}`;
+}
+
 /** Normalize a raw TRI reporting form row; a gram-reported chemical's quantity becomes pounds. */
 function normalizeTriRelease(raw: RawTriReportingForm): TriRelease {
-  const inGrams = raw.tri_chem_id === GRAM_REPORTED_CHEM_ID;
+  const chemicalId = raw.tri_chem_id;
+  const inGrams = chemicalId === GRAM_REPORTED_CHEM_ID;
   const result: TriRelease = {
     facilityId: raw.tri_facility_id ?? '',
     // tri_reporting_form uses cas_chem_name, not chemical_name_text
     chemicalName: raw.cas_chem_name ?? '',
+    ...(chemicalId && { chemicalId }),
+    ...(chemicalId && /^\d+$/.test(chemicalId) && { casNumber: casNumberOf(chemicalId) }),
     reportingYear: Number(raw.reporting_year ?? 0),
     ...(inGrams && { reportedUnit: 'grams' as const }),
   };
@@ -394,6 +467,13 @@ function countyServedFilter(county: string): CheckedFilter {
 }
 
 /**
+ * A SEMS EPA ID: two letters, then ten letters or digits. Every sems.envirofacts_site epa_id has
+ * this form and every site_id is seven digits (all 55,727 rows, live 2026-11-15), so the two never
+ * overlap and an EPA ID names at most one site. DMAP's `equals` ignores case.
+ */
+const EPA_ID = /^[A-Za-z]{2}[A-Za-z0-9]{10}$/;
+
+/**
  * The SEMS npl_status_code values each npl_status choice sends: `listed` covers sites on the final
  * NPL (F) and sites that are part of an NPL site (A). `all` sends no filter.
  */
@@ -459,19 +539,6 @@ function normalizeSdwisWaterSystem(
 }
 
 /**
- * Compute the Haversine distance in miles between two lat/lng points.
- */
-function haversineDistanceMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 3958.8;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-/**
  * Conservative signed integer-degree coordinate prefixes intersecting an interval. DMAP compares
  * coordinates as text, so prefixes intentionally overfetch (9 also matches 90). Both signed
  * zero prefixes are needed at the equator; exact integer coordinates need no decimal suffix.
@@ -493,7 +560,7 @@ function coordinatePrefixes(low: number, high: number, maximum: number): string[
  * extremum is asin(sin(angular radius) / cos(latitude)), with date-line intervals wrapped.
  */
 function proximityPrefixes(latitude: number, longitude: number, radiusMiles: number) {
-  const angularRadius = radiusMiles / 3958.8;
+  const angularRadius = radiusMiles / EARTH_RADIUS_MILES;
   const degrees = angularRadius * (180 / Math.PI);
   const low = Math.max(-90, latitude - degrees);
   const high = Math.min(90, latitude + degrees);
@@ -582,15 +649,16 @@ export class DmapService {
    * (shared by every request of one service call); expiry rejects with the budget's Timeout.
    *
    * A request line DMAP would count past DMAP_REQUEST_LINE_LIMIT is never sent: batched `in`
-   * lists are chunked to fit, so only caller-supplied filter text can push one over, and it fails
-   * as a ValidationError with reason `filter_too_long`. DMAP answers HTTP 400 only from its front
+   * lists are chunked to fit and fetchPage narrows a row range to fit, so only caller-supplied
+   * filter text too long for a one-record page pushes one over, and it fails as a ValidationError
+   * with reason `filter_too_long`. DMAP answers HTTP 400 only from its front
    * end, for a request it cannot parse, never for a filter value — those are HTTP 500. A 400 that
    * still arrives is a request this server built wrong, not the caller's input, and maps to
    * InternalError rather than the default InvalidParams. A fully read 200 body that is not JSON
    * fails once as a SerializationError; transport and HTTP failures keep their retries.
    */
   private fetchTable<T>(url: string, ctx: Context, budget: CallBudget): Promise<T[]> {
-    const countedBytes = requestLineBytes(url) - DMAP_UNCOUNTED_BYTES;
+    const countedBytes = countedRequestLineBytes(url);
     if (countedBytes > DMAP_REQUEST_LINE_LIMIT) {
       return Promise.reject(
         validationError(
@@ -644,8 +712,10 @@ export class DmapService {
    * checked filter (`literal` set) that is one request ranged `offset+1:offset+wanted`. With one,
    * DMAP's rows can include near-variants that match only through the wildcard, or a `keep`
    * test drops, so pages of at least EXACT_TEXT_PAGE_ROWS are read and narrowed (passesChecks),
-   * until `wanted` are found, DMAP runs out, or EXACT_TEXT_MAX_PAGES are read. A walk the page
-   * limit ends short of `wanted` carries a notice that more matches may exist.
+   * until `wanted` are found, DMAP runs out, or EXACT_TEXT_MAX_PAGES are read. A later page whose
+   * row range no longer fits DMAP's request line ends the walk too (fetchPage fits only the
+   * first). A walk either limit ends short of `wanted` carries a notice that more matches may
+   * exist.
    */
   private async fetchMatchingRows<T extends Record<string, unknown>>(
     urlForRange: (range: { first: number; last: number }) => string,
@@ -668,18 +738,16 @@ export class DmapService {
         ...(rows.length === wanted && { scanEnd: offset + wanted }),
       };
     }
-    const pageRows = Math.max(wanted, EXACT_TEXT_PAGE_ROWS);
+    const pageRows = rowsPerRead(wanted, true);
     const matches: T[] = [];
     const positions: number[] = [];
     let scanned = 0;
     let exhausted = false;
     for (let page = 0; page < EXACT_TEXT_MAX_PAGES && matches.length < wanted; page++) {
       const start = offset + scanned;
-      const rows = await this.fetchTable<T>(
-        urlForRange({ first: start + 1, last: start + pageRows }),
-        ctx,
-        budget,
-      );
+      const url = urlForRange({ first: start + 1, last: start + pageRows });
+      if (page > 0 && countedRequestLineBytes(url) > DMAP_REQUEST_LINE_LIMIT) break;
+      const rows = await this.fetchTable<T>(url, ctx, budget);
       rows.forEach((row, i) => {
         if (passesChecks(row, wildcarded) && matches.length < wanted) {
           matches.push(row);
@@ -715,15 +783,23 @@ export class DmapService {
    * One page of `limit` matching rows from upstream position `offset`. It reads one match more
    * than it returns, so `nextOffset` is exact: the position of that extra match, which can skip
    * rows a wildcard pass dropped. A wildcard walk its page limit ends with no extra match
-   * continues from where the walk stopped.
+   * continues from where the walk stopped. A `limit` whose row range would carry the request line
+   * past DMAP's limit is served at the largest one that fits (fitLimit), and `limitNotice` says so.
    */
   private async fetchPage<T extends Record<string, unknown>>(
     urlForRange: (range: { first: number; last: number }) => string,
     filters: DmapFilter[],
-    { offset, limit }: { offset: number; limit: number },
+    { offset, limit: requested }: { offset: number; limit: number },
     ctx: Context,
     budget: CallBudget,
   ): Promise<Page<T>> {
+    const wildcarded = filters.some((f) => f.literal !== undefined);
+    const limit = fitLimit(urlForRange, wildcarded, offset, requested);
+    if (limit < requested) {
+      ctx.enrich({
+        limitNotice: `With these text filters, a page of more than ${limit} records would make a request longer than EPA's DMAP service accepts, so at most ${limit} records were returned. Shorten the text filters to read larger pages.`,
+      });
+    }
     const { rows, positions, scanEnd } = await this.fetchMatchingRows<T>(
       urlForRange,
       filters,
@@ -740,12 +816,14 @@ export class DmapService {
 
   /**
    * One page of a facility's TRI filings, newest reporting year first, then by submission number;
-   * `limit` defaults to 500 and `offset` to 0.
+   * `limit` defaults to 25 and `offset` to 0. `chemicalId` matches tri_chem_id exactly, in the form
+   * TRI records it (a CAS number zero-padded to 10 digits).
    */
   async getTriReleases(
     params: {
       facilityId: string;
       year?: number;
+      chemicalId?: string;
       chemicalName?: string;
       offset?: number;
       limit?: number;
@@ -754,14 +832,8 @@ export class DmapService {
   ): Promise<Page<TriRelease>> {
     const filters: DmapFilter[] = [
       { column: 'tri_facility_id', operator: 'equals', value: params.facilityId },
+      ...triFormFilters(params),
     ];
-    if (params.year !== undefined) {
-      filters.push({ column: 'reporting_year', operator: 'equals', value: String(params.year) });
-    }
-    if (params.chemicalName) {
-      // actual field is cas_chem_name, not chemical_name_text
-      filters.push(containsFilter('cas_chem_name', params.chemicalName));
-    }
 
     const budget = dmapBudget(
       'TRI release lookup',
@@ -773,7 +845,7 @@ export class DmapService {
       (range) =>
         this.buildTableUrl('tri', 'tri_reporting_form', filters, range, { sort: NEWEST_FIRST }),
       filters,
-      { offset: params.offset ?? 0, limit: params.limit ?? 500 },
+      { offset: params.offset ?? 0, limit: params.limit ?? 25 },
       ctx,
       budget,
     );
@@ -900,14 +972,17 @@ export class DmapService {
    * reporting year first, then by submission number, so `offset` and `limit` page the most recent
    * filings first and every page is a slice of one order. However sparse the filters, a page is
    * one request (more only for a punctuated text filter's walk); with includeReleaseBreakdown,
-   * fetchReleaseBreakdown adds the per-medium on-site releases to every kept record (one request at
-   * the 200-record cap). The facility's Registry ID and parent company ride in the joined rows.
+   * fetchReleaseBreakdown adds the per-medium on-site releases to every kept record (one request
+   * per 233 submissions, so at most three, one wave, at the 699-record cap). The facility's
+   * Registry ID and parent company ride in the joined rows. `limit` defaults to 25; `chemicalId`
+   * matches tri_chem_id exactly, in the form TRI records it.
    */
   async searchTriReleases(
     params: {
       state: string;
       county?: string;
       year?: number;
+      chemicalId?: string;
       chemicalName?: string;
       offset?: number;
       limit?: number;
@@ -924,18 +999,7 @@ export class DmapService {
       // also matching a longer name that contains this one (LAKE / LAKE OF THE WOODS).
       facilityFilters.push(containsFilter('county_name', params.county));
     }
-    const formFilters: DmapFilter[] = [];
-    if (params.year !== undefined) {
-      formFilters.push({
-        column: 'reporting_year',
-        operator: 'equals',
-        value: String(params.year),
-      });
-    }
-    if (params.chemicalName) {
-      // actual field is cas_chem_name, not chemical_name_text
-      formFilters.push(containsFilter('cas_chem_name', params.chemicalName));
-    }
+    const formFilters = triFormFilters(params);
 
     const budget = dmapBudget(
       'TRI release search',
@@ -959,7 +1023,7 @@ export class DmapService {
           sort: NEWEST_FIRST,
         }),
       [...facilityFilters, ...formFilters],
-      { offset: params.offset ?? 0, limit: params.limit ?? 50 },
+      { offset: params.offset ?? 0, limit: params.limit ?? 25 },
       ctx,
       budget,
     );
@@ -982,17 +1046,20 @@ export class DmapService {
   }
 
   /**
-   * One page of Superfund sites by state, city, or ZIP, or by coordinates + radius; `limit`
-   * defaults to 50 and `offset` to 0. An administrative search reads its row range in site ID
-   * order (fetchPage), so `nextOffset` is an upstream position and `totalCount` stays absent:
-   * DMAP reports no match count. A proximity search scans every candidate on each call, ranks the
-   * matches nearest first with a site ID tiebreak, and slices the page from that order, so its
-   * `totalCount` is the full match and `nextOffset` a position in it.
+   * One page of Superfund sites by state, city, ZIP, or site name, or by coordinates + radius;
+   * `limit` defaults to 25 and `offset` to 0. `city` and `name` match by `contains`
+   * (containsFilter). An administrative search reads its row range in site ID order (fetchPage),
+   * so `nextOffset` is an upstream position and `totalCount` stays absent: DMAP reports no match
+   * count. A proximity search scans every candidate on each call, ranks the matches nearest first
+   * with a site ID tiebreak, and slices the page from that order, so its `totalCount` is the full
+   * match, `nextOffset` a position in it, and each row carries the unrounded distance it was
+   * ranked on.
    */
   async searchSuperfund(
     params: {
       state?: string;
       city?: string;
+      name?: string;
       zipCode?: string;
       latitude?: number;
       longitude?: number;
@@ -1003,9 +1070,9 @@ export class DmapService {
       limit?: number;
     },
     ctx: Context,
-  ): Promise<Page<SuperfundSite>> {
+  ): Promise<Page<SuperfundSearchSite>> {
     const offset = params.offset ?? 0;
-    const limit = params.limit ?? 50;
+    const limit = params.limit ?? 25;
     const filters: DmapFilter[] = [];
 
     if (params.state) {
@@ -1013,6 +1080,9 @@ export class DmapService {
     }
     if (params.city) {
       filters.push(containsFilter('city_name', params.city));
+    }
+    if (params.name) {
+      filters.push(containsFilter('name', params.name));
     }
     if (params.zipCode) {
       // SEMS stores a ZIP+4 for some sites ("07631-2720"), so a 5-digit ZIP matches by prefix.
@@ -1042,7 +1112,7 @@ export class DmapService {
     ctx.log.debug('DMAP Superfund query', { state: params.state, lat: params.latitude });
     const budget = dmapBudget(
       'Superfund site search',
-      'Narrow it with radius_miles, zip_code, city, or npl_status, or call again later.',
+      'Narrow it with radius_miles, zip_code, city, name, or npl_status, or call again later.',
     );
     if (!proximity) {
       const page = await this.fetchPage<RawSemsSite>(
@@ -1056,7 +1126,8 @@ export class DmapService {
       return { ...page, items: page.items.map(normalizeSemsSite) };
     }
 
-    const candidates = new Map<string, RawSemsSite>();
+    const candidates = new Map<string, SuperfundSite & { distanceMiles: number }>();
+    const wildcarded = filters.filter((f): f is CheckedFilter => f.literal !== undefined);
     const prefixes = proximityPrefixes(latitude, longitude, radiusMiles);
     /** Broad circles avoid multiplying latitude bands by many mostly empty longitude bins. */
     const broad = prefixes.longitudes.length > 4;
@@ -1107,29 +1178,22 @@ export class DmapService {
             page.every((row) => seen.has(row.site_id || JSON.stringify(row)))
           ) {
             throw serviceUnavailable(
-              'EPA DMAP repeated a Superfund candidate page. The proximity search could not be completed. Narrow the radius or add city, zip_code, or npl_status filters and retry.',
+              'EPA DMAP repeated a Superfund candidate page. The proximity search could not be completed. Narrow the radius or add city, name, zip_code, or npl_status filters and retry.',
             );
           }
           for (const row of page) seen.add(row.site_id || JSON.stringify(row));
           for (const row of page) {
-            if (
-              filters.every(
-                (f) =>
-                  f.literal === undefined ||
-                  String(row[f.column] ?? '')
-                    .toLowerCase()
-                    .includes(f.literal.toLowerCase()),
-              )
-            ) {
-              const site = normalizeSemsSite(row);
-              if (
-                site.latitude !== undefined &&
-                site.longitude !== undefined &&
-                haversineDistanceMiles(latitude, longitude, site.latitude, site.longitude) <=
-                  radiusMiles
-              ) {
-                candidates.set(row.site_id || JSON.stringify(row), row);
-              }
+            if (!passesChecks(row, wildcarded)) continue;
+            const site = normalizeSemsSite(row);
+            if (site.latitude === undefined || site.longitude === undefined) continue;
+            const distanceMiles = greatCircleMiles(
+              latitude,
+              longitude,
+              site.latitude,
+              site.longitude,
+            );
+            if (distanceMiles <= radiusMiles) {
+              candidates.set(row.site_id || JSON.stringify(row), { ...site, distanceMiles });
             }
           }
           if (page.length < pageRows) break;
@@ -1149,15 +1213,9 @@ export class DmapService {
     if (siblings.signal.aborted) throw siblings.signal.reason;
 
     // Every call rescans the whole match, so each page is a slice of one nearest-first order.
-    const ranked = [...candidates.values()]
-      .map(normalizeSemsSite)
-      .flatMap((site) => {
-        if (site.latitude === undefined || site.longitude === undefined) return [];
-        const distance = haversineDistanceMiles(latitude, longitude, site.latitude, site.longitude);
-        return distance <= radiusMiles ? [{ site, distance }] : [];
-      })
-      .sort((a, b) => a.distance - b.distance || a.site.siteId.localeCompare(b.site.siteId))
-      .map(({ site }) => site);
+    const ranked = [...candidates.values()].sort(
+      (a, b) => a.distanceMiles - b.distanceMiles || a.siteId.localeCompare(b.siteId),
+    );
     const page = slicePage(ranked, { limit, offset });
     const { items } = page;
     const coverage =
@@ -1172,40 +1230,41 @@ export class DmapService {
     return page;
   }
 
-  /** Fetch a single Superfund site by exact SEMS site ID. */
-  private async fetchSuperfundById(
-    siteId: string,
-    ctx: Context,
-    budget: CallBudget,
-  ): Promise<SuperfundSite[]> {
-    const url = this.buildTableUrl(
-      'sems',
-      'envirofacts_site',
-      [{ column: 'site_id', operator: 'equals', value: siteId }],
-      { first: 1, last: 1 },
-    );
-    ctx.log.debug('DMAP Superfund by ID', { siteId });
-    const rows = await this.fetchTable<RawSemsSite>(url, ctx, budget);
-    return rows.map(normalizeSemsSite);
-  }
-
-  /** Fetch an exact site and exhaust its contaminant associations under one total deadline. */
-  async getSuperfundSite(siteId: string, ctx: Context): Promise<SuperfundSiteDetail> {
+  /**
+   * Fetch an exact site and exhaust its contaminant associations under one total deadline. `id` is
+   * a SEMS site ID or an EPA ID: trimmed, end slashes dropped as every filter value drops them,
+   * and of EPA_ID's form, it matches epa_id, uppercased; any other value matches site_id as
+   * given. Contaminants are read by the resolved site's ID.
+   */
+  async getSuperfundSite(id: string, ctx: Context): Promise<SuperfundSiteDetail> {
     const budget = dmapBudget('Superfund site and contaminant lookup', 'Call again later.');
-    const [site] = await this.fetchSuperfundById(siteId, ctx, budget);
-    if (!site) {
+    const bare = trimSlashes(id.trim());
+    const epaId = EPA_ID.test(bare) ? bare.toUpperCase() : undefined;
+    const lookup: DmapFilter = epaId
+      ? { column: 'epa_id', operator: 'equals', value: epaId }
+      : { column: 'site_id', operator: 'equals', value: id };
+    ctx.log.debug('DMAP Superfund site lookup', { [lookup.column]: lookup.value });
+    const [row] = await this.fetchTable<RawSemsSite>(
+      this.buildTableUrl('sems', 'envirofacts_site', [lookup], { first: 1, last: 1 }),
+      ctx,
+      budget,
+    );
+    if (!row) {
       throw notFound(
-        `No Superfund site found with site ID "${siteId}". Use epa_superfund_search_sites to discover valid site IDs.`,
-        { reason: 'site_not_found', siteId },
+        epaId
+          ? `No Superfund site found with EPA ID "${epaId}".`
+          : `No Superfund site found with site ID "${id}".`,
+        { reason: 'site_not_found', ...(epaId ? { epaId } : { siteId: id }) },
       );
     }
+    const site = normalizeSemsSite(row);
     const contaminants: SuperfundSiteDetail['contaminants'] = [];
     for (let first = 1; ; first += CONTAMINANT_PAGE_ROWS) {
       const raw = await this.fetchTable<unknown>(
         this.buildTableUrl(
           'sems',
           'envirofacts_contaminants',
-          [{ column: 'fk_site_id', operator: 'equals', value: siteId }],
+          [{ column: 'fk_site_id', operator: 'equals', value: site.siteId }],
           { first, last: first + CONTAMINANT_PAGE_ROWS - 1 },
           { sort: CONTAMINANT_ORDER },
         ),
@@ -1236,7 +1295,7 @@ export class DmapService {
 
   /**
    * One page of drinking water systems by state, ZIP, or county served, in PWSID order; `limit`
-   * defaults to 50 and `offset` to 0. `state` is the primacy agency (primacy_agency_code).
+   * defaults to 25 and `offset` to 0. `state` is the primacy agency (primacy_agency_code).
    * `zipCode` matches the address of record by prefix, so a stored ZIP+4 matches its five-digit
    * ZIP. `county`, a bare uppercase name (bareCountyName), joins sdwis.geographic_area and keeps
    * the systems that serve it (countyServedFilter). `activeOnly` keeps pws_activity_code A.
@@ -1265,7 +1324,7 @@ export class DmapService {
     ctx: Context,
   ): Promise<Page<WaterSystem>> {
     const offset = params.offset ?? 0;
-    const limit = params.limit ?? 50;
+    const limit = params.limit ?? 25;
     const filters: DmapFilter[] = [];
 
     if (params.state) {

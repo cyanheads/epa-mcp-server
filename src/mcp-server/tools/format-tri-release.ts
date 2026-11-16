@@ -1,26 +1,22 @@
 /**
- * @fileoverview Renders the unit note and release-quantity lines shared by the TRI tools' text output.
+ * @fileoverview Renders the chemical ID, unit note, and release-quantity lines shared by the TRI
+ * tools' text output.
  * @module mcp-server/tools/format-tri-release
  */
 
+import type { z } from '@cyanheads/mcp-ts-core';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { formatLbs } from '@/mcp-server/tools/format-lbs.js';
-
-interface TriReleaseQuantities {
-  oneTimeReleaseInLbs?: number | undefined;
-  releasesToAirInLbs?: number | undefined;
-  releasesToLandInLbs?: number | undefined;
-  releasesToUndergroundInjectionInLbs?: number | undefined;
-  releasesToWaterInLbs?: number | undefined;
-  reportedUnit?: 'grams' | undefined;
-  totalOnSiteReleasesInLbs?: number | undefined;
-}
+import type { triReleaseSchema } from '@/mcp-server/tri-release-schema.js';
 
 /**
- * Markdown lines for a TRI record's reported unit, per-medium quantities, their on-site total, and
- * the one-time quantity; absent fields are skipped.
+ * Markdown lines for a TRI record's chemical ID and CAS number, reported unit, per-medium
+ * quantities, their on-site total, and the one-time quantity; absent fields are skipped.
  */
-export function formatTriReleaseLines(r: TriReleaseQuantities): string[] {
+export function formatTriReleaseLines(r: z.infer<typeof triReleaseSchema>): string[] {
   const lines: string[] = [];
+  if (r.chemicalId) lines.push(`**Chemical ID:** ${escapeMarkdownInline(r.chemicalId)}`);
+  if (r.casNumber) lines.push(`**CAS Number:** ${escapeMarkdownInline(r.casNumber)}`);
   if (r.reportedUnit)
     lines.push(
       `**Reported Unit:** ${r.reportedUnit} — any quantities shown are converted to pounds (1 lb = 453.59237 g)`,

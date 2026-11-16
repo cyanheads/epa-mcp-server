@@ -294,10 +294,139 @@ it('returns an existing site with no associations as success on both surfaces', 
   expect(JSON.stringify(result.content)).toContain('No contaminant associations recorded');
 });
 
+/** Lower Duwamish Waterway as sems.envirofacts_site holds it (live 2026-11-15), trimmed. */
+const duwamish = {
+  site_id: '1002020',
+  name: 'LOWER DUWAMISH WATERWAY',
+  city_name: 'SEATTLE',
+  fk_ref_state_code: 'WA',
+  epa_id: 'WA0002329803',
+};
+const duwamishContaminants = [
+  { preferred_contaminant_name: 'ARSENIC', media_name: 'Sediment', fk_site_id: '1002020' },
+  { preferred_contaminant_name: 'PCBS', media_name: 'Sediment', fk_site_id: '1002020' },
+];
+
+/**
+ * Fake DMAP for the two SEMS tables that answers by the URL's filter: a site row only for its own
+ * site_id or epa_id (case-insensitive, as DMAP's `equals` is), contaminants only for their
+ * fk_site_id. Unknown routes fail.
+ */
+function semsByFilter() {
+  const urls: string[] = [];
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const url = decodeURIComponent(String(input));
+    urls.push(url);
+    const filter = /\/(site_id|epa_id|fk_site_id)\/equals\/([^/]+)\//.exec(url);
+    if (!filter) throw new Error(`Unexpected route ${url}`);
+    const [, column, value] = filter;
+    const rows = url.includes('/sems.envirofacts_contaminants/')
+      ? duwamishContaminants
+      : [duwamish];
+    return Response.json(
+      rows.filter(
+        (row) => String(row[column as keyof typeof row]).toLowerCase() === value!.toLowerCase(),
+      ),
+    );
+  });
+  initDmapService({} as AppConfig, {} as StorageService);
+  return urls;
+}
+
+const SITES = 'https://data.epa.gov/dmapservice/sems.envirofacts_site';
+
+it.each([
+  ['an EPA ID', 'WA0002329803', '/epa_id/equals/WA0002329803/1:1/json'],
+  ['a lowercase EPA ID', 'wa0002329803', '/epa_id/equals/WA0002329803/1:1/json'],
+  ['a mixed-case EPA ID', 'Wa0002329803', '/epa_id/equals/WA0002329803/1:1/json'],
+  ['a padded EPA ID', ' WA0002329803 ', '/epa_id/equals/WA0002329803/1:1/json'],
+  ['an EPA ID with end slashes', '/WA0002329803/ ', '/epa_id/equals/WA0002329803/1:1/json'],
+  ['the site ID', '1002020', '/site_id/equals/1002020/1:1/json'],
+])(
+  'opens Lower Duwamish Waterway from %s on the tool, with contaminants read by its site ID',
+  async (_, site_id, lookup) => {
+    const urls = semsByFilter();
+    const result = await runToolContract(superfundGetSiteTool, { site_id });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual({
+      site: {
+        siteId: '1002020',
+        name: 'LOWER DUWAMISH WATERWAY',
+        city: 'SEATTLE',
+        state: 'WA',
+        epaId: 'WA0002329803',
+      },
+      contaminants: [
+        { name: 'ARSENIC', medium: 'Sediment' },
+        { name: 'PCBS', medium: 'Sediment' },
+      ],
+    });
+    const text = textOf(result.content);
+    expect(text).toContain('**Site ID:** 1002020');
+    expect(text).toContain('**EPA ID:** WA0002329803');
+    expect(text).toContain('PCBS');
+    expect(urls[0]).toBe(`${SITES}${lookup}`);
+    expect(urls.slice(1)).toHaveLength(1);
+    expect(urls[1]).toContain('/sems.envirofacts_contaminants/fk_site_id/equals/1002020/');
+  },
+);
+
+it.each(['WA0002329803', 'wa0002329803', '1002020'])(
+  'opens Lower Duwamish Waterway from %s on the resource, with its contaminants',
+  async (site_id) => {
+    const urls = semsByFilter();
+    expect(
+      await superfundSiteResource.handler(
+        { site_id },
+        createMockContext({ errors: superfundSiteResource.errors }),
+      ),
+    ).toMatchObject({
+      siteId: '1002020',
+      epaId: 'WA0002329803',
+      contaminants: [{ name: 'ARSENIC' }, { name: 'PCBS' }],
+    });
+    expect(urls.at(-1)).toContain('/fk_site_id/equals/1002020/');
+  },
+);
+
+const notFoundHint =
+  'Pass a SEMS site ID (7 digits) or an EPA ID (2 letters and 10 letters or digits), or find the site with epa_superfund_search_sites by name or location, and retry.';
+
+it('fails an EPA ID with no site as site_not_found on both surfaces, naming the EPA ID', async () => {
+  const urls = semsByFilter();
+  const result = await runToolContract(superfundGetSiteTool, { site_id: 'wad000000000' });
+  expect(result.isError).toBe(true);
+  expect(result.structuredContent).toMatchObject({
+    error: {
+      code: JsonRpcErrorCode.NotFound,
+      message: expect.stringContaining('EPA ID "WAD000000000"'),
+      data: { reason: 'site_not_found', epaId: 'WAD000000000', recovery: { hint: notFoundHint } },
+    },
+  });
+  const text = textOf(result.content);
+  expect(text).toContain('site_not_found');
+  expect(text).toContain(notFoundHint);
+  expect(urls).toEqual([`${SITES}/epa_id/equals/WAD000000000/1:1/json`]);
+  await expect(
+    superfundSiteResource.handler(
+      { site_id: 'WAD000000000' },
+      createMockContext({ errors: superfundSiteResource.errors }),
+    ),
+  ).rejects.toMatchObject({ code: JsonRpcErrorCode.NotFound, data: { reason: 'site_not_found' } });
+});
+
+it('names the EPA ID in the get tool, resource, and site_not_found recovery', () => {
+  expect(superfundGetSiteTool.input.shape.site_id.description).toContain('EPA ID');
+  expect(superfundSiteResource.params!.shape.site_id.description).toContain('EPA ID');
+  for (const errors of [superfundGetSiteTool.errors, superfundSiteResource.errors]) {
+    expect(errors?.find((e) => e.reason === 'site_not_found')?.recovery).toBe(notFoundHint);
+  }
+});
+
 it('reports missing site and recovery on both surfaces without querying contaminants', async () => {
   const urls = detailFetch([], []);
   const result = await runToolContract(superfundGetSiteTool, { site_id: 'MISSING' });
-  const hint = 'Use epa_superfund_search_sites to discover valid SEMS site IDs and retry.';
+  const hint = notFoundHint;
   expect(result.isError).toBe(true);
   expect(result.structuredContent).toMatchObject({
     error: {
@@ -315,6 +444,37 @@ it('reports missing site and recovery on both surfaces without querying contamin
     ),
   ).rejects.toMatchObject({ code: JsonRpcErrorCode.NotFound, data: { reason: 'site_not_found' } });
 });
+
+it.each([
+  ['a name', 'MISSING'],
+  ['a 7-digit ID with no site', '9999999'],
+  ['13 characters', 'WA00023298031'],
+  ['11 characters', 'WA000232980'],
+  ['a digit in the first two places', 'W10002329803'],
+])(
+  'looks up a value of neither form (%s) as a site ID and fails site_not_found on both surfaces',
+  async (_, site_id) => {
+    const urls = detailFetch([], []);
+    const result = await runToolContract(superfundGetSiteTool, { site_id });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.NotFound, data: { reason: 'site_not_found' } },
+    });
+    expect(JSON.stringify(result.content)).toContain('site_not_found');
+    expect(urls).toEqual([
+      `https://data.epa.gov/dmapservice/sems.envirofacts_site/site_id/equals/${site_id}/1:1/json`,
+    ]);
+    await expect(
+      superfundSiteResource.handler(
+        { site_id },
+        createMockContext({ errors: superfundSiteResource.errors }),
+      ),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.NotFound,
+      data: { reason: 'site_not_found' },
+    });
+  },
+);
 
 it.each(['', '   '])('rejects blank new detail ID %j before any request', async (site_id) => {
   const fetchSpy = vi.spyOn(globalThis, 'fetch');

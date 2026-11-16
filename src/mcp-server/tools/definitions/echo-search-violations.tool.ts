@@ -17,10 +17,10 @@ import { formatHeading } from '@/mcp-server/tools/format-heading.js';
 import { formatNotice } from '@/mcp-server/tools/format-notice.js';
 import {
   isCalendarDate,
-  normalizeStateCode,
-  normalizeZip,
-  optionalStateSchema,
-  optionalZipSchema,
+  normalizeStateList,
+  normalizeZipList,
+  stateListSchema,
+  zipListSchema,
 } from '@/mcp-server/tools/input-formats.js';
 import {
   clampLimit,
@@ -32,8 +32,11 @@ import {
 } from '@/mcp-server/tools/paging.js';
 import { getEchoService } from '@/services/echo/echo-service.js';
 
-/** Default and most cases one call returns; a full page of 100 measures about 36 KB. */
-const CASE_PAGE = { defaultLimit: 50, cap: 100 } as const;
+/**
+ * Default and most cases one call returns. A case runs 459–476 B of structuredContent and 379–394 B
+ * of content[] (TX), so a full page of 2,000 stays near 1 MB; ECHO serves at most 5,000.
+ */
+const CASE_PAGE = { defaultLimit: 25, cap: 2000 } as const;
 
 /** The notice a date-bounded case_type "all" search carries. */
 const CRIMINAL_EXCLUSION_NOTICE =
@@ -59,11 +62,11 @@ export const echoSearchViolationsTool = tool('epa_echo_search_violations', {
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
-    state: optionalStateSchema(
-      '2-letter state or territory code where the case is located (e.g. "TX", "PR"), case-insensitive. A case spanning several states matches each of them. ECHO also files some cases under codes outside the USPS set; any 2-character code is searched as written.',
+    state: stateListSchema(
+      '2-letter state or territory codes where the case is located (e.g. "TX", "PR"), case-insensitive, matching any of them. A case spanning several states matches each of them and is returned once. ECHO also files some cases under codes outside the USPS set; any 2-character code is searched as written.',
     ),
-    zip_code: optionalZipSchema(
-      '5-digit ZIP code of the case\'s facility location; a ZIP+4 such as "98108-1234" searches its first five digits',
+    zip_code: zipListSchema(
+      '5-digit ZIP codes of the case\'s facility locations, matching any of them; a ZIP+4 such as "98108-1234" searches its first five digits',
     ),
     program: z
       .enum(['CAA', 'CWA', 'RCRA', 'SDWA', 'CERCLA', 'EPCRA', 'FIFRA', 'TSCA'])
@@ -99,90 +102,57 @@ export const echoSearchViolationsTool = tool('epa_echo_search_violations', {
             caseId: z
               .string()
               .optional()
-              .describe(
-                'Case number (e.g. "03-2014-7010"; criminal cases read "CR_1270") — pass a civil one to epa_echo_get_case',
-              ),
+              .describe('Criminal ones start CR_; pass a civil one to epa_echo_get_case'),
             caseName: z.string().optional().describe('Case name or docket number'),
             caseType: z
               .string()
               .optional()
-              .describe(
-                'Case category: "Judicial" or "Administrative - Formal" for civil cases, "Criminal" for every criminal case',
-              ),
-            caseStatus: z
-              .string()
-              .optional()
-              .describe(
-                'Civil case status, e.g. "Closed", "Final Order Issued", "Final Order Entered", "Complaint Filed". Absent on criminal cases.',
-              ),
+              .describe('Civil: "Judicial" or "Administrative - Formal"; criminal: "Criminal"'),
+            caseStatus: z.string().optional().describe('Civil status'),
             enforcementOutcome: z
               .string()
               .optional()
-              .describe(
-                'How the case was resolved, e.g. "Final Order With Penalty", "Final Order No Penalty". Absent when ECHO records none, and on criminal cases.',
-              ),
-            leadAgency: z.string().optional().describe('Agency leading the case: "EPA" or "State"'),
-            programsViolated: z
-              .string()
-              .optional()
-              .describe('Primary regulatory law cited (e.g. "CERCLA", "CAA", "CWA")'),
+              .describe('Resolution; absent when ECHO records none'),
+            leadAgency: z.string().optional().describe('"EPA" or "State"'),
+            programsViolated: z.string().optional().describe('Primary law cited'),
             primarySection: z
               .string()
               .optional()
-              .describe(
-                'Section of the primary law (e.g. "107A"); a criminal case cites the U.S. Code (e.g. "33 U.S.C. 1908(a)")',
-              ),
-            penaltyAssessedInDollars: z
-              .number()
-              .optional()
-              .describe('Federal penalty assessed in dollars (parsed from ECHO dollar string)'),
+              .describe('Section of the primary law; criminal cases cite the U.S. Code'),
+            penaltyAssessedInDollars: z.number().optional().describe('Federal, in dollars'),
             stateLocalPenaltyInDollars: z
               .number()
               .optional()
-              .describe('State or local penalty assessed in dollars. Absent on criminal cases.'),
+              .describe('State or local, in dollars'),
             costRecoveryInDollars: z
               .number()
               .optional()
-              .describe(
-                'Response costs the parties agreed or were ordered to repay, in dollars — the outcome of a CERCLA cost-recovery case. Absent on criminal cases.',
-              ),
+              .describe('Response costs agreed or ordered repaid (CERCLA), in dollars'),
             complianceActionCostInDollars: z
               .number()
               .optional()
-              .describe(
-                'Estimated cost of the injunctive relief and other actions required to return to compliance, in dollars. Absent on criminal cases.',
-              ),
+              .describe('Estimated cost of injunctive relief to return to compliance, in dollars'),
             supplementalProjectCostInDollars: z
               .number()
               .optional()
-              .describe(
-                'Cost of Supplemental Environmental Projects the parties agreed to, in dollars. Absent on criminal cases.',
-              ),
+              .describe('Agreed SEP cost, in dollars'),
             filedDate: z
               .string()
               .optional()
-              .describe(
-                'Date the enforcement case was filed (MM/DD/YYYY) — the date the filing-date range bounds',
-              ),
+              .describe('MM/DD/YYYY; the date the filing-date range bounds'),
             settlementDate: z
               .string()
               .optional()
-              .describe('Settlement or resolution date (MM/DD/YYYY)'),
-            closedDate: z
-              .string()
-              .optional()
-              .describe('Date the case was closed (MM/DD/YYYY). Absent while it is open.'),
+              .describe('Settlement or resolution date, MM/DD/YYYY'),
+            closedDate: z.string().optional().describe('MM/DD/YYYY; absent while open'),
           })
-          .describe('EPA enforcement case record with case number, status, law, and outcome'),
+          .describe(
+            'One case; caseStatus, enforcementOutcome, and the state/local penalty and cost fields are absent on criminal cases',
+          ),
       )
-      .describe("One page of matching enforcement cases, in ECHO's order: limit cases from offset"),
-    totalCount: z.number().describe('Cases matched before limit and offset were applied'),
-    message: z
-      .string()
-      .optional()
-      .describe(
-        'Recovery hint when the page is empty: no case matched, or offset is past the last match. Absent when cases are returned.',
-      ),
+      .describe("Matching cases, ECHO's order"),
+    totalCount: z.number().describe('Matches before limit and offset'),
+    message: z.string().optional().describe('Recovery hint on an empty page; absent otherwise.'),
   }),
 
   enrichment: {
@@ -192,7 +162,7 @@ export const echoSearchViolationsTool = tool('epa_echo_search_violations', {
       .string()
       .optional()
       .describe(
-        'Present when a filing-date range with case_type "all" left criminal cases out of the results, or when more cases follow (names the offset that continues the list).',
+        'Present when a filing-date range with case_type "all" dropped criminal cases, or when more cases follow (names the offset).',
       ),
   },
   enrichmentTrailer: {
@@ -204,25 +174,25 @@ export const echoSearchViolationsTool = tool('epa_echo_search_violations', {
     {
       reason: 'no_geographic_filter',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'Neither state nor zip_code was provided.',
+      when: 'Neither state nor zip_code was given.',
       recovery: 'Provide at least one of state or zip_code to scope the enforcement case search.',
     },
     {
       reason: 'invalid_date',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'date_filed_start or date_filed_end is not a real calendar date, such as 2024-02-30.',
+      when: 'A filing date is not a real calendar date.',
       recovery: 'Pass a real calendar date in YYYY-MM-DD form, such as 2024-02-29.',
     },
     {
       reason: 'date_range_inverted',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'date_filed_start is later than date_filed_end.',
+      when: 'date_filed_start is after date_filed_end.',
       recovery: 'Swap the two dates so date_filed_start is on or before date_filed_end.',
     },
     {
       reason: 'criminal_date_filter',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'case_type "criminal" was combined with a filing-date bound, which ECHO records for civil cases only.',
+      when: 'case_type "criminal" with a filing-date bound, which only civil cases carry.',
       recovery:
         'Drop date_filed_start and date_filed_end to search criminal cases, or set case_type to civil.',
     },
@@ -230,9 +200,9 @@ export const echoSearchViolationsTool = tool('epa_echo_search_violations', {
 
   async handler(input, ctx) {
     // A blank optional value reads as omitted.
-    const state = normalizeStateCode(input.state);
-    const zipCode = normalizeZip(input.zip_code);
-    if (!state && !zipCode) {
+    const states = normalizeStateList(input.state);
+    const zipCodes = normalizeZipList(input.zip_code);
+    if (!states && !zipCodes) {
       throw ctx.fail(
         'no_geographic_filter',
         'At least one of state or zip_code is required to search enforcement cases.',
@@ -263,11 +233,14 @@ export const echoSearchViolationsTool = tool('epa_echo_search_violations', {
       );
     }
 
-    const { limit, notice: limitNotice } = clampLimit(input.limit, CASE_PAGE.cap);
+    const { limit, notice: limitNotice } = clampLimit(input.limit, CASE_PAGE.cap, {
+      tool: 'epa_echo_search_violations',
+    });
     if (limitNotice) ctx.enrich({ limitNotice });
 
     ctx.log.info('epa_echo_search_violations', {
-      state,
+      states,
+      zipCodes,
       program: input.program,
       caseType: input.case_type,
       dateFiledStart,
@@ -278,8 +251,8 @@ export const echoSearchViolationsTool = tool('epa_echo_search_violations', {
 
     const page = await getEchoService().searchViolations(
       {
-        ...(state && { state }),
-        ...(zipCode && { zipCode }),
+        ...(states && { states }),
+        ...(zipCodes && { zipCodes }),
         ...(input.program && { program: input.program }),
         ...(input.case_type && { caseType: input.case_type }),
         ...(dateFiledStart && { dateFiledStart }),
@@ -292,8 +265,8 @@ export const echoSearchViolationsTool = tool('epa_echo_search_violations', {
 
     // case_type "all" sends no filter; a date bound sends both ends, an open one as 1900 or today.
     echoQuery(ctx, [
-      state && equalsTerm('state', state),
-      zipCode && equalsTerm('zip_code', zipCode),
+      states && equalsTerm('state', states.join(',')),
+      zipCodes && equalsTerm('zip_code', zipCodes.join(',')),
       input.program && equalsTerm('program', input.program),
       input.case_type !== 'all' && equalsTerm('case_type', input.case_type),
       page.filedDateRange && equalsTerm('date_filed_start', page.filedDateRange.start),

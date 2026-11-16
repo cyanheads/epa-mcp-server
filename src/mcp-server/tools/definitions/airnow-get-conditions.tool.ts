@@ -82,116 +82,97 @@ export const airnowGetConditionsTool = tool('epa_airnow_get_conditions', {
       .array(
         z
           .object({
-            reportingArea: z
-              .string()
-              .optional()
-              .describe('Name of the AQI reporting area (e.g. "Seattle-Bellevue-Kent Valley")'),
+            reportingArea: z.string().optional().describe('AQI reporting area name'),
             reportingAreaCode: z
               .string()
               .optional()
-              .describe('AirNow reporting area code (e.g. "wa004"). Forecast mode only.'),
-            stateCode: z
-              .string()
-              .optional()
-              .describe('2-letter state code of the reporting area. Forecast mode only.'),
+              .describe('AirNow reporting area code. Forecast mode only.'),
+            stateCode: z.string().optional().describe('2-letter state code. Forecast mode only.'),
             dateObserved: z
               .string()
               .optional()
-              .describe('Observation date (YYYY-MM-DD). Current mode only.'),
+              .describe('Observation date, YYYY-MM-DD. Current mode only.'),
             hourObserved: z
               .string()
               .optional()
-              .describe('Local hour of the observation as "HH:00". Current mode only.'),
+              .describe('Local hour as "HH:00". Current mode only.'),
             localTimeZone: z
               .string()
               .optional()
-              .describe(
-                'Local time zone abbreviation for hourObserved (e.g. "PDT"). Current mode only.',
-              ),
+              .describe('Time zone abbreviation for hourObserved. Current mode only.'),
             discussion: z
               .string()
               .optional()
               .describe(
-                "The forecasting agency's discussion for this area, verbatim (may contain HTML). Forecast mode only; omitted when the agency issued none.",
+                "Forecasting agency's discussion, verbatim (may contain HTML). Forecast mode only; absent when none was issued.",
               ),
             readings: z
               .array(
                 z
                   .object({
-                    parameterName: z
-                      .string()
-                      .describe(
-                        'Pollutant name as AirNow reports it (e.g. "PM2.5", "OZONE", "PM10")',
-                      ),
+                    parameterName: z.string().describe('Pollutant name as AirNow reports it'),
                     aqi: z
                       .number()
                       .optional()
-                      .describe(
-                        'Air Quality Index value. Omitted when the agency issued only a category (category-only forecast).',
-                      ),
+                      .describe('Air Quality Index value; absent for a category-only forecast'),
                     categoryNumber: z
                       .number()
                       .optional()
                       .describe(
-                        'AQI category number: 1=Good, 2=Moderate, 3=Unhealthy for Sensitive Groups, 4=Unhealthy, 5=Very Unhealthy, 6=Hazardous. Omitted when AirNow reports an unrecognized category.',
+                        '1 Good, 2 Moderate, 3 Unhealthy for Sensitive Groups, 4 Unhealthy, 5 Very Unhealthy, 6 Hazardous; absent if unrecognized',
                       ),
-                    categoryName: z
-                      .string()
-                      .optional()
-                      .describe('AQI category name (e.g. "Good", "Moderate", "Unhealthy")'),
+                    categoryName: z.string().optional().describe('AQI category name'),
                     siteName: z
                       .string()
                       .optional()
-                      .describe('Monitor site that produced this observation. Current mode only.'),
+                      .describe('Monitor site name. Current mode only.'),
                     siteID: z
                       .string()
                       .optional()
-                      .describe('AirNow ID of the monitor site. Current mode only.'),
+                      .describe('AirNow monitor site ID. Current mode only.'),
                     reportingAgency: z
                       .string()
                       .optional()
-                      .describe('Agency that reported this observation. Current mode only.'),
+                      .describe('Reporting agency. Current mode only.'),
                     dateIssue: z
                       .string()
                       .optional()
-                      .describe('Date the forecast was issued (YYYY-MM-DD). Forecast mode only.'),
+                      .describe('Forecast issue date, YYYY-MM-DD. Forecast mode only.'),
                     dateValid: z
                       .string()
                       .optional()
-                      .describe('Date the forecast applies to (YYYY-MM-DD). Forecast mode only.'),
+                      .describe('Date the forecast applies to, YYYY-MM-DD. Forecast mode only.'),
                     forecastAgency: z
                       .string()
                       .optional()
-                      .describe('Agency that issued the forecast. Forecast mode only.'),
+                      .describe('Forecasting agency. Forecast mode only.'),
                     actionDay: z
                       .boolean()
                       .optional()
                       .describe(
-                        'True when the agency declared an air quality action day for this date. Forecast mode only.',
+                        'True when the agency declared an air quality action day. Forecast mode only.',
                       ),
                   })
-                  .describe(
-                    'AQI reading for one pollutant (and, in forecast mode, one valid date)',
-                  ),
+                  .describe('AQI for one pollutant (and, in forecast mode, one valid date)'),
               )
-              .describe('Per-pollutant AQI readings for this reporting area'),
+              .describe('Per-pollutant readings'),
           })
           .describe(
-            'AQI readings for one reporting area — per observed hour in current mode, per area across all forecast days in forecast mode',
+            'One reporting area: per observed hour in current mode, across forecast days in forecast mode',
           ),
       )
-      .describe('AQI observation or forecast records grouped by reporting area'),
-    mode: z.string().describe('Data mode used: "current" or "forecast"'),
+      .describe('Records grouped by reporting area'),
+    mode: z.string().describe('Mode used: "current" or "forecast"'),
     message: z
       .string()
       .optional()
       .describe(
-        "Why the result is empty: AirNow's own explanation, the issued forecast dates when forecast_date matched none, or a coverage hint. Absent when data is returned.",
+        "Why the result is empty: AirNow's explanation, the issued forecast dates when forecast_date matched none, or a coverage hint; absent otherwise.",
       ),
     attribution: z
       .string()
       .describe(
-        'Credit to the reporting or forecasting agencies and the U.S. EPA AirNow program, with the preliminary-data notice. Reproduce it when passing this data on.',
+        'Credit to the reporting or forecasting agencies and EPA AirNow, with the preliminary-data notice; reproduce it when passing this data on.',
       ),
   }),
 
@@ -205,7 +186,7 @@ export const airnowGetConditionsTool = tool('epa_airnow_get_conditions', {
     {
       reason: 'forecast_date_needs_forecast_mode',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'forecast_date was set while mode is "current", where it has no effect.',
+      when: 'forecast_date was set in "current" mode, where it has no effect.',
       recovery: 'Set mode to "forecast" to filter by forecast_date, or omit forecast_date.',
     },
     {

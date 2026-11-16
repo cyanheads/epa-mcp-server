@@ -8,6 +8,11 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import {
+  distanceMilesField,
+  formatDistanceLine,
+  roundMiles,
+} from '@/mcp-server/tools/distance-field.js';
+import {
   beginsWithTerm,
   echoQuery,
   effectiveQueryEnrichment,
@@ -19,10 +24,10 @@ import { formatLbs } from '@/mcp-server/tools/format-lbs.js';
 import { formatLocationLines } from '@/mcp-server/tools/format-location.js';
 import { formatNotice } from '@/mcp-server/tools/format-notice.js';
 import {
-  normalizeStateCode,
-  normalizeZip,
-  optionalStateSchema,
-  optionalZipSchema,
+  normalizeStateList,
+  normalizeZipList,
+  stateListSchema,
+  zipListSchema,
 } from '@/mcp-server/tools/input-formats.js';
 import {
   clampLimit,
@@ -34,9 +39,13 @@ import {
 } from '@/mcp-server/tools/paging.js';
 import { bareCountyName } from '@/services/county-name.js';
 import { getEchoService } from '@/services/echo/echo-service.js';
+import { greatCircleMiles } from '@/services/great-circle.js';
 
-/** Default and most facilities one call returns; a full page of 100 measures about 60 KB. */
-const SEARCH_PAGE = { defaultLimit: 50, cap: 100 } as const;
+/**
+ * Default and most facilities one call returns. A facility runs 385–397 B of structuredContent and
+ * 261–275 B of content[] (TX), so a full page of 2,500 stays near 1 MB; ECHO serves at most 5,000.
+ */
+const SEARCH_PAGE = { defaultLimit: 25, cap: 2500 } as const;
 
 /*
  * Advertised patterns accept every form the handler answers: surrounding whitespace is trimmed and
@@ -50,15 +59,15 @@ const NO_COMMA_PATTERN = /^[^,]*$/;
 export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
   title: 'Search EPA Facilities',
   description:
-    'ECHO: Search EPA-regulated facilities by location, county, facility name, NAICS industry code, environmental program, or compliance status across CAA, CWA, RCRA, TRI, and SDWA. Returns facility name, EPA Registry ID, coordinates, county FIPS code, per-program registration flags, TRI facility IDs, five-year inspection and penalty totals, and TRI release totals. Registry IDs returned here feed epa_echo_get_facility; TRI facility IDs feed epa_tri_get_facility_releases. Supports proximity search via latitude + longitude + radius_miles. At least one geographic filter (zip_code, state, city, county_fips, or a complete latitude+longitude+radius_miles triple) is required — unscoped searches time out. Page past limit with offset and nextOffset.',
+    'ECHO: Search EPA-regulated facilities by location, county, facility name, NAICS industry code, environmental program, or compliance status across CAA, CWA, RCRA, TRI, and SDWA. Returns facility name, EPA Registry ID, coordinates, county FIPS code, per-program registration flags, TRI facility IDs, five-year inspection and penalty totals, and TRI release totals. Registry IDs returned here feed epa_echo_get_facility; TRI facility IDs feed epa_tri_get_facility_releases. Supports proximity search via latitude + longitude + radius_miles, whose rows add distanceMiles from that point. At least one geographic filter (zip_code, state, city, county_fips, or a complete latitude+longitude+radius_miles triple) is required — unscoped searches time out. Page past limit with offset and nextOffset.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
-    zip_code: optionalZipSchema(
-      '5-digit ZIP code to search within; a ZIP+4 such as "98108-1234" searches its first five digits',
+    zip_code: zipListSchema(
+      '5-digit ZIP codes to search within, matching any of them; a ZIP+4 such as "98108-1234" searches its first five digits',
     ),
-    state: optionalStateSchema(
-      '2-letter state or territory code (e.g. "WA", "PR"), case-insensitive. Required with county. ECHO also files facilities under codes outside the USPS set, such as DM for offshore Gulf of Mexico platforms; any 2-character code is searched as written.',
+    state: stateListSchema(
+      '2-letter state or territory codes (e.g. "WA", "PR"), case-insensitive, matching any of them. Required with county. ECHO also files facilities under codes outside the USPS set, such as DM for offshore Gulf of Mexico platforms; any 2-character code is searched as written.',
     ),
     city: z
       .string()
@@ -70,7 +79,7 @@ export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
       .string()
       .optional()
       .describe(
-        'County name, case-insensitive. A trailing County, Parish, Borough, City and Borough, Census Area, or Municipality is dropped ("King County" searches KING), then it matches recorded county names that begin with it, so KING in VA also matches KING GEORGE. Requires state. Covers every registration ECHO places in the county, including ones with no program record that county_fips leaves out.',
+        'County name, case-insensitive. A trailing County, Parish, Borough, City and Borough, Census Area, or Municipality is dropped ("King County" searches KING), then it matches recorded county names that begin with it, so KING in VA also matches KING GEORGE. Requires state, and matches in each state listed. Covers every registration ECHO places in the county, including ones with no program record that county_fips leaves out.',
       ),
     county_fips: z
       .string()
@@ -148,80 +157,53 @@ export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
           .object({
             registryId: z
               .string()
-              .describe('EPA FRS Registry ID — use as input to epa_echo_get_facility'),
+              .describe('FRS Registry ID; pass it as registry_id to epa_echo_get_facility'),
             name: z.string().describe('Facility name'),
             street: z.string().optional().describe('Street address'),
             city: z.string().optional().describe('City'),
-            state: z.string().optional().describe('2-letter state abbreviation'),
+            state: z.string().optional().describe('State code'),
             zip: z.string().optional().describe('ZIP code'),
             county: z.string().optional().describe('County name'),
-            fipsCode: z
-              .string()
-              .optional()
-              .describe('5-digit county FIPS code — use with Census API for demographics'),
-            latitude: z.number().optional().describe('Latitude in decimal degrees'),
-            longitude: z.number().optional().describe('Longitude in decimal degrees'),
-            complianceStatus: z
-              .string()
-              .optional()
-              .describe('Overall compliance status text from ECHO'),
+            fipsCode: z.string().optional().describe('5-digit county FIPS code'),
+            latitude: z.number().optional().describe('Decimal degrees'),
+            longitude: z.number().optional().describe('Decimal degrees'),
+            distanceMiles: distanceMilesField,
+            complianceStatus: z.string().optional().describe('ECHO compliance status'),
             programs: z
               .object({
-                air: z
-                  .boolean()
-                  .describe('Has a Clean Air Act (CAA) stationary-source record in ICIS-Air'),
-                water: z
-                  .boolean()
-                  .describe('Has a Clean Water Act (CWA) discharge permit record in ICIS-NPDES'),
-                rcra: z.boolean().describe('Has an RCRA hazardous waste handler record'),
+                air: z.boolean().describe('Has an ICIS-Air (CAA) record'),
+                water: z.boolean().describe('Has an ICIS-NPDES (CWA) permit record'),
+                rcra: z.boolean().describe('Has an RCRA handler record'),
                 tri: z
                   .boolean()
                   .describe(
-                    'Has a Toxics Release Inventory (TRI) facility ID (triFacilityIds is non-empty), whether or not it reported in the latest year',
+                    'triFacilityIds is non-empty, whether or not it reported in the latest year',
                   ),
-                sdwa: z
-                  .boolean()
-                  .describe('Has a Safe Drinking Water Act (SDWA) public water system record'),
+                sdwa: z.boolean().describe('Has an SDWA water system record'),
               })
-              .describe(
-                'Program registration flags — the same programs the programs filter selects',
-              ),
+              .describe('Flags for the programs the programs filter selects'),
             triFacilityIds: z
               .array(z.string())
               .describe(
-                "15-character TRI facility IDs ECHO records for this facility, in ECHO's order, which is not reporting-year order — pass one as facility_id to epa_tri_get_facility_releases for per-chemical releases. A site can carry several from successive operators. Empty when the facility has no TRI facility ID.",
+                "15-character IDs in ECHO's order, not reporting-year order; pass one as facility_id to epa_tri_get_facility_releases. Several mean successive operators.",
               ),
             triReleasesTransfersInLbs: z
               .number()
               .optional()
               .describe(
-                "Total TRI on/off-site releases and transfers in pounds for ECHO's latest TRI year (summary). For the per-chemical breakdown, pass one of triFacilityIds to epa_tri_get_facility_releases — the Registry ID is not a TRI facility ID.",
+                "TRI releases and transfers in pounds, ECHO's latest TRI year; for per-chemical detail pass a triFacilityIds entry, not the Registry ID, to epa_tri_get_facility_releases",
               ),
-            inspectionCount: z
-              .number()
-              .optional()
-              .describe('Inspections over the last five years, across programs'),
+            inspectionCount: z.number().optional().describe('Last five years, all programs'),
             totalPenaltiesInDollars: z
               .number()
               .optional()
-              .describe(
-                'Penalties from formal enforcement actions over the last five years, across programs, in dollars',
-              ),
+              .describe('Formal-action penalties in dollars, last five years, all programs'),
           })
-          .describe(
-            'EPA facility record with Registry ID, location, program flags, and compliance summary',
-          ),
+          .describe('One facility'),
       )
-      .describe(
-        "One page of matching EPA facilities, in ECHO's order: limit facilities from offset",
-      ),
-    totalCount: z.number().describe('Facilities matched before limit and offset were applied'),
-    message: z
-      .string()
-      .optional()
-      .describe(
-        'Recovery hint when the page is empty: no facility matched, or offset is past the last match. Absent when facilities are returned.',
-      ),
+      .describe("Matching facilities, ECHO's order"),
+    totalCount: z.number().describe('Matches before limit and offset'),
+    message: z.string().optional().describe('Recovery hint on an empty page; absent otherwise.'),
   }),
 
   enrichment: {
@@ -230,7 +212,7 @@ export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
     notice: z
       .string()
       .optional()
-      .describe('Present when more facilities follow: names the offset that continues the list.'),
+      .describe('Present when more facilities follow: the continuing offset.'),
   },
   enrichmentTrailer: {
     ...pagingTrailer,
@@ -241,21 +223,21 @@ export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
     {
       reason: 'no_geographic_filter',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'No geographic filter (zip_code, state, city, county_fips, or a latitude+longitude+radius_miles triple) was provided.',
+      when: 'No zip_code, state, city, county_fips, or latitude+longitude+radius_miles.',
       recovery:
         'Provide at least one of zip_code, state, city, or county_fips, or a complete latitude + longitude + radius_miles triple, to scope the search.',
     },
     {
       reason: 'incomplete_proximity',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'A proximity search was started but latitude, longitude, and radius_miles were not all provided.',
+      when: 'Only part of latitude, longitude, and radius_miles.',
       recovery:
         'Proximity search needs all three of latitude, longitude, and radius_miles. Provide the missing value, or use zip_code / state / city instead.',
     },
     {
       reason: 'county_requires_state',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'county was provided without state.',
+      when: 'county without state.',
       recovery:
         'Add state with county, since county names repeat across states, or pass county_fips, which names one county on its own.',
     },
@@ -278,8 +260,8 @@ export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
     }
 
     // A blank optional value reads as omitted.
-    const state = normalizeStateCode(input.state);
-    const zipCode = normalizeZip(input.zip_code);
+    const states = normalizeStateList(input.state);
+    const zipCodes = normalizeZipList(input.zip_code);
     const city = input.city?.trim() || undefined;
     const county = input.county?.trim() ? bareCountyName(input.county) : undefined;
     const countyFips = input.county_fips?.trim() || undefined;
@@ -287,22 +269,24 @@ export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
     const naics = input.naics?.trim() || undefined;
     const program = input.programs?.[0];
 
-    if (county && !state) {
+    if (county && !states) {
       throw ctx.fail('county_requires_state', `county "${county}" needs state.`);
     }
-    if (!zipCode && !state && !city && !countyFips && !hasProximity) {
+    if (!zipCodes && !states && !city && !countyFips && !hasProximity) {
       throw ctx.fail(
         'no_geographic_filter',
         'At least one geographic filter (zip_code, state, city, county_fips, or a latitude+longitude+radius_miles triple) is required.',
       );
     }
 
-    const { limit, notice: limitNotice } = clampLimit(input.limit, SEARCH_PAGE.cap);
+    const { limit, notice: limitNotice } = clampLimit(input.limit, SEARCH_PAGE.cap, {
+      tool: 'epa_echo_search_facilities',
+    });
     if (limitNotice) ctx.enrich({ limitNotice });
 
     ctx.log.info('epa_echo_search_facilities', {
-      zip: zipCode,
-      state,
+      zipCodes,
+      states,
       city,
       county,
       countyFips,
@@ -314,8 +298,8 @@ export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
     });
     const page = await getEchoService().searchFacilities(
       {
-        ...(zipCode && { zipCode }),
-        ...(state && { state }),
+        ...(zipCodes && { zipCodes }),
+        ...(states && { states }),
         ...(city && { city }),
         ...(county && { county }),
         ...(countyFips && { countyFips }),
@@ -334,8 +318,8 @@ export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
     );
 
     echoQuery(ctx, [
-      zipCode && equalsTerm('zip_code', zipCode),
-      state && equalsTerm('state', state),
+      zipCodes && equalsTerm('zip_code', zipCodes.join(',')),
+      states && equalsTerm('state', states.join(',')),
       city && beginsWithTerm('city', city),
       county && beginsWithTerm('county', county),
       countyFips && equalsTerm('county_fips', countyFips),
@@ -369,7 +353,19 @@ export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
       };
     }
 
-    return { facilities: page.items, totalCount: page.totalCount };
+    // A proximity row without coordinates gets no distance; ECHO matches the radius on the
+    // coordinates it returns, so none has been seen. Row order stays ECHO's.
+    const facilities = page.items.map((facility) =>
+      hasProximity && facility.latitude !== undefined && facility.longitude !== undefined
+        ? {
+            ...facility,
+            distanceMiles: roundMiles(
+              greatCircleMiles(latitude, longitude, facility.latitude, facility.longitude),
+            ),
+          }
+        : facility,
+    );
+    return { facilities, totalCount: page.totalCount };
   },
 
   format: (result) => {
@@ -382,6 +378,7 @@ export const echoSearchFacilitiesTool = tool('epa_echo_search_facilities', {
       lines.push(`\n### ${formatHeading(f.name)}`);
       lines.push(`**Registry ID:** ${escapeMarkdownInline(f.registryId)}`);
       lines.push(...formatLocationLines(f));
+      if (f.distanceMiles !== undefined) lines.push(formatDistanceLine(f.distanceMiles));
       if (f.complianceStatus)
         lines.push(`**Compliance Status:** ${escapeMarkdownInline(f.complianceStatus)}`);
 

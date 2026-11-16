@@ -5,7 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
+import { escapeMarkdownInline, markdownLink } from '@cyanheads/mcp-ts-core/utils';
 import { dollars } from '@/mcp-server/tools/format-dollars.js';
 import { formatHeading } from '@/mcp-server/tools/format-heading.js';
 import { formatLbs } from '@/mcp-server/tools/format-lbs.js';
@@ -14,31 +14,25 @@ import { formatNotice } from '@/mcp-server/tools/format-notice.js';
 import {
   clampLimit,
   limitSchema,
+  nextOffsetLine,
   offsetSchema,
+  pageLabel,
   pagingEnrichment,
   pagingTrailer,
+  wholeListLimitSchema,
 } from '@/mcp-server/tools/paging.js';
 import {
   DRINKING_WATER_VIOLATION_SLICE,
+  EFFLUENT_EXCEEDANCE_SLICE,
   getEchoService,
   INSPECTION_SLICE,
+  RCRA_VIOLATION_SLICE,
 } from '@/services/echo/echo-service.js';
-
-/**
- * A list page's heading count: the total for a whole list, else the 1-based range the page
- * covers. A page ends at its next offset, or at the end of the list when it is the last one.
- */
-function pageLabel(shown: number, total: number, nextOffset: number | undefined): string {
-  if (shown === total) return `${total}`;
-  if (shown === 0) return `none on this page of ${total}`;
-  const start = (nextOffset ?? total) - shown;
-  return `${start + 1}–${start + shown} of ${total}`;
-}
 
 export const echoGetFacilityTool = tool('epa_echo_get_facility', {
   title: 'Get EPA Facility Compliance Profile',
   description:
-    "ECHO: Retrieve a full compliance profile for a single EPA-regulated facility by EPA Registry ID or EPA program ID. Returns facility metadata, the NAICS industry codes its programs record, ECHO's facility-level compliance status, a per-statute (CAA, CWA, RCRA, SDWA, and others ECHO tracks) compliance summary, inspections and other compliance monitoring records from the last five years (newest first, paged), five years of formal enforcement actions with penalties, five years of drinking-water violations with contaminant, measure, MCL, status, and enforcement actions (paged), the latest TRI release total, and the facility's TRI facility IDs for epa_tri_get_facility_releases. Use epa_echo_search_facilities to discover Registry IDs; pass a public water system's PWSID from epa_water_search_systems to get its drinking-water violations. For area-level enforcement discovery use epa_echo_search_violations instead.",
+    "ECHO: Retrieve a full compliance profile for a single EPA-regulated facility by EPA Registry ID or EPA program ID. Returns facility metadata, the NAICS industry codes its programs record, ECHO's facility-level compliance status, a per-statute (CAA, CWA, RCRA, SDWA, and others ECHO tracks) compliance summary, inspections and other compliance monitoring records from the last five years (newest first, paged), five years of formal enforcement actions with penalties, five years of drinking-water violations with contaminant, measure, MCL, status, and enforcement actions (paged), Clean Water Act effluent limit exceedances by pollutant and outfall and RCRA violations (both paged), Clean Air Act High Priority Violations, every program ID linked to the facility, the latest TRI release total, and the facility's TRI facility IDs for epa_tri_get_facility_releases. Use epa_echo_search_facilities to discover Registry IDs; pass a public water system's PWSID from epa_water_search_systems to get its drinking-water violations. For area-level enforcement discovery use epa_echo_search_violations instead.",
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -68,148 +62,119 @@ export const echoGetFacilityTool = tool('epa_echo_get_facility', {
       nextOffsetField: 'inspectionsNextOffset',
     }),
     inspections_offset: offsetSchema('inspections', 'inspectionsNextOffset'),
+    effluent_exceedances_limit: wholeListLimitSchema({
+      defaultLimit: EFFLUENT_EXCEEDANCE_SLICE.defaultLimit,
+      noun: 'effluent exceedance series',
+      offsetParam: 'effluent_exceedances_offset',
+      nextOffsetField: 'effluentExceedancesNextOffset',
+    }),
+    effluent_exceedances_offset: offsetSchema(
+      'effluent exceedance series',
+      'effluentExceedancesNextOffset',
+    ),
+    rcra_violations_limit: wholeListLimitSchema({
+      defaultLimit: RCRA_VIOLATION_SLICE.defaultLimit,
+      noun: 'RCRA violations',
+      offsetParam: 'rcra_violations_offset',
+      nextOffsetField: 'rcraViolationsNextOffset',
+    }),
+    rcra_violations_offset: offsetSchema('RCRA violations', 'rcraViolationsNextOffset'),
   }),
 
   output: z.object({
-    registryId: z.string().describe('EPA FRS Registry ID'),
+    registryId: z.string().describe('FRS Registry ID'),
     name: z.string().describe('Facility name'),
     street: z.string().optional().describe('Street address'),
     city: z.string().optional().describe('City'),
-    state: z.string().optional().describe('2-letter state abbreviation'),
+    state: z.string().optional().describe('State code'),
     zip: z.string().optional().describe('ZIP code'),
     county: z.string().optional().describe('County name'),
     fipsCode: z.string().optional().describe('5-digit county FIPS code'),
-    latitude: z.number().optional().describe('Latitude in decimal degrees'),
-    longitude: z.number().optional().describe('Longitude in decimal degrees'),
+    latitude: z.number().optional().describe('Decimal degrees'),
+    longitude: z.number().optional().describe('Decimal degrees'),
     complianceStatus: z
       .string()
       .optional()
       .describe(
-        'ECHO\'s facility-level compliance status, the same value epa_echo_search_facilities returns (e.g. "Significant Violation"). Absent when ECHO assigns none, as for TRI-only facilities, or when ECHO\'s facility search request fails (the notice field then says so).',
+        'Facility-level status; absent when ECHO assigns none (as for TRI-only facilities) or its facility search failed (see notice)',
       ),
     programs: z
       .object({
         air: z
           .boolean()
           .describe(
-            'Has an ICIS-Air record (Clean Air Act stationary-source compliance). Emissions-inventory, risk-management, and greenhouse-gas reporting entries alone do not count.',
+            'Has an ICIS-Air (CAA) record; emissions-inventory, risk-management, or greenhouse-gas entries alone do not count',
           ),
-        water: z.boolean().describe('Has an ICIS-NPDES record (Clean Water Act discharge permit)'),
-        rcra: z.boolean().describe('Has an RCRAInfo record (RCRA hazardous waste handler)'),
-        tri: z
-          .boolean()
-          .describe(
-            'Has a Toxics Release Inventory record — true exactly when triFacilityIds is non-empty',
-          ),
-        sdwa: z
-          .boolean()
-          .describe('Has an SDWIS record (Safe Drinking Water Act public water system)'),
+        water: z.boolean().describe('Has an ICIS-NPDES (CWA) record'),
+        rcra: z.boolean().describe('Has an RCRAInfo record'),
+        tri: z.boolean().describe('True exactly when triFacilityIds is non-empty'),
+        sdwa: z.boolean().describe('Has an SDWIS record'),
       })
-      .describe(
-        "Program registration flags, from the ECHO systems in the facility's detailed report",
-      ),
+      .describe("From the systems in the facility's detailed report"),
     triFacilityIds: z
       .array(z.string())
       .describe(
-        '15-character TRI facility IDs recorded for this facility, most recently reported first — pass one as facility_id to epa_tri_get_facility_releases for per-chemical releases. A site can carry several from successive operators. Empty when the facility has no TRI record.',
+        '15-character IDs, most recently reported first; pass one as facility_id to epa_tri_get_facility_releases. Several mean successive operators.',
       ),
     naics: z
       .array(
         z
           .object({
-            code: z.string().describe('NAICS code, 2–6 digits, e.g. "331110"'),
-            description: z
-              .string()
-              .optional()
-              .describe(
-                'NAICS title as ECHO records it, e.g. "Iron and Steel Mills and Ferroalloy Manufacturing"',
-              ),
+            code: z.string().describe('2–6 digits'),
+            description: z.string().optional().describe('Title as ECHO records it'),
           })
           .describe('One NAICS code'),
       )
-      .describe(
-        "NAICS industry codes the facility's program records carry, each code once, ascending by code. Programs can record different codes for one site. Empty when no program records one.",
-      ),
+      .describe('From the program records, each code once, ascending; programs can differ'),
     triReleasesTransfersInLbs: z
       .number()
       .optional()
       .describe(
-        "Total TRI on- and off-site releases and transfers in pounds for triReleasesTransfersYear, ECHO's latest TRI year for this facility. Absent when ECHO holds no TRI history for it.",
+        'TRI releases and transfers in pounds for triReleasesTransfersYear; absent without TRI history',
       ),
     triReleasesTransfersYear: z
       .number()
       .optional()
-      .describe('TRI reporting year triReleasesTransfersInLbs covers'),
+      .describe("ECHO's latest TRI year for the facility"),
     compliance: z
       .object({
         quartersInViolation: z
           .number()
           .optional()
-          .describe(
-            'Quarters (of the last 12) in which any program found the facility in noncompliance',
-          ),
+          .describe('Of the last 12, with noncompliance under any program'),
       })
       .optional()
-      .describe(
-        "Facility-level noncompliance count from ECHO's facility search record. Absent when ECHO reports none or the facility search request fails.",
-      ),
+      .describe("From ECHO's facility search; absent when it reports none or fails"),
     programCompliance: z
       .array(
         z
           .object({
-            statute: z
-              .string()
-              .describe('Statute ECHO summarizes, e.g. CAA, CWA, RCRA, SDWA, TSCA, EPCRA'),
-            currentStatus: z
-              .string()
-              .optional()
-              .describe(
-                'Current compliance status under this statute, e.g. "No Violation Identified"',
-              ),
-            quartersInNoncompliance: z
-              .number()
-              .optional()
-              .describe('Quarters in noncompliance over the 3-year window (of 12)'),
+            statute: z.string().describe('Statute'),
+            currentStatus: z.string().optional().describe('Current status'),
+            quartersInNoncompliance: z.number().optional().describe('Of 12, 3-year window'),
             quartersInSignificantNoncompliance: z
               .number()
               .optional()
-              .describe('Quarters in significant noncompliance over the 3-year window (of 12)'),
+              .describe('Of 12, 3-year window'),
             inspections: z
               .number()
               .optional()
-              .describe('Inspections or full compliance evaluations over the 5-year window'),
-            lastInspectionDate: z
-              .string()
-              .optional()
-              .describe('Date of the latest inspection (MM/DD/YYYY)'),
-            informalActions: z
-              .number()
-              .optional()
-              .describe('Informal enforcement actions over the 5-year window'),
-            formalActions: z
-              .number()
-              .optional()
-              .describe('Formal enforcement actions over the 5-year window'),
+              .describe('Inspections or full evaluations, 5-year window'),
+            lastInspectionDate: z.string().optional().describe('MM/DD/YYYY'),
+            informalActions: z.number().optional().describe('5-year window'),
+            formalActions: z.number().optional().describe('5-year window'),
             totalPenaltiesInDollars: z
               .number()
               .optional()
-              .describe(
-                'Penalties from formal enforcement actions over the 5-year window, in dollars',
-              ),
-            threeYearPeriodStart: z
-              .string()
-              .optional()
-              .describe('Start of the 3-year window (MM/DD/YYYY)'),
-            fiveYearPeriodStart: z
-              .string()
-              .optional()
-              .describe('Start of the 5-year window (MM/DD/YYYY)'),
-            periodEnd: z.string().optional().describe('End of both windows (MM/DD/YYYY)'),
+              .describe('Formal-action penalties, 5-year window, in dollars'),
+            threeYearPeriodStart: z.string().optional().describe('MM/DD/YYYY'),
+            fiveYearPeriodStart: z.string().optional().describe('MM/DD/YYYY'),
+            periodEnd: z.string().optional().describe('End of both windows, MM/DD/YYYY'),
           })
-          .describe("One statute's enforcement and compliance summary"),
+          .describe("One statute's summary"),
       )
       .describe(
-        "ECHO's per-statute enforcement and compliance summary. Empty when the facility is in no compliance-tracked program, as for TRI-only facilities.",
+        'Per-statute summary; empty outside compliance-tracked programs, as for TRI-only facilities',
       ),
     inspections: z
       .array(
@@ -218,154 +183,79 @@ export const echoGetFacilityTool = tool('epa_echo_get_facility', {
             category: z
               .string()
               .optional()
-              .describe(
-                'Kind of record, e.g. "Inspection/Evaluation", "Compliance Investigation", "Information Request", "Offsite Record Review"; absent for RCRA and SDWA records',
-              ),
-            activityType: z
-              .string()
-              .optional()
-              .describe(
-                'Inspection or evaluation type, e.g. "FCE On-Site", "PCE Stack Test", "Compliance Evaluation Inspection"',
-              ),
-            activityDate: z.string().optional().describe('Date of the record (MM/DD/YYYY)'),
-            description: z
-              .string()
-              .optional()
-              .describe('Finding ECHO records for the inspection, when it records one'),
-            statute: z.string().optional().describe('Statute the record was under'),
-            sourceId: z
-              .string()
-              .optional()
-              .describe(
-                'Program ID inspected, e.g. an ICIS-Air ID, NPDES permit, RCRA handler ID, or public water system ID',
-              ),
-            leadAgency: z.string().optional().describe('Lead agency: EPA, State, or Local'),
+              .describe('Kind of record; absent for RCRA and SDWA records'),
+            activityType: z.string().optional().describe('Inspection or evaluation type'),
+            activityDate: z.string().optional().describe('MM/DD/YYYY'),
+            description: z.string().optional().describe('Finding, if recorded'),
+            statute: z.string().optional().describe('Statute'),
+            sourceId: z.string().optional().describe('Program ID inspected'),
+            leadAgency: z.string().optional().describe('EPA, State, or Local'),
           })
-          .describe('Single inspection or other compliance monitoring record'),
+          .describe('One monitoring record'),
       )
-      .describe(
-        'Inspections, evaluations, investigations, and other compliance monitoring records over the 5-year window, newest first: one page of inspections_limit entries from inspections_offset.',
-      ),
-    inspectionsTotal: z
-      .number()
-      .describe(
-        "Compliance monitoring records in ECHO's 5-year history for this facility, across every page",
-      ),
+      .describe('Inspections and other compliance monitoring, 5-year window, newest first'),
+    inspectionsTotal: z.number().describe('Across every page'),
     inspectionsNextOffset: z
       .number()
       .optional()
-      .describe(
-        'Offset of the next page of inspections: present exactly when more follow, absent on the last page. Pass it as inspections_offset.',
-      ),
+      .describe('Next inspections_offset; absent on the last page'),
     drinkingWaterViolations: z
       .array(
         z
           .object({
-            sourceId: z
-              .string()
-              .optional()
-              .describe('Public water system ID (PWSID) the violation is recorded against'),
+            sourceId: z.string().optional().describe('PWSID recorded against'),
             violationId: z.string().optional().describe('SDWIS violation ID'),
-            compliancePeriodBeginDate: z
-              .string()
-              .optional()
-              .describe('Start of the compliance period (MM/DD/YYYY)'),
+            compliancePeriodBeginDate: z.string().optional().describe('MM/DD/YYYY'),
             compliancePeriodEndDate: z
               .string()
               .optional()
-              .describe(
-                'End of the compliance period (MM/DD/YYYY); absent when ECHO records none, as for an open period',
-              ),
-            federalRule: z
-              .string()
-              .optional()
-              .describe(
-                'Federal rule violated, e.g. "Lead and Copper Rule", "Stage 2 Disinfectants and Disinfection Byproducts Rule"',
-              ),
-            contaminantName: z
-              .string()
-              .optional()
-              .describe(
-                'Contaminant or rule group, e.g. "TTHM", "Arsenic", "Lead and Copper Rule"',
-              ),
+              .describe('MM/DD/YYYY; absent for an open period'),
+            federalRule: z.string().optional().describe('Federal rule violated'),
+            contaminantName: z.string().optional().describe('Contaminant or rule group'),
             violationCategoryCode: z
               .string()
               .optional()
-              .describe(
-                'Violation category code, e.g. MCL (maximum contaminant level), MR (monitoring and reporting), MON (monitoring), TT (treatment technique)',
-              ),
-            violationCategory: z
-              .string()
-              .optional()
-              .describe('Violation category, e.g. "Maximum Contaminant Level Violation"'),
+              .describe('Code that violationCategory names'),
+            violationCategory: z.string().optional().describe('Category name'),
             violationMeasure: z
               .string()
               .optional()
               .describe(
-                'Measured level as ECHO writes it, units included (e.g. "148.37 UG/L"); absent when ECHO records none, as for monitoring violations',
+                'Measured level, units included; absent when unrecorded, as for monitoring violations',
               ),
-            stateMcl: z
-              .string()
-              .optional()
-              .describe('State maximum contaminant level as ECHO writes it, units included'),
-            federalMcl: z
-              .string()
-              .optional()
-              .describe(
-                'Federal maximum contaminant level as ECHO writes it, units included (e.g. "0.080 mg/L")',
-              ),
+            stateMcl: z.string().optional().describe('State MCL, units included'),
+            federalMcl: z.string().optional().describe('Federal MCL, units included'),
             status: z
               .string()
               .optional()
               .describe(
-                "ECHO's violation status: Resolved, Archived (no longer counts toward the system's current compliance status; an Archived entry can still carry a resolvedDate), Addressed (not resolved, with formal enforcement), or Unaddressed (not resolved, no formal enforcement)",
+                'Resolved; Archived (no longer counts toward current compliance, can still carry resolvedDate); Addressed (unresolved, formal enforcement); Unaddressed (unresolved, none)',
               ),
-            resolvedDate: z
-              .string()
-              .optional()
-              .describe('Date ECHO records the violation as resolved (MM/DD/YYYY)'),
+            resolvedDate: z.string().optional().describe('MM/DD/YYYY'),
             enforcementActions: z
               .array(
                 z
                   .object({
-                    date: z.string().optional().describe('Action date (MM/DD/YYYY)'),
-                    type: z
-                      .string()
-                      .optional()
-                      .describe('Action type: "Formal", "Informal", or "Resolving"'),
-                    description: z
-                      .string()
-                      .optional()
-                      .describe(
-                        'Action, e.g. "State Administrative/Compliance Order without penalty issued"',
-                      ),
-                    agency: z.string().optional().describe('Agency that took it, e.g. State, EPA'),
+                    date: z.string().optional().describe('MM/DD/YYYY'),
+                    type: z.string().optional().describe('"Formal", "Informal", or "Resolving"'),
+                    description: z.string().optional().describe('Action'),
+                    agency: z.string().optional().describe('Agency that took it'),
                   })
-                  .describe('Enforcement action ECHO links to the violation'),
+                  .describe('One action'),
               )
               .optional()
-              .describe(
-                'Enforcement actions ECHO links to the violation; absent when it lists none',
-              ),
+              .describe('Linked enforcement actions; absent when none'),
           })
-          .describe(
-            'Single drinking-water violation; fields ECHO leaves empty are absent, never defaulted',
-          ),
+          .describe('One violation; empty fields absent, never defaulted'),
       )
       .describe(
-        "Drinking-water (SDWIS) violations in ECHO's 5-year report for a public water system, newest compliance period first: one page of drinking_water_violations_limit entries from drinking_water_violations_offset. Empty for a facility with no SDWIS record.",
+        "ECHO's 5-year SDWIS report for a public water system, newest compliance period first",
       ),
-    drinkingWaterViolationsTotal: z
-      .number()
-      .describe(
-        "Drinking-water violations in ECHO's report for this facility, across every page; 0 when it has no SDWIS record",
-      ),
+    drinkingWaterViolationsTotal: z.number().describe('Across every page'),
     drinkingWaterViolationsNextOffset: z
       .number()
       .optional()
-      .describe(
-        'Offset of the next page of drinkingWaterViolations: present exactly when more follow, absent on the last page. Pass it as drinking_water_violations_offset.',
-      ),
+      .describe('Next drinking_water_violations_offset; absent on the last page'),
     formalActions: z
       .array(
         z
@@ -374,58 +264,143 @@ export const echoGetFacilityTool = tool('epa_echo_get_facility', {
               .string()
               .optional()
               .describe(
-                'Enforcement case identifier; pass it to epa_echo_get_case for the civil case report (facilities, defendants, conclusions). Absent when ECHO records the action without one, as for RCRA and SDWA actions',
+                'Pass to epa_echo_get_case for the civil case report; absent when none, as for RCRA and SDWA actions',
               ),
-            settlementDate: z
-              .string()
-              .optional()
-              .describe('Settlement date of the enforcement case (MM/DD/YYYY)'),
-            penaltyAssessedInDollars: z
-              .number()
-              .optional()
-              .describe('Penalty amount assessed in dollars'),
-            actionType: z
-              .string()
-              .optional()
-              .describe('Type of formal enforcement action, e.g. "Administrative Order"'),
-            actionDate: z.string().optional().describe('Date of the action (MM/DD/YYYY)'),
-            statute: z.string().optional().describe('Statute the action was under'),
-            sourceId: z.string().optional().describe('Program ID the action concerns'),
-            leadAgency: z.string().optional().describe('Lead agency: EPA, State, or Local'),
+            settlementDate: z.string().optional().describe('Case settlement, MM/DD/YYYY'),
+            penaltyAssessedInDollars: z.number().optional().describe('In dollars'),
+            actionType: z.string().optional().describe('Action type'),
+            actionDate: z.string().optional().describe('MM/DD/YYYY'),
+            statute: z.string().optional().describe('Statute'),
+            sourceId: z.string().optional().describe('Program ID concerned'),
+            leadAgency: z.string().optional().describe('EPA, State, or Local'),
           })
-          .describe('Single formal enforcement action'),
+          .describe('One formal action'),
       )
-      .describe('Formal enforcement actions over the 5-year window, newest first'),
+      .describe('5-year window, newest first'),
     airCompliance: z
       .object({
         programId: z
           .string()
           .optional()
-          .describe('ICIS-Air ID when the facility has exactly one; absent when it has several'),
-        status: z.string().optional().describe('Current Clean Air Act compliance status'),
-        statusDate: z
-          .string()
-          .optional()
-          .describe('End of the latest quarter the status covers (MM/DD/YYYY)'),
+          .describe('ICIS-Air ID if exactly one; absent when several (see programIds)'),
+        status: z.string().optional().describe('Current CAA status'),
+        statusDate: z.string().optional().describe('End of the latest quarter covered, MM/DD/YYYY'),
       })
       .optional()
-      .describe(
-        'Clean Air Act status. Present only when programs.air is true and ECHO reports a CAA status.',
-      ),
+      .describe('Present only when programs.air is true and ECHO reports a CAA status'),
     waterCompliance: z
       .object({
-        status: z.string().optional().describe('Current Clean Water Act compliance status'),
+        status: z.string().optional().describe('Current CWA status'),
         permitId: z
           .string()
           .optional()
-          .describe(
-            'NPDES permit ID when the facility has exactly one; absent when it has several',
-          ),
+          .describe('NPDES permit ID if exactly one; absent when several (see programIds)'),
       })
       .optional()
+      .describe('Present only when programs.water is true and ECHO reports a CWA status'),
+    effluentExceedances: z
+      .array(
+        z
+          .object({
+            permitId: z.string().optional().describe('NPDES permit ID'),
+            parameterCode: z.string().optional().describe('5-digit NPDES code'),
+            parameterName: z.string().optional().describe('Pollutant name'),
+            outfall: z.string().optional().describe('Outfall code'),
+            monitoringLocation: z.string().optional().describe('Where it is measured'),
+            measurementType: z
+              .string()
+              .optional()
+              .describe(
+                'Mthly: monthly-average limit; NMth: non-monthly, usually a maximum; Neither: another kind',
+              ),
+            quarters: z
+              .array(
+                z
+                  .object({
+                    start: z.string().optional().describe('MM/DD/YYYY'),
+                    end: z
+                      .string()
+                      .optional()
+                      .describe("MM/DD/YYYY; the 13th ends at ECHO's last refresh"),
+                    value: z
+                      .string()
+                      .describe(
+                        'Highest percent over the limit as ECHO writes it, or LIMIT VIOLATION where that percent is not representative',
+                      ),
+                    status: z
+                      .string()
+                      .optional()
+                      .describe("ECHO's code, S or R; absent when unsent"),
+                  })
+                  .describe('One quarter; omitted dates absent'),
+              )
+              .describe('Quarters with an exceedance, oldest first'),
+          })
+          .describe('One series; empty fields absent'),
+      )
       .describe(
-        'Clean Water Act status. Present only when programs.water is true and ECHO reports a CWA status.',
+        'CWA effluent limit exceedances, 13-quarter window, one per permit, outfall, parameter, location, and measurement type, in that order',
       ),
+    effluentExceedancesTotal: z.number().describe('Across every page'),
+    effluentExceedancesNextOffset: z
+      .number()
+      .optional()
+      .describe('Next effluent_exceedances_offset; absent on the last page'),
+    rcraViolations: z
+      .array(
+        z
+          .object({
+            handlerId: z.string().optional().describe('RCRA handler ID'),
+            violationType: z.string().optional().describe('National violation type code'),
+            violation: z.string().optional().describe('Type name'),
+            agency: z.string().optional().describe('State code or EPA'),
+            determinedDate: z.string().optional().describe('MM/DD/YYYY; can precede the window'),
+            returnedToComplianceDate: z
+              .string()
+              .optional()
+              .describe('MM/DD/YYYY; absent while open'),
+            reportUrl: z.string().optional().describe('ECHO report URL'),
+          })
+          .describe('One violation; empty fields absent'),
+      )
+      .describe('12-quarter window, newest determination first'),
+    rcraViolationsTotal: z.number().describe('Across every page'),
+    rcraViolationsNextOffset: z
+      .number()
+      .optional()
+      .describe('Next rcra_violations_offset; absent on the last page'),
+    highPriorityViolations: z
+      .array(
+        z
+          .object({
+            airProgramId: z.string().optional().describe('ICIS-Air ID'),
+            violationId: z.string().optional().describe('ICIS-Air activity ID'),
+            programs: z.string().optional().describe('Air program codes, comma-separated'),
+            pollutants: z.string().optional().describe('Comma-separated'),
+            agency: z.string().optional().describe('State code or EPA'),
+            beginDate: z.string().optional().describe('MM/DD/YYYY; can precede the window'),
+            resolvedDate: z.string().optional().describe('MM/DD/YYYY; absent while unresolved'),
+          })
+          .describe('One violation; empty fields absent'),
+      )
+      .describe('CAA High Priority Violations, 12-quarter window'),
+    programIds: z
+      .array(
+        z
+          .object({
+            system: z.string().describe('EPA data system, as ECHO names it'),
+            id: z.string().describe('Program ID'),
+            statute: z.string().optional().describe('Statute'),
+            status: z
+              .string()
+              .optional()
+              .describe('Permit, operating, activity, or reporting status'),
+            universe: z.string().optional().describe('Classification within the system'),
+            expirationDate: z.string().optional().describe('Permit expiration, MM/DD/YYYY'),
+          })
+          .describe('One program ID; empty fields absent'),
+      )
+      .describe("FRS-linked program IDs besides the Registry ID, ECHO's order"),
   }),
 
   enrichment: {
@@ -433,13 +408,13 @@ export const echoGetFacilityTool = tool('epa_echo_get_facility', {
       .string()
       .optional()
       .describe(
-        "Present when ECHO's facility search request failed, so complianceStatus and compliance are missing; every other field comes from the facility's detailed report.",
+        "Present when ECHO's facility search failed, leaving out complianceStatus and compliance.",
       ),
     truncated: z
       .boolean()
       .optional()
       .describe(
-        'True when a list was cut at its limit: more drinking-water violations or inspections follow this page, and drinkingWaterViolationsNextOffset or inspectionsNextOffset continues it. Absent when neither list has more.',
+        'True when inspections, drinkingWaterViolations, effluentExceedances, or rcraViolations has more pages; absent otherwise.',
       ),
     limitNotice: pagingEnrichment.limitNotice,
   },
@@ -453,7 +428,7 @@ export const echoGetFacilityTool = tool('epa_echo_get_facility', {
     {
       reason: 'facility_not_found',
       code: JsonRpcErrorCode.NotFound,
-      when: 'ECHO has no facility for the given Registry ID or program ID.',
+      when: 'ECHO has no facility for registry_id.',
       recovery:
         'Verify the ID: find Registry IDs with epa_echo_search_facilities or PWSIDs with epa_water_search_systems, then retry.',
       thrownBy: 'service',
@@ -466,13 +441,12 @@ export const echoGetFacilityTool = tool('epa_echo_get_facility', {
     const violations = clampLimit(
       input.drinking_water_violations_limit,
       DRINKING_WATER_VIOLATION_SLICE.cap,
-      'drinking_water_violations_limit',
+      { tool: 'epa_echo_get_facility', param: 'drinking_water_violations_limit' },
     );
-    const inspections = clampLimit(
-      input.inspections_limit,
-      INSPECTION_SLICE.cap,
-      'inspections_limit',
-    );
+    const inspections = clampLimit(input.inspections_limit, INSPECTION_SLICE.cap, {
+      tool: 'epa_echo_get_facility',
+      param: 'inspections_limit',
+    });
     const limitNotice = [violations.notice, inspections.notice].filter(Boolean).join(' ');
     if (limitNotice) ctx.enrich({ limitNotice });
 
@@ -482,10 +456,17 @@ export const echoGetFacilityTool = tool('epa_echo_get_facility', {
         offset: input.drinking_water_violations_offset,
       },
       inspections: { limit: inspections.limit, offset: input.inspections_offset },
+      effluentExceedances: {
+        limit: input.effluent_exceedances_limit,
+        offset: input.effluent_exceedances_offset,
+      },
+      rcraViolations: { limit: input.rcra_violations_limit, offset: input.rcra_violations_offset },
     });
     if (
       profile.drinkingWaterViolationsNextOffset !== undefined ||
-      profile.inspectionsNextOffset !== undefined
+      profile.inspectionsNextOffset !== undefined ||
+      profile.effluentExceedancesNextOffset !== undefined ||
+      profile.rcraViolationsNextOffset !== undefined
     ) {
       ctx.enrich({ truncated: true });
     }
@@ -494,6 +475,8 @@ export const echoGetFacilityTool = tool('epa_echo_get_facility', {
       registryId: profile.registryId,
       inspections: profile.inspections.length,
       drinkingWaterViolations: profile.drinkingWaterViolations.length,
+      effluentExceedances: profile.effluentExceedances.length,
+      rcraViolations: profile.rcraViolations.length,
       formalActions: profile.formalActions.length,
     });
 
@@ -575,7 +558,7 @@ export const echoGetFacilityTool = tool('epa_echo_get_facility', {
       );
       lines.push(`\n### Inspections (${shown})`);
       if (result.inspectionsNextOffset !== undefined) {
-        lines.push(`**Next offset:** ${result.inspectionsNextOffset} (pass as inspections_offset)`);
+        lines.push(nextOffsetLine(result.inspectionsNextOffset, 'inspections_offset'));
       }
       for (const insp of result.inspections) {
         const parts = [
@@ -602,7 +585,10 @@ export const echoGetFacilityTool = tool('epa_echo_get_facility', {
       lines.push(`\n### Drinking-Water Violations (${shown})`);
       if (result.drinkingWaterViolationsNextOffset !== undefined) {
         lines.push(
-          `**Next offset:** ${result.drinkingWaterViolationsNextOffset} (pass as drinking_water_violations_offset)`,
+          nextOffsetLine(
+            result.drinkingWaterViolationsNextOffset,
+            'drinking_water_violations_offset',
+          ),
         );
       }
       for (const v of violations) {
@@ -673,6 +659,92 @@ export const echoGetFacilityTool = tool('epa_echo_get_facility', {
         lines.push(`**Status:** ${escapeMarkdownInline(result.waterCompliance.status)}`);
       if (result.waterCompliance.permitId)
         lines.push(`**NPDES Permit:** ${escapeMarkdownInline(result.waterCompliance.permitId)}`);
+    }
+
+    const effluentTotal = result.effluentExceedancesTotal;
+    if (result.programs.water || effluentTotal > 0) {
+      const next = result.effluentExceedancesNextOffset;
+      const shown = pageLabel(result.effluentExceedances.length, effluentTotal, next);
+      lines.push(`\n### CWA Effluent Exceedances (${shown})`);
+      if (next !== undefined) {
+        lines.push(nextOffsetLine(next, 'effluent_exceedances_offset'));
+      }
+      for (const series of result.effluentExceedances) {
+        const parts = [
+          series.permitId,
+          series.outfall && `outfall ${series.outfall}`,
+          [series.parameterCode, series.parameterName].filter(Boolean).join(' '),
+          series.monitoringLocation && `monitoring location ${series.monitoringLocation}`,
+          series.measurementType,
+        ]
+          .filter(Boolean)
+          .join(' — ');
+        lines.push(`- ${escapeMarkdownInline(parts || 'Exceedance series (no detail)')}`);
+        for (const q of series.quarters) {
+          const period = q.start && q.end ? `${q.start}–${q.end}` : (q.start ?? q.end);
+          const detail = `${period ? `${period}: ` : ''}${q.value}${q.status ? ` (status ${q.status})` : ''}`;
+          lines.push(`  - ${escapeMarkdownInline(detail)}`);
+        }
+      }
+    }
+
+    const rcraTotal = result.rcraViolationsTotal;
+    if (result.programs.rcra || rcraTotal > 0) {
+      const next = result.rcraViolationsNextOffset;
+      lines.push(
+        `\n### RCRA Violations (${pageLabel(result.rcraViolations.length, rcraTotal, next)})`,
+      );
+      if (next !== undefined) {
+        lines.push(nextOffsetLine(next, 'rcra_violations_offset'));
+      }
+      for (const v of result.rcraViolations) {
+        const parts = [
+          v.handlerId,
+          [v.violationType, v.violation].filter(Boolean).join(' '),
+          v.agency,
+          v.determinedDate && `determined ${v.determinedDate}`,
+          v.returnedToComplianceDate && `returned to compliance ${v.returnedToComplianceDate}`,
+        ]
+          .filter(Boolean)
+          .join(' — ');
+        const report = v.reportUrl ? ` — ${markdownLink('violation report', v.reportUrl)}` : '';
+        lines.push(`- ${escapeMarkdownInline(parts || 'RCRA violation (no detail)')}${report}`);
+      }
+    }
+
+    const hpvs = result.highPriorityViolations;
+    if (result.programs.air || hpvs.length > 0) {
+      lines.push(`\n### CAA High Priority Violations (${hpvs.length})`);
+      for (const h of hpvs) {
+        const parts = [
+          h.airProgramId,
+          h.violationId && `violation ${h.violationId}`,
+          h.programs && `programs ${h.programs}`,
+          h.pollutants && `pollutants ${h.pollutants}`,
+          h.agency,
+          h.beginDate && `from ${h.beginDate}`,
+          h.resolvedDate && `resolved ${h.resolvedDate}`,
+        ]
+          .filter(Boolean)
+          .join(' — ');
+        lines.push(`- ${escapeMarkdownInline(parts || 'High Priority Violation (no detail)')}`);
+      }
+    }
+
+    if (result.programIds.length > 0) {
+      lines.push(`\n### Program IDs (${result.programIds.length})`);
+      for (const p of result.programIds) {
+        const parts = [
+          `${p.system} ${p.id}`,
+          p.statute,
+          p.status,
+          p.universe,
+          p.expirationDate && `expires ${p.expirationDate}`,
+        ]
+          .filter(Boolean)
+          .join(' — ');
+        lines.push(`- ${escapeMarkdownInline(parts)}`);
+      }
     }
 
     return [{ type: 'text', text: lines.join('\n') }];

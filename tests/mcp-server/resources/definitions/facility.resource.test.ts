@@ -17,7 +17,8 @@ import {
 
 const mockGetFacility = vi.fn();
 
-vi.mock('@/services/echo/echo-service.js', () => ({
+vi.mock('@/services/echo/echo-service.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/services/echo/echo-service.js')>()),
   getEchoService: () => ({
     getFacilityReport: mockGetFacility,
     searchFacilities: vi.fn(),
@@ -151,9 +152,16 @@ describe('facilityResource', () => {
 
     expect(result.registryId).toBe('110049537202');
     expect(result.programs.sdwa).toBe(true);
-    expect(result.drinkingWaterViolations).toHaveLength(50);
+    // regression #78: the default page is 25.
+    expect(result.drinkingWaterViolations).toHaveLength(25);
     expect(result.drinkingWaterViolationsTotal).toBe(60);
-    expect(result.drinkingWaterViolationsNextOffset).toBe(50);
+    expect(result.drinkingWaterViolationsNextOffset).toBe(25);
+  });
+
+  it('regression #75: names the default page of each paged list it serves', () => {
+    expect(facilityResource.description).toContain(
+      'default pages: 25 inspections, 25 drinking-water violations, 10 effluent exceedance series, and 25 RCRA violations',
+    );
   });
 
   it('names the PWSID input in its description and registry_id parameter', () => {

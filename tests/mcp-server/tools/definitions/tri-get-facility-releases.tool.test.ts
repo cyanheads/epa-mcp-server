@@ -3,7 +3,9 @@
  * @module tests/mcp-server/tools/definitions/tri-get-facility-releases.tool.test
  */
 
+import { z } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -28,14 +30,14 @@ vi.mock('@/services/dmap/dmap-service.js', async (importActual) => ({
 }));
 
 const benzeneRelease = {
-  facilityId: 'WA0001234',
+  facilityId: '98101WA0001234X',
   chemicalName: 'BENZENE',
   reportingYear: 2022,
   oneTimeReleaseInLbs: 1240,
 };
 
 const fullBreakdownRelease = {
-  facilityId: 'WA0005678',
+  facilityId: '98101WA0005678X',
   chemicalName: 'TOLUENE',
   reportingYear: 2021,
   oneTimeReleaseInLbs: 0,
@@ -53,11 +55,11 @@ describe('triGetFacilityReleasesTool', () => {
   it('returns TRI releases for valid facility ID', async () => {
     mockGetTriReleases.mockResolvedValue({ items: [benzeneRelease] });
     const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
-    const input = triGetFacilityReleasesTool.input.parse({ facility_id: 'WA0001234' });
+    const input = triGetFacilityReleasesTool.input.parse({ facility_id: '98101WA0001234X' });
     const result = await triGetFacilityReleasesTool.handler(input, ctx);
-    expect(result).toEqual({ releases: [benzeneRelease], facilityId: 'WA0001234' });
+    expect(result).toEqual({ releases: [benzeneRelease], facilityId: '98101WA0001234X' });
     expect(mockGetTriReleases).toHaveBeenCalledWith(
-      { facilityId: 'WA0001234', offset: 0, limit: 500 },
+      { facilityId: '98101WA0001234X', offset: 0, limit: 25 },
       ctx,
     );
   });
@@ -66,13 +68,13 @@ describe('triGetFacilityReleasesTool', () => {
     mockGetTriReleases.mockResolvedValue({ items: [benzeneRelease] });
     const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
     const input = triGetFacilityReleasesTool.input.parse({
-      facility_id: 'WA0001234',
+      facility_id: '98101WA0001234X',
       year: 2022,
       chemical_name: 'BENZENE',
     });
     await triGetFacilityReleasesTool.handler(input, ctx);
     expect(mockGetTriReleases).toHaveBeenCalledWith(
-      { facilityId: 'WA0001234', year: 2022, chemicalName: 'BENZENE', offset: 0, limit: 500 },
+      { facilityId: '98101WA0001234X', year: 2022, chemicalName: 'BENZENE', offset: 0, limit: 25 },
       expect.anything(),
     );
   });
@@ -80,22 +82,25 @@ describe('triGetFacilityReleasesTool', () => {
   it('returns message when no releases found', async () => {
     mockGetTriReleases.mockResolvedValue({ items: [] });
     const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
-    const input = triGetFacilityReleasesTool.input.parse({ facility_id: 'NOFACILITY' });
+    const input = triGetFacilityReleasesTool.input.parse({ facility_id: 'NOFACILITY00000' });
     const result = await triGetFacilityReleasesTool.handler(input, ctx);
     expect(result.releases).toEqual([]);
-    expect(result.facilityId).toBe('NOFACILITY');
+    expect(result.facilityId).toBe('NOFACILITY00000');
     expect(result.message).toMatch(
-      /^No TRI releases found for facility "NOFACILITY"\. TRI data lags/,
+      /^No TRI releases found for facility "NOFACILITY00000"\. TRI data lags/,
     );
   });
 
   it('includes year in no-results message when year filter provided', async () => {
     mockGetTriReleases.mockResolvedValue({ items: [] });
     const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
-    const input = triGetFacilityReleasesTool.input.parse({ facility_id: 'WA0001234', year: 2019 });
+    const input = triGetFacilityReleasesTool.input.parse({
+      facility_id: '98101WA0001234X',
+      year: 2019,
+    });
     const result = await triGetFacilityReleasesTool.handler(input, ctx);
     expect(result.message).toMatch(
-      /^No TRI releases found for facility "WA0001234" for year 2019\. /,
+      /^No TRI releases found for facility "98101WA0001234X" for year 2019\. /,
     );
   });
 
@@ -103,12 +108,12 @@ describe('triGetFacilityReleasesTool', () => {
     mockGetTriReleases.mockResolvedValue({ items: [] });
     const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
     const input = triGetFacilityReleasesTool.input.parse({
-      facility_id: 'WA0001234',
+      facility_id: '98101WA0001234X',
       chemical_name: 'LEAD',
     });
     const result = await triGetFacilityReleasesTool.handler(input, ctx);
     expect(result.message).toMatch(
-      /^No TRI releases found for facility "WA0001234" matching chemical "LEAD"\. /,
+      /^No TRI releases found for facility "98101WA0001234X" matching chemical "LEAD"\. /,
     );
   });
 
@@ -116,28 +121,203 @@ describe('triGetFacilityReleasesTool', () => {
     mockGetTriReleases.mockResolvedValue({ items: [benzeneRelease] });
     const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
     const input = triGetFacilityReleasesTool.input.parse({
-      facility_id: '  WA0001234  ',
+      facility_id: '  98101WA0001234X  ',
       chemical_name: '  benzene  ',
     });
     await triGetFacilityReleasesTool.handler(input, ctx);
     expect(mockGetTriReleases).toHaveBeenCalledWith(
-      { facilityId: 'WA0001234', chemicalName: 'benzene', offset: 0, limit: 500 },
+      { facilityId: '98101WA0001234X', chemicalName: 'benzene', offset: 0, limit: 25 },
       expect.anything(),
     );
   });
 
+  describe('facility_id form', () => {
+    it.each([
+      '98108THBNG7500E',
+      '98108thbng7500e',
+      ' 98108THBNG7500E ',
+      '98108THBNG7500E/',
+      '/98108THBNG7500E',
+      '\t//98108Thbng7500E//\n',
+    ])('sends %j as 98108THBNG7500E and echoes that ID on both surfaces', async (facility_id) => {
+      mockGetTriReleases.mockResolvedValue({ items: [] });
+
+      const call = await runToolContract(triGetFacilityReleasesTool, { facility_id });
+
+      expect(call.isError).toBeFalsy();
+      expect(mockGetTriReleases.mock.calls[0]![0]).toMatchObject({ facilityId: '98108THBNG7500E' });
+      const structured = call.structuredContent as { facilityId: string; message: string };
+      expect(structured.facilityId).toBe('98108THBNG7500E');
+      expect(structured.message).toContain('facility "98108THBNG7500E"');
+      expect(textOf(call.content)).toContain('## TRI Chemical Releases — Facility 98108THBNG7500E');
+    });
+
+    it.each([
+      ['a 12-digit EPA Registry ID', '110017848105'],
+      ['a 14-character value', '98108THBNG7500'],
+      ['a 16-character value', '98108THBNG7500EX'],
+      ['a comma-joined pair', '98108THBNG7500E,98108THBNG7500F'],
+      ['a slash inside the ID', '98108THBNG/7500E'],
+      ['whitespace inside the ID', '98108THBNG 7500E'],
+      ['an empty value', ''],
+      ['a number', 98108],
+    ])(
+      'rejects %s at the schema, naming the 15-character form, before any request',
+      async (_, facility_id) => {
+        const call = await runToolContract(triGetFacilityReleasesTool, { facility_id } as never);
+
+        expect(call.structuredContent).toMatchObject({
+          error: { code: JsonRpcErrorCode.InvalidParams },
+        });
+        const text = textOf(call.content);
+        expect(text).toContain('15-character TRI facility ID');
+        expect(text).toContain('triFacilityIds');
+        expect(mockGetTriReleases).not.toHaveBeenCalled();
+      },
+    );
+
+    it('advertises a pattern that accepts the raw forms and rejects a Registry ID', () => {
+      const json = z.toJSONSchema(triGetFacilityReleasesTool.input.shape.facility_id, {
+        io: 'input',
+      }) as { pattern: string };
+      const pattern = new RegExp(json.pattern, 'u');
+      for (const id of ['98108thbng7500e', ' 98108THBNG7500E/'])
+        expect(pattern.test(id)).toBe(true);
+      for (const id of ['110017848105', '98108THBNG7500']) expect(pattern.test(id)).toBe(false);
+    });
+  });
+
+  describe('chemical_id', () => {
+    const benzeneById = {
+      ...benzeneRelease,
+      chemicalName: 'Benzene',
+      chemicalId: '0000071432',
+      casNumber: '71-43-2',
+    };
+
+    it.each(['71-43-2', '71432', '0000071432', ' 71-43-2 '])(
+      'sends %j as the 10-digit padded CAS number',
+      async (chemical_id) => {
+        mockGetTriReleases.mockResolvedValue({ items: [benzeneById] });
+
+        const call = await runToolContract(triGetFacilityReleasesTool, {
+          facility_id: '98101WA0001234X',
+          chemical_id,
+          chemical_name: 'benzene',
+          year: 2023,
+          offset: 5,
+          limit: 2,
+        });
+
+        expect(call.isError).toBeFalsy();
+        expect(mockGetTriReleases.mock.calls[0]![0]).toEqual({
+          facilityId: '98101WA0001234X',
+          year: 2023,
+          chemicalId: '0000071432',
+          chemicalName: 'benzene',
+          offset: 5,
+          limit: 2,
+        });
+      },
+    );
+
+    it.each([
+      ['n420', 'N420'],
+      ['N420', 'N420'],
+      ['TRD SECRT', 'TRD SECRT'],
+    ])('sends %j as %j', async (chemical_id, sent) => {
+      mockGetTriReleases.mockResolvedValue({ items: [] });
+
+      await runToolContract(triGetFacilityReleasesTool, {
+        facility_id: '98101WA0001234X',
+        chemical_id,
+      });
+
+      expect(mockGetTriReleases.mock.calls[0]![0]).toMatchObject({ chemicalId: sent });
+    });
+
+    it('omits a blank chemical_id', async () => {
+      mockGetTriReleases.mockResolvedValue({ items: [] });
+
+      await runToolContract(triGetFacilityReleasesTool, {
+        facility_id: '98101WA0001234X',
+        chemical_id: '  ',
+      });
+
+      expect(mockGetTriReleases.mock.calls[0]![0]).not.toHaveProperty('chemicalId');
+    });
+
+    it('rejects a CAS number whose check digit fails, naming the expected form, before any request', async () => {
+      const call = await runToolContract(triGetFacilityReleasesTool, {
+        facility_id: '98101WA0001234X',
+        chemical_id: '71-43-1',
+      });
+
+      expect(call.structuredContent).toMatchObject({
+        error: { code: JsonRpcErrorCode.InvalidParams },
+      });
+      const text = textOf(call.content);
+      expect(text).toContain('fails its check digit');
+      expect(text).toContain('"71-43-2"');
+      expect(mockGetTriReleases).not.toHaveBeenCalled();
+    });
+
+    it('carries chemicalId and casNumber on both surfaces', async () => {
+      const category = { ...benzeneRelease, chemicalName: 'Lead compounds', chemicalId: 'N420' };
+      mockGetTriReleases.mockResolvedValue({ items: [benzeneById, category] });
+
+      const call = await runToolContract(triGetFacilityReleasesTool, {
+        facility_id: '98101WA0001234X',
+      });
+
+      expect((call.structuredContent as { releases: unknown[] }).releases).toEqual([
+        benzeneById,
+        category,
+      ]);
+      const [benzeneText, leadText] = textOf(call.content).split('\n### ').slice(1);
+      expect(benzeneText).toContain('**Chemical ID:** 0000071432\n**CAS Number:** 71-43-2');
+      expect(leadText).toContain('**Chemical ID:** N420');
+      expect(leadText).not.toContain('CAS Number');
+    });
+
+    it('names chemical_id in the empty-result message and its recovery', async () => {
+      mockGetTriReleases.mockResolvedValue({ items: [] });
+
+      const call = await runToolContract(triGetFacilityReleasesTool, {
+        facility_id: '98101WA0001234X',
+        chemical_id: '71-43-2',
+      });
+
+      const { message } = call.structuredContent as { message: string };
+      expect(message).toMatch(
+        /^No TRI releases found for facility "98101WA0001234X" with chemical ID 0000071432\. /,
+      );
+      expect(message).toContain('Remove chemical_id to include other chemicals.');
+    });
+
+    it('describes chemicalId and casNumber with their absent-when rules', () => {
+      const item = triGetFacilityReleasesTool.output.shape.releases.element.shape;
+      expect(item.chemicalId.description).toBe(
+        'TRI chemical ID (a 10-digit zero-padded CAS number, an N-prefixed category code, or a placeholder); pass it as chemical_id for an exact match. Absent when TRI records none.',
+      );
+      expect(item.casNumber.description).toBe(
+        'CAS Registry Number, hyphenated. Absent for a category code or placeholder.',
+      );
+    });
+  });
+
   it('formats output with chemical name, year, and release amounts', () => {
-    const output = { releases: [benzeneRelease], facilityId: 'WA0001234' };
+    const output = { releases: [benzeneRelease], facilityId: '98101WA0001234X' };
     const blocks = triGetFacilityReleasesTool.format!(output);
     expect(blocks).toEqual([
       {
         type: 'text',
         text: [
-          '## TRI Chemical Releases — Facility WA0001234',
+          '## TRI Chemical Releases — Facility 98101WA0001234X',
           '**Records:** 1',
           '',
           '### BENZENE (2022)',
-          '**Facility ID:** WA0001234',
+          '**Facility ID:** 98101WA0001234X',
           '**One-Time Release:** 1,240 lbs',
         ].join('\n'),
       },
@@ -147,14 +327,14 @@ describe('triGetFacilityReleasesTool', () => {
   it('formats empty result with message', () => {
     const output = {
       releases: [],
-      facilityId: 'WA0001234',
+      facilityId: '98101WA0001234X',
       message: 'No TRI releases found.',
     };
     const blocks = triGetFacilityReleasesTool.format!(output);
     const text = (blocks[0] as { type: string; text: string }).text;
     expect(text).toBe(
       [
-        '## TRI Chemical Releases — Facility WA0001234',
+        '## TRI Chemical Releases — Facility 98101WA0001234X',
         '**Records:** 0',
         '',
         '> No TRI releases found.',
@@ -227,7 +407,7 @@ describe('triGetFacilityReleasesTool', () => {
       mockGetTriReleases.mockResolvedValue({ items: [] });
       const ctx = createMockContext({ errors: triGetFacilityReleasesTool.errors });
       const input = triGetFacilityReleasesTool.input.parse({
-        facility_id: '110070322017',
+        facility_id: '98101WA0001234X',
         year: 2022,
       });
       const result = await triGetFacilityReleasesTool.handler(input, ctx);
@@ -240,7 +420,7 @@ describe('triGetFacilityReleasesTool', () => {
 
     it('regression #31: every source pointer also names epa_echo_get_facility triFacilityIds', async () => {
       mockGetTriReleases.mockResolvedValue({ items: [] });
-      const input = triGetFacilityReleasesTool.input.parse({ facility_id: '110070322017' });
+      const input = triGetFacilityReleasesTool.input.parse({ facility_id: '98101WA0001234X' });
       const result = await triGetFacilityReleasesTool.handler(
         input,
         createMockContext({ errors: triGetFacilityReleasesTool.errors }),
@@ -273,22 +453,24 @@ describe('triGetFacilityReleasesTool', () => {
 
   it('carries every per-medium field through the output schema to structuredContent', async () => {
     mockGetTriReleases.mockResolvedValue({ items: [fullBreakdownRelease] });
-    const call = await runToolContract(triGetFacilityReleasesTool, { facility_id: 'WA0005678' });
+    const call = await runToolContract(triGetFacilityReleasesTool, {
+      facility_id: '98101WA0005678X',
+    });
     expect(call.isError).toBeFalsy();
     expect(call.structuredContent).toEqual({
       releases: [fullBreakdownRelease],
-      facilityId: 'WA0005678',
+      facilityId: '98101WA0005678X',
     });
   });
 
   it('formats all four media plus the distinct one-time release line', () => {
-    const output = { releases: [fullBreakdownRelease], facilityId: 'WA0005678' };
+    const output = { releases: [fullBreakdownRelease], facilityId: '98101WA0005678X' };
     const text = (triGetFacilityReleasesTool.format!(output)[0] as { type: string; text: string })
       .text;
     // one_time_release_qty is a separate TRI category, rendered after the per-medium releases.
     expect(text.split('\n').slice(3)).toEqual([
       '### TOLUENE (2021)',
-      '**Facility ID:** WA0005678',
+      '**Facility ID:** 98101WA0005678X',
       '**Air Releases:** 15,000 lbs',
       '**Water Releases:** 200 lbs',
       '**Land Releases:** 3,400 lbs',
@@ -355,19 +537,19 @@ describe('triGetFacilityReleasesTool', () => {
   });
 
   describe('paging', () => {
-    it('defaults to 500 filings from offset 0 and passes limit and offset to the service', async () => {
+    it('defaults to 25 filings from offset 0 and passes limit and offset to the service', async () => {
       mockGetTriReleases.mockResolvedValue({ items: [benzeneRelease] });
 
-      await runToolContract(triGetFacilityReleasesTool, { facility_id: 'WA0001234' });
+      await runToolContract(triGetFacilityReleasesTool, { facility_id: '98101WA0001234X' });
       await runToolContract(triGetFacilityReleasesTool, {
-        facility_id: 'WA0001234',
+        facility_id: '98101WA0001234X',
         offset: 5,
         limit: 5,
       });
 
       expect(mockGetTriReleases.mock.calls.map(([params]) => params)).toEqual([
-        { facilityId: 'WA0001234', offset: 0, limit: 500 },
-        { facilityId: 'WA0001234', offset: 5, limit: 5 },
+        { facilityId: '98101WA0001234X', offset: 0, limit: 25 },
+        { facilityId: '98101WA0001234X', offset: 5, limit: 5 },
       ]);
     });
 
@@ -375,7 +557,7 @@ describe('triGetFacilityReleasesTool', () => {
       mockGetTriReleases.mockResolvedValue({ items: [benzeneRelease], nextOffset: 501 });
 
       const call = await runToolContract(triGetFacilityReleasesTool, {
-        facility_id: 'WA0001234',
+        facility_id: '98101WA0001234X',
         offset: 500,
         limit: 1,
       });
@@ -393,32 +575,42 @@ describe('triGetFacilityReleasesTool', () => {
       expect(text.toLowerCase()).not.toContain('raise');
     });
 
-    it('clamps a limit above 500 to 500 with a notice', async () => {
+    it('serves limit 699 unclamped and clamps 700 to 699 with a notice', async () => {
       mockGetTriReleases.mockResolvedValue({ items: [benzeneRelease] });
 
+      const atCap = await runToolContract(triGetFacilityReleasesTool, {
+        facility_id: '98101WA0001234X',
+        limit: 699,
+      });
       const call = await runToolContract(triGetFacilityReleasesTool, {
-        facility_id: 'WA0001234',
-        limit: 600,
+        facility_id: '98101WA0001234X',
+        limit: 700,
       });
 
+      expect(atCap.structuredContent).not.toHaveProperty('limitNotice');
       expect(call.isError).toBeFalsy();
-      expect(mockGetTriReleases.mock.calls[0]![0]).toMatchObject({ limit: 500 });
+      expect(mockGetTriReleases.mock.calls.map(([params]) => params.limit)).toEqual([699, 699]);
       const notice = (call.structuredContent as { limitNotice?: string }).limitNotice;
-      expect(notice).toContain('limit 600');
+      expect(notice).toBe(
+        "limit 700 is above this tool's cap of 699, so at most 699 records were returned.",
+      );
       expect(textOf(call.content)).toContain(`> ${notice}`);
+      expect(triGetFacilityReleasesTool.input.shape.limit.description).toBe(
+        'Number of filings to return in one call. Default 25; a larger value returns at most 699 and says so. Page past it with offset and nextOffset.',
+      );
     });
 
     it('says an empty page past the end is past the end', async () => {
       mockGetTriReleases.mockResolvedValue({ items: [] });
 
       const call = await runToolContract(triGetFacilityReleasesTool, {
-        facility_id: 'WA0001234',
+        facility_id: '98101WA0001234X',
         offset: 40,
       });
 
       const structured = call.structuredContent as { releases: unknown[]; message: string };
       expect(structured.message).toBe(
-        'No TRI releases found for facility "WA0001234" at offset 40: the lookup has no records past it. Lower offset, or start again at offset 0.',
+        'No TRI releases found for facility "98101WA0001234X" at offset 40: the lookup has no records past it. Lower offset, or start again at offset 0.',
       );
       expect(structured).not.toHaveProperty('nextOffset');
       expect(structured).not.toHaveProperty('truncated');
@@ -428,7 +620,7 @@ describe('triGetFacilityReleasesTool', () => {
       mockGetTriReleases.mockResolvedValue({ items: [benzeneRelease] });
 
       const call = await runToolContract(triGetFacilityReleasesTool, {
-        facility_id: 'WA0001234',
+        facility_id: '98101WA0001234X',
         year: 2022,
       });
 
@@ -447,7 +639,9 @@ describe('triGetFacilityReleasesTool', () => {
       };
       mockGetTriReleases.mockResolvedValue({ items: [release] });
 
-      const call = await runToolContract(triGetFacilityReleasesTool, { facility_id: 'WA0005678' });
+      const call = await runToolContract(triGetFacilityReleasesTool, {
+        facility_id: '98101WA0005678X',
+      });
 
       expect((call.structuredContent as { releases: unknown[] }).releases).toEqual([release]);
       const text = textOf(call.content);
@@ -480,32 +674,16 @@ describe('triGetFacilityReleasesTool', () => {
       vi.restoreAllMocks();
     });
 
-    const unmatchableHint =
-      'Pass one 15-character TRI facility ID from epa_tri_search_releases, and include a letter or digit in chemical_name.';
-    const tooLongHint =
-      'Pass one 15-character TRI facility ID and shorten chemical_name to a distinctive part of the name.';
+    const unmatchableHint = 'Include a letter or digit in chemical_name, or remove it.';
+    const tooLongHint = 'Shorten chemical_name to a distinctive part of the name and retry.';
 
     it.each([
-      [
-        'a comma-joined facility_id',
-        { facility_id: 'A,B' },
-        'unmatchable_filter',
-        unmatchableHint,
-        'Pass one value per call.',
-      ],
       [
         'a chemical_name with no letter or digit',
         { facility_id: '98108THBNG7500E', chemical_name: "'''" },
         'unmatchable_filter',
         unmatchableHint,
         'has no letter or digit',
-      ],
-      [
-        'a facility_id past the request line',
-        { facility_id: 'A'.repeat(5000) },
-        'filter_too_long',
-        tooLongHint,
-        'too long',
       ],
       [
         'a chemical_name past the request line',

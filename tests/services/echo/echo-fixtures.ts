@@ -1,14 +1,18 @@
 /**
  * @fileoverview ECHO response bodies captured from echodata.epa.gov on 2026-10-16 (the SDWIS
  * get_dfr and sdw_rest_services bodies, the NUCOR facility search, the 110015969941 NAICS
- * section, and the case search rows and case reports on 2026-11-01) and trimmed to the sections
+ * section, and the case search rows and case reports on 2026-11-01; the effluent, RCRA, CAA, and
+ * Permits[] excerpts at the end on 2026-11-16) and trimmed to the sections
  * EchoService reads (get_dfr keeps the first rows of each inspection history statute and two
  * TRIHistory years; a case report keeps the first rows of the sections it leaves out; every kept
  * value is verbatim).
  * @module tests/services/echo/echo-fixtures
  */
 
-/** `dfr_rest_services.get_dfr?p_id=110017848105` — air, water, RCRA, and TRI; formal actions and CWA significant noncompliance. */
+/**
+ * `dfr_rest_services.get_dfr?p_id=110017848105` — air, water, RCRA, and TRI; formal actions and CWA
+ * significant noncompliance. Each Permits[] entry's Universe and ExpDate are the 2026-11-16 capture's.
+ */
 export const DFR_BOEING_110017848105 = {
   Results: {
     Message: 'Success',
@@ -26,6 +30,8 @@ export const DFR_BOEING_110017848105 = {
         FacilityCountyName: null,
         FacilityFipsCode: null,
         FacilityStatus: null,
+        Universe: '',
+        ExpDate: null,
         Latitude: '47.531169',
         Longitude: '-122.310812',
       },
@@ -36,120 +42,160 @@ export const DFR_BOEING_110017848105 = {
         FacilityCountyName: 'King County',
         FacilityFipsCode: '53033',
         FacilityStatus: null,
+        Universe: '',
+        ExpDate: null,
       },
       {
         EPASystem: 'ICIS',
         Statute: '',
         SourceID: '39469',
         FacilityStatus: null,
+        Universe: '',
+        ExpDate: null,
       },
       {
         EPASystem: 'ICIS-Air',
         Statute: 'CAA',
         SourceID: 'WAPSC0005303321147',
         FacilityStatus: 'Operating',
+        Universe: 'Major Emissions',
+        ExpDate: null,
       },
       {
         EPASystem: 'ICIS-Air',
         Statute: 'CAA',
         SourceID: 'WAPSC0005303300156',
         FacilityStatus: 'Permanently Closed',
+        Universe: 'Major Emissions',
+        ExpDate: null,
       },
       {
         EPASystem: 'ICIS-Air',
         Statute: 'CAA',
         SourceID: 'WAPSC0005303329499',
         FacilityStatus: 'Permanently Closed',
+        Universe: 'Minor Emissions',
+        ExpDate: null,
       },
       {
         EPASystem: 'CEDRI',
         Statute: 'CAA',
         SourceID: 'CEDRI125271',
         FacilityStatus: null,
+        Universe: '',
+        ExpDate: null,
       },
       {
         EPASystem: 'EIS',
         Statute: 'CAA',
         SourceID: '11593711',
         FacilityStatus: null,
+        Universe: '',
+        ExpDate: null,
       },
       {
         EPASystem: 'ICIS-NPDES',
         Statute: 'CWA',
         SourceID: 'WAR304380',
         FacilityStatus: 'Terminated; Compliance Tracking Off',
+        Universe: 'Non-Major: General Permit Covered Facility',
+        ExpDate: '12/31/2020',
       },
       {
         EPASystem: 'ICIS-NPDES',
         Statute: 'CWA',
         SourceID: 'WAR012502',
         FacilityStatus: 'Terminated; Compliance Tracking Off',
+        Universe: 'Non-Major: General Permit Covered Facility',
+        ExpDate: '12/31/2015',
       },
       {
         EPASystem: 'ICIS-NPDES',
         Statute: 'CWA',
         SourceID: 'WAR000482',
         FacilityStatus: 'Effective',
+        Universe: 'Non-Major: General Permit Covered Facility',
+        ExpDate: '12/31/2029',
       },
       {
         EPASystem: 'ICIS-NPDES',
         Statute: 'CWA',
         SourceID: 'WAR127234',
         FacilityStatus: 'Terminated; Compliance Tracking Off',
+        Universe: 'Non-Major: General Permit Covered Facility',
+        ExpDate: '12/31/2015',
       },
       {
         EPASystem: 'ICIS-NPDES',
         Statute: 'CWA',
         SourceID: 'WAR315626',
         FacilityStatus: 'Effective',
+        Universe: 'Non-Major: General Permit Covered Facility',
+        ExpDate: '12/31/2030',
       },
       {
         EPASystem: 'ICIS-NPDES',
         Statute: 'CWA',
         SourceID: 'WAR314396',
         FacilityStatus: 'Terminated; Compliance Tracking Off',
+        Universe: 'Non-Major: General Permit Covered Facility',
+        ExpDate: '12/31/2030',
       },
       {
         EPASystem: 'ICIS-NPDES',
         Statute: 'CWA',
         SourceID: 'WAR125956',
         FacilityStatus: 'Terminated; Compliance Tracking Off',
+        Universe: 'Non-Major: General Permit Covered Facility',
+        ExpDate: '12/31/2015',
       },
       {
         EPASystem: 'ICIS-NPDES',
         Statute: 'CWA',
         SourceID: 'WAR126089',
         FacilityStatus: 'Terminated; Compliance Tracking Off',
+        Universe: 'Non-Major: General Permit Covered Facility',
+        ExpDate: '12/31/2015',
       },
       {
         EPASystem: 'ICIS-NPDES',
         Statute: 'CWA',
         SourceID: 'WAR000226',
         FacilityStatus: 'Effective',
+        Universe: 'Non-Major: General Permit Covered Facility',
+        ExpDate: '12/31/2029',
       },
       {
         EPASystem: 'TRI',
         Statute: 'EP313',
         SourceID: '98108THBNG7500E',
         FacilityStatus: 'Last Reported for 2024',
+        Universe: 'Toxics Release Inventory',
+        ExpDate: null,
       },
       {
         EPASystem: 'RCRAInfo',
         Statute: 'RCRA',
         SourceID: 'WAD980982037',
         FacilityStatus: 'Active (H   S)',
+        Universe: 'LQG',
+        ExpDate: null,
       },
       {
         EPASystem: 'RCRAInfo',
         Statute: 'RCRA',
         SourceID: 'WAD009256819',
         FacilityStatus: 'Active (HPA S)',
+        Universe: 'LQG, Legacy TSDF',
+        ExpDate: null,
       },
       {
         EPASystem: 'TSCA',
         Statute: 'TSCA',
         SourceID: 'TSCA9381',
         FacilityStatus: null,
+        Universe: '',
+        ExpDate: null,
       },
     ],
     SpatialMetadata: {
@@ -3434,3 +3480,370 @@ export const SDW_PAGE_ZIP_59901_CURRENT = {
     ],
   },
 };
+
+/**
+ * `get_dfr?p_id=110017848105` (2026-11-16): its effluent, RCRA, and CAA compliance sections, cut to
+ * the cells EchoService reads (null cells, Mnth cells, and RCRA Status rows dropped).
+ */
+export const DFR_BOEING_COMPLIANCE_SECTIONS_110017848105 = {
+  CWAEffluentComplianceEXP: {
+    Header: {
+      Qtr1Start: '07/01/2023',
+      Qtr1End: '09/30/2023',
+      Qtr2Start: '10/01/2023',
+      Qtr2End: '12/31/2023',
+      Qtr3Start: '01/01/2024',
+      Qtr3End: '03/31/2024',
+      Qtr4Start: '04/01/2024',
+      Qtr4End: '06/30/2024',
+      Qtr5Start: '07/01/2024',
+      Qtr5End: '09/30/2024',
+      Qtr6Start: '10/01/2024',
+      Qtr6End: '12/31/2024',
+      Qtr7Start: '01/01/2025',
+      Qtr7End: '03/31/2025',
+      Qtr8Start: '04/01/2025',
+      Qtr8End: '06/30/2025',
+      Qtr9Start: '07/01/2025',
+      Qtr9End: '09/30/2025',
+      Qtr10Start: '10/01/2025',
+      Qtr10End: '12/31/2025',
+      Qtr11Start: '01/01/2026',
+      Qtr11End: '03/31/2026',
+      Qtr12Start: '04/01/2026',
+      Qtr12End: '06/30/2026',
+      Qtr13Start: '07/01/2026',
+      Qtr13End: '11/13/2026',
+    },
+    Sources: [
+      {
+        Parameters: [
+          {
+            SourceID: 'WAR314396',
+            ParameterCode: '01042',
+            ParameterName: 'Copper, total [as Cu]',
+            DischargePoint: 'P33 - 01',
+            MonitoringLocation: 'See Comments',
+            MeasurementType: 'NMth',
+            Qtr10Value: '1061%',
+          },
+        ],
+      },
+    ],
+  },
+  RCRACompliance: {
+    Sources: [
+      {
+        Violations: [
+          {
+            SourceID: 'WAD009256819',
+            ViolationType: '262.A',
+            Violation: 'Generators - General',
+            Agency: 'WA',
+            Qtr5Status: '03/27/2025',
+            Qtr6Status: '05/23/2025',
+            RCRAViolReportURL:
+              'https://echo.epa.gov/violation-report?p_id=WAD009256819&p_viol_activity_location=WA&p_viol_seq=5002&p_viol_determined_by_agency=S',
+          },
+          {
+            SourceID: 'WAD009256819',
+            ViolationType: '262.A',
+            Violation: 'Generators - General',
+            Agency: 'WA',
+            Qtr5Status: '03/27/2025',
+            Qtr6Status: '05/23/2025',
+            RCRAViolReportURL:
+              'https://echo.epa.gov/violation-report?p_id=WAD009256819&p_viol_activity_location=WA&p_viol_seq=5003&p_viol_determined_by_agency=S',
+          },
+          {
+            SourceID: 'WAD009256819',
+            ViolationType: '262.A',
+            Violation: 'Generators - General',
+            Agency: 'WA',
+            Qtr5Status: '03/27/2025',
+            Qtr6Status: '05/23/2025',
+            RCRAViolReportURL:
+              'https://echo.epa.gov/violation-report?p_id=WAD009256819&p_viol_activity_location=WA&p_viol_seq=5004&p_viol_determined_by_agency=S',
+          },
+          {
+            SourceID: 'WAD009256819',
+            ViolationType: '262.A',
+            Violation: 'Generators - General',
+            Agency: 'WA',
+            Qtr5Status: '03/27/2025',
+            Qtr6Status: '04/30/2025',
+            RCRAViolReportURL:
+              'https://echo.epa.gov/violation-report?p_id=WAD009256819&p_viol_activity_location=WA&p_viol_seq=5005&p_viol_determined_by_agency=S',
+          },
+          {
+            SourceID: 'WAD009256819',
+            ViolationType: '279.C',
+            Violation: 'Used Oil - Generators',
+            Agency: 'WA',
+            Qtr5Status: '03/27/2025',
+            Qtr6Status: '04/15/2025',
+            RCRAViolReportURL:
+              'https://echo.epa.gov/violation-report?p_id=WAD009256819&p_viol_activity_location=WA&p_viol_seq=5006&p_viol_determined_by_agency=S',
+          },
+          {
+            SourceID: 'WAD009256819',
+            ViolationType: '279.C',
+            Violation: 'Used Oil - Generators',
+            Agency: 'WA',
+            Qtr5Status: '03/27/2025',
+            Qtr6Status: '04/08/2025',
+            RCRAViolReportURL:
+              'https://echo.epa.gov/violation-report?p_id=WAD009256819&p_viol_activity_location=WA&p_viol_seq=5007&p_viol_determined_by_agency=S',
+          },
+          {
+            SourceID: 'WAD009256819',
+            ViolationType: 'XXS',
+            Violation: 'State Statute or Regulation',
+            Agency: 'WA',
+            Qtr5Status: '03/27/2025-03/27/2025',
+            RCRAViolReportURL:
+              'https://echo.epa.gov/violation-report?p_id=WAD009256819&p_viol_activity_location=WA&p_viol_seq=5008&p_viol_determined_by_agency=S',
+          },
+        ],
+      },
+      { Violations: [] },
+    ],
+  },
+  AirCompliance: {
+    Sources: [
+      { HPVProgramsPollutants: [] },
+      { HPVProgramsPollutants: [] },
+      { HPVProgramsPollutants: [] },
+    ],
+  },
+};
+
+/**
+ * Effluent series from `get_dfr` (2026-11-16), null and Mnth cells dropped: one at 110064598323 whose
+ * quarter status switches from R to S, one at 110012150858 of LIMIT VIOLATION cells with no status.
+ */
+export const DFR_EFFLUENT_SERIES_S_R_AND_LIMIT_VIOLATION = [
+  {
+    SourceID: 'WV0004707',
+    ParameterCode: '34526',
+    ParameterName: 'Benzo[a]anthracene',
+    DischargePoint: '003 - A',
+    MonitoringLocation: 'Effluent Gross',
+    MeasurementType: 'Mthly',
+    Qtr1Status: 'R',
+    Qtr1Value: '7532%',
+    Qtr2Status: 'R',
+    Qtr2Value: '16216%',
+    Qtr3Status: 'R',
+    Qtr3Value: '12005%',
+    Qtr4Status: 'R',
+    Qtr4Value: '269%',
+    Qtr6Status: 'R',
+    Qtr6Value: '50%',
+    Qtr8Status: 'S',
+    Qtr8Value: '1299%',
+    Qtr9Status: 'S',
+    Qtr9Value: '114%',
+    Qtr10Status: 'S',
+    Qtr10Value: '140%',
+    Qtr11Status: 'S',
+    Qtr11Value: '3%',
+    Qtr12Status: 'S',
+    Qtr12Value: '343%',
+  },
+  {
+    SourceID: 'CO0049056',
+    ParameterCode: 'TKP3B',
+    ParameterName: 'Static Renewal 7 Day Chronic Ceriodaphnia dubia',
+    DischargePoint: '001 - X',
+    MonitoringLocation: 'See Comments',
+    MeasurementType: 'Neither',
+    Qtr1Value: 'LIMIT VIOLATION',
+    Qtr2Value: 'LIMIT VIOLATION',
+    Qtr3Value: 'LIMIT VIOLATION',
+    Qtr4Value: 'LIMIT VIOLATION',
+    Qtr5Value: 'LIMIT VIOLATION',
+    Qtr6Value: 'LIMIT VIOLATION',
+    Qtr7Value: 'LIMIT VIOLATION',
+    Qtr8Value: 'LIMIT VIOLATION',
+    Qtr9Value: 'LIMIT VIOLATION',
+    Qtr10Value: 'LIMIT VIOLATION',
+    Qtr11Value: 'LIMIT VIOLATION',
+    Qtr12Value: 'LIMIT VIOLATION',
+  },
+];
+
+/**
+ * RCRA violations from `get_dfr?p_id=110000459995` (2026-11-16), null cells dropped, one per cell
+ * shape: two dated quarters, open ("--->" to the last quarter), one range cell, dated-open-dated.
+ */
+export const DFR_RCRA_VIOLATION_SHAPES_110000459995 = [
+  {
+    SourceID: 'TXD077603371',
+    ViolationType: '262.D',
+    Violation: 'Generators - Records/Reporting',
+    Agency: 'TX',
+    Qtr2Status: '06/03/2024',
+    Qtr3Status: '07/18/2024',
+    RCRAViolReportURL:
+      'https://echo.epa.gov/violation-report?p_id=TXD077603371&p_viol_activity_location=TX&p_viol_seq=21&p_viol_determined_by_agency=S',
+  },
+  {
+    SourceID: 'TXD077603371',
+    ViolationType: 'XXS',
+    Violation: 'State Statute or Regulation',
+    Agency: 'TX',
+    Qtr2Status: '06/04/2024',
+    Qtr3Status: '--->',
+    Qtr4Status: '--->',
+    Qtr5Status: '--->',
+    Qtr6Status: '--->',
+    Qtr7Status: '--->',
+    Qtr8Status: '--->',
+    Qtr9Status: '--->',
+    Qtr10Status: '--->',
+    Qtr11Status: '--->',
+    Qtr12Status: '--->',
+    RCRAViolReportURL:
+      'https://echo.epa.gov/violation-report?p_id=TXD077603371&p_viol_activity_location=TX&p_viol_seq=22&p_viol_determined_by_agency=S',
+  },
+  {
+    SourceID: 'TXD077603371',
+    ViolationType: 'XXS',
+    Violation: 'State Statute or Regulation',
+    Agency: 'TX',
+    Qtr2Status: '06/04/2024-06/14/2024',
+    RCRAViolReportURL:
+      'https://echo.epa.gov/violation-report?p_id=TXD077603371&p_viol_activity_location=TX&p_viol_seq=25&p_viol_determined_by_agency=S',
+  },
+  {
+    SourceID: 'TXR000081205',
+    ViolationType: '279.E',
+    Violation: 'Used Oil - Transporter and Transfer Facility',
+    Agency: 'UT',
+    Qtr5Status: '03/25/2025',
+    Qtr6Status: '--->',
+    Qtr7Status: '08/26/2025',
+    RCRAViolReportURL:
+      'https://echo.epa.gov/violation-report?p_id=TXR000081205&p_viol_activity_location=UT&p_viol_seq=320&p_viol_determined_by_agency=S',
+  },
+];
+
+/**
+ * High Priority Violations from `get_dfr` (2026-11-16), null cells dropped: two resolved at
+ * 110008170237, identical but for ViolationActivityID.
+ */
+export const DFR_HPV_RESOLVED_110008170237 = [
+  {
+    SourceID: 'TX0000004803900041',
+    ERPType: 'HPV',
+    AirPrograms: 'CAATVP',
+    AirPollutants: 'FACIL',
+    Qtr1Status: '11/17/2017',
+    Qtr2Status: '--->',
+    Qtr3Status: '--->',
+    Qtr4Status: '--->',
+    Qtr5Status: '--->',
+    Qtr6Status: '04/02/2025',
+    Agency: 'TX',
+    ViolationActivityID: '3601295927',
+  },
+  {
+    SourceID: 'TX0000004803900041',
+    ERPType: 'HPV',
+    AirPrograms: 'CAATVP',
+    AirPollutants: 'FACIL',
+    Qtr1Status: '11/17/2017',
+    Qtr2Status: '--->',
+    Qtr3Status: '--->',
+    Qtr4Status: '--->',
+    Qtr5Status: '--->',
+    Qtr6Status: '04/02/2025',
+    Agency: 'TX',
+    ViolationActivityID: '3601490207',
+  },
+];
+
+/** The two open High Priority Violations at 110059763536 (2026-11-16). */
+export const DFR_HPV_OPEN_110059763536 = [
+  {
+    SourceID: 'TX0000004816700001',
+    ERPType: 'HPV',
+    AirPrograms: 'CAATVP',
+    AirPollutants: 'FACIL',
+    Qtr1Status: '09/08/2008',
+    Qtr2Status: '--->',
+    Qtr3Status: '--->',
+    Qtr4Status: '--->',
+    Qtr5Status: '--->',
+    Qtr6Status: '--->',
+    Qtr7Status: '--->',
+    Qtr8Status: '--->',
+    Qtr9Status: '--->',
+    Qtr10Status: '--->',
+    Qtr11Status: '--->',
+    Qtr12Status: '--->',
+    Agency: 'TX',
+    ViolationActivityID: '3603017001',
+  },
+  {
+    SourceID: 'TX0000004816700001',
+    ERPType: 'HPV',
+    AirPrograms: 'CAATVP',
+    AirPollutants: 'FACIL',
+    Qtr1Status: '03/05/2007',
+    Qtr2Status: '--->',
+    Qtr3Status: '--->',
+    Qtr4Status: '--->',
+    Qtr5Status: '--->',
+    Qtr6Status: '--->',
+    Qtr7Status: '--->',
+    Qtr8Status: '--->',
+    Qtr9Status: '--->',
+    Qtr10Status: '--->',
+    Qtr11Status: '--->',
+    Qtr12Status: '--->',
+    Agency: 'TX',
+    ViolationActivityID: '3603017010',
+  },
+];
+
+/**
+ * `Permits[]` entries from `get_dfr?p_id=110008170237` (2026-11-16), cut to the fields read: the FRS
+ * entry, an ICIS ID with nothing else recorded, an ICIS-Air ID, and an expired NPDES permit.
+ */
+export const DFR_PERMITS_110008170237 = [
+  {
+    EPASystem: 'FRS',
+    Statute: '',
+    SourceID: '110008170237',
+    FacilityName: 'VORANOL_SPECIALTY POLYURETHANE CHEMICALS (SPC)',
+    FacilityStatus: null,
+    Universe: '',
+    ExpDate: null,
+  },
+  {
+    EPASystem: 'ICIS',
+    Statute: '',
+    SourceID: '5870098',
+    FacilityStatus: null,
+    Universe: '',
+    ExpDate: null,
+  },
+  {
+    EPASystem: 'ICIS-Air',
+    Statute: 'CAA',
+    SourceID: 'TX0000004803900041',
+    FacilityStatus: 'Operating',
+    Universe: 'Major Emissions',
+    ExpDate: null,
+  },
+  {
+    EPASystem: 'ICIS-NPDES',
+    Statute: 'CWA',
+    SourceID: 'TXR1550CA',
+    FacilityStatus: 'Terminated; Compliance Tracking Off',
+    Universe: 'Non-Major: General Permit Covered Facility',
+    ExpDate: '03/04/2023',
+  },
+];

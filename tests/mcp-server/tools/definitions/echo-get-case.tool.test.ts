@@ -75,6 +75,118 @@ const CRIMINAL_REFUSAL = {
   Error: { ErrorMessage: 'Case Number or Activity Id CR_1270 is invalid.' },
 };
 
+/** Registry ID of generated facility `i`: distinct below 1,000 and not in ascending order. */
+const generatedRegistryId = (i: number) => `1100${String((i * 37) % 1000).padStart(8, '0')}`;
+/** Conclusion ID of generated conclusion `i`: distinct below 1,000 and not in ascending order. */
+const generatedConclusionId = (i: number) => `36${String((i * 53) % 1000).padStart(8, '0')}`;
+
+/**
+ * A get_case_report body for a case naming `facilityCount` facilities and `conclusionCount`
+ * enforcement conclusions. Each facility has two program rows, every second row listed after all
+ * the first ones, so the report carries twice as many Facilities rows as facilities. Every third
+ * conclusion carries complying actions, a pollutant reduction, and a SEP; the rest leave those
+ * lists empty or null, as ECHO does.
+ */
+function generatedCaseReport(facilityCount: number, conclusionCount: number) {
+  const indexes = (n: number) => Array.from({ length: n }, (_, i) => i);
+  const facilityRow = (i: number, system: string, programId: string) => ({
+    FRSNumber: generatedRegistryId(i),
+    FacilityName: `FACILITY ${i}`,
+    FacilityAddress: `${i} MAIN ST`,
+    FacilityCity: 'HOUSTON',
+    FacilityState: 'TX',
+    FacilityZip: '77002',
+    SICCodes: null,
+    NAICSCodes: system === 'ICIS' ? '325110' : null,
+    FacilityNoLongerExists: 'N',
+    ProgramAcronym: system,
+    ProgramId: programId,
+  });
+  return {
+    Results: {
+      Message: 'Success',
+      CaseInformation: {
+        CaseNumber: 'TX-0000-0001',
+        CaseName: 'GENERATED CASE',
+        CaseType: 'AFR',
+        CaseStatus: 'Final Order Issued',
+        Lead: 'State',
+        TotalFederalPenalty: '$1,000',
+        CaseSummary: 'A case with enough facilities and settlements to page.',
+      },
+      LawsAndSections: [{ Law: 'CWA', Sections: '402: NPDES Permit', Programs: 'NPDES' }],
+      Facilities: [
+        ...indexes(facilityCount).map((i) => facilityRow(i, 'ICIS', `ICIS${i}`)),
+        ...indexes(facilityCount).map((i) => facilityRow(i, 'NPDES', `TX${i}`)),
+      ],
+      Defendants: [
+        { DefendantName: 'GENERATED DEFENDANT', NamedInComplaint: 'Y', NamedInSettlement: 'N' },
+      ],
+      Pollutants: [{ PollutantName: 'Lead', ChemicalAbstractNumber: '7439921' }],
+      CaseMilestones: [{ Event: 'Final Order Issued', ActualDate: '01/02/2020' }],
+      EnforcementConclusions: indexes(conclusionCount).map((i) => {
+        const heavy = i % 3 === 0;
+        return {
+          EnforcementConclusionId: generatedConclusionId(i),
+          EnforcementConclusionNmbr: String(i + 1),
+          EnforcementConclusionType: 'State/Local Action',
+          EnforcementConclusionName: `SETTLEMENT ${i + 1}`,
+          FacilitiesInSettlement: facilityCount > 0 ? generatedRegistryId(i % facilityCount) : null,
+          SettlementEnteredDate: '01/02/2020',
+          StatePenalty: `$${(i + 1) * 100}`,
+          ComplyingActions: heavy
+            ? [
+                {
+                  ComplyingActionType: 'WEM',
+                  ComplyingActionDescription: 'Environmental Management Review',
+                  ComplyingActionCategory: 'Work Practices',
+                },
+              ]
+            : null,
+          PollutantReductions: heavy
+            ? [
+                {
+                  Pollutant: 'Lead',
+                  AnnualAmount: '12',
+                  Units: 'lbs',
+                  Media: 'Water',
+                  SEPorComp: 'S',
+                },
+              ]
+            : [],
+          SupplementalEnvironmentalProjects: heavy
+            ? [
+                {
+                  Category: 'PRD',
+                  Description: 'Pollution Reduction',
+                  SEPText: `Project ${i + 1}`,
+                  SEPAmount: '$5,000',
+                },
+              ]
+            : [],
+        };
+      }),
+    },
+  };
+}
+
+/** structuredContent of a get_case result, with the paging fields and enrichment. */
+const paged = (result: { structuredContent?: unknown }) =>
+  result.structuredContent as {
+    caseId: string;
+    facilities: Array<{ registryId?: string; programIds: Array<{ id: string; system?: string }> }>;
+    facilitiesTotal?: number;
+    facilitiesNextOffset?: number;
+    enforcementConclusions: Array<{ conclusionId?: string }>;
+    enforcementConclusionsTotal?: number;
+    enforcementConclusionsNextOffset?: number;
+    truncated?: boolean;
+    limitNotice?: string;
+  };
+
+const GENERATED_FACILITY_IDS = Array.from({ length: 115 }, (_, i) => generatedRegistryId(i));
+const GENERATED_CONCLUSION_IDS = Array.from({ length: 117 }, (_, i) => generatedConclusionId(i));
+
 const CRIMINAL_HINT =
   'Pass a civil case number instead; for a criminal case, use its row from epa_echo_search_violations with case_type criminal.';
 const NOT_FOUND_HINT =
@@ -270,10 +382,12 @@ describe('echoGetCaseTool', () => {
       caseId: 'X-1',
       lawsAndSections: [],
       facilities: [],
+      facilitiesTotal: 0,
       defendants: [],
       pollutants: [],
       milestones: [],
       enforcementConclusions: [],
+      enforcementConclusionsTotal: 0,
     });
 
     expect((blocks[0] as { text: string }).text.split('\n')).toEqual([
@@ -304,6 +418,310 @@ describe('echoGetCaseTool', () => {
       expect(result.structuredContent).toMatchObject({ caseId: 'WA-100446' });
     },
   );
+
+  describe('pages facilities and enforcement conclusions', () => {
+    it('a limit above either list returns it whole in ECHO order, one entry per Registry ID, with no notice', async () => {
+      const urls = serve(generatedCaseReport(115, 117));
+
+      const result = await runToolContract(echoGetCaseTool, {
+        case_id: 'TX-0000-0001',
+        facilities_limit: 1000,
+        enforcement_conclusions_limit: 1000,
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(urls).toHaveLength(1);
+      const sc = paged(result);
+      expect(sc).toMatchObject({ facilitiesTotal: 115, enforcementConclusionsTotal: 117 });
+      expect(sc.facilities.map((f) => f.registryId)).toEqual(GENERATED_FACILITY_IDS);
+      expect(sc.facilities[114]!.programIds).toEqual([
+        { system: 'ICIS', id: 'ICIS114' },
+        { system: 'NPDES', id: 'TX114' },
+      ]);
+      expect(sc.enforcementConclusions.map((c) => c.conclusionId)).toEqual(
+        GENERATED_CONCLUSION_IDS,
+      );
+      expect(sc).not.toHaveProperty('facilitiesNextOffset');
+      expect(sc).not.toHaveProperty('enforcementConclusionsNextOffset');
+      expect(sc).not.toHaveProperty('truncated');
+      expect(sc).not.toHaveProperty('limitNotice');
+      const text = textOf(result.content);
+      const sections = readSections(text);
+      expect(sections.get('Facilities (115)')).toHaveLength(116);
+      expect(sections.has('Enforcement Conclusions (117)')).toBe(true);
+      expect(sections.has('Conclusion 117: SETTLEMENT 117')).toBe(true);
+      expect(text).not.toContain('Next offset');
+      expect(text).not.toContain('Truncated');
+    });
+
+    it('a case within the defaults comes whole, with no next offset and no truncated flag', async () => {
+      serve(generatedCaseReport(2, 5));
+
+      const result = await runToolContract(echoGetCaseTool, { case_id: 'TX-0000-0001' });
+
+      const sc = paged(result);
+      expect(sc).toMatchObject({ facilitiesTotal: 2, enforcementConclusionsTotal: 5 });
+      expect(sc.facilities.map((f) => f.registryId)).toEqual(GENERATED_FACILITY_IDS.slice(0, 2));
+      expect(sc.enforcementConclusions.map((c) => c.conclusionId)).toEqual(
+        GENERATED_CONCLUSION_IDS.slice(0, 5),
+      );
+      expect(sc).not.toHaveProperty('facilitiesNextOffset');
+      expect(sc).not.toHaveProperty('enforcementConclusionsNextOffset');
+      expect(sc).not.toHaveProperty('truncated');
+      const text = textOf(result.content);
+      const sections = readSections(text);
+      expect(sections.get('Facilities (2)')?.map((line) => line.split(' — ')[0])).toEqual([
+        'Pass a Registry ID to epa_echo_get_facility for its compliance profile.',
+        ...GENERATED_FACILITY_IDS.slice(0, 2),
+      ]);
+      expect(sections.has('Enforcement Conclusions (5)')).toBe(true);
+      expect(text).not.toContain('Next offset');
+      expect(text).not.toContain('Truncated');
+    });
+
+    it('with no paging inputs returns 25 of 115 facilities and 10 of 117 conclusions, with both next offsets and truncated on both surfaces', async () => {
+      const urls = serve(generatedCaseReport(115, 117));
+
+      const result = await runToolContract(echoGetCaseTool, { case_id: 'TX-0000-0001' });
+
+      expect(result.isError).toBeFalsy();
+      expect(urls).toHaveLength(1);
+      const sc = paged(result);
+      expect(sc.facilities.map((f) => f.registryId)).toEqual(GENERATED_FACILITY_IDS.slice(0, 25));
+      expect(sc.enforcementConclusions.map((c) => c.conclusionId)).toEqual(
+        GENERATED_CONCLUSION_IDS.slice(0, 10),
+      );
+      expect(sc).toMatchObject({
+        caseId: 'TX-0000-0001',
+        facilitiesTotal: 115,
+        facilitiesNextOffset: 25,
+        enforcementConclusionsTotal: 117,
+        enforcementConclusionsNextOffset: 10,
+        truncated: true,
+      });
+      expect(sc).not.toHaveProperty('limitNotice');
+      const text = textOf(result.content);
+      const sections = readSections(text);
+      const facilityLines = sections.get('Facilities (1–25 of 115)');
+      expect(facilityLines?.slice(0, 2)).toEqual([
+        'Next offset: 25 (pass as facilities_offset)',
+        'Pass a Registry ID to epa_echo_get_facility for its compliance profile.',
+      ]);
+      expect(facilityLines?.slice(2).map((line) => line.split(' — ')[0])).toEqual(
+        GENERATED_FACILITY_IDS.slice(0, 25),
+      );
+      expect(sections.get('Enforcement Conclusions (1–10 of 117)')).toEqual([
+        'Next offset: 10 (pass as enforcement_conclusions_offset)',
+      ]);
+      expect(sections.has('Conclusion 10: SETTLEMENT 10')).toBe(true);
+      expect(sections.has('Conclusion 11: SETTLEMENT 11')).toBe(false);
+      expect(text).toContain('**Truncated:** true');
+    });
+
+    /* A one-at-a-time walk runs one handler call per entry, so it walks a smaller report. */
+    it.each([
+      { limit: 1, facilityCount: 9, conclusionCount: 8 },
+      { limit: 7, facilityCount: 115, conclusionCount: 117 },
+      { limit: 25, facilityCount: 115, conclusionCount: 117 },
+      { limit: 114, facilityCount: 115, conclusionCount: 117 },
+    ])(
+      'paging each list $limit at a time reproduces it whole in ECHO order, with the rest of the case identical on every page',
+      async ({ limit, facilityCount, conclusionCount }) => {
+        serve(generatedCaseReport(facilityCount, conclusionCount));
+        const wholeResult = await runToolContract(echoGetCaseTool, {
+          case_id: 'TX-0000-0001',
+          facilities_limit: 1000,
+          enforcement_conclusions_limit: 1000,
+        });
+        const restOf = (sc: ReturnType<typeof paged>) => {
+          const {
+            facilities: _facilities,
+            facilitiesNextOffset: _facilitiesNextOffset,
+            enforcementConclusions: _conclusions,
+            enforcementConclusionsNextOffset: _conclusionsNextOffset,
+            truncated: _truncated,
+            ...rest
+          } = sc;
+          return rest;
+        };
+        const whole = paged(wholeResult);
+        const lists = [
+          {
+            name: 'facilities',
+            heading: 'Facilities',
+            ids: GENERATED_FACILITY_IDS.slice(0, facilityCount),
+            otherLimit: 'enforcement_conclusions_limit',
+            pageOf: (sc: ReturnType<typeof paged>) => ({
+              ids: sc.facilities.map((f) => f.registryId),
+              nextOffset: sc.facilitiesNextOffset,
+            }),
+          },
+          {
+            name: 'enforcement_conclusions',
+            heading: 'Enforcement Conclusions',
+            ids: GENERATED_CONCLUSION_IDS.slice(0, conclusionCount),
+            otherLimit: 'facilities_limit',
+            pageOf: (sc: ReturnType<typeof paged>) => ({
+              ids: sc.enforcementConclusions.map((c) => c.conclusionId),
+              nextOffset: sc.enforcementConclusionsNextOffset,
+            }),
+          },
+        ];
+
+        for (const list of lists) {
+          const seen: Array<string | undefined> = [];
+          let offset: number | undefined = 0;
+          let pages = 0;
+          while (offset !== undefined) {
+            const result = await runToolContract(echoGetCaseTool, {
+              case_id: 'TX-0000-0001',
+              [`${list.name}_limit`]: limit,
+              [`${list.name}_offset`]: offset,
+              [list.otherLimit]: 1000,
+            });
+            const sc = paged(result);
+            const page = list.pageOf(sc);
+            const last = offset + limit >= list.ids.length;
+            expect(page.ids).toEqual(list.ids.slice(offset, offset + limit));
+            expect(page.nextOffset).toBe(last ? undefined : offset + limit);
+            expect(sc.truncated).toBe(last ? undefined : true);
+            expect(restOf(sc)).toEqual(restOf(whole));
+            const shown = Math.min(limit, list.ids.length - offset);
+            expect(textOf(result.content)).toContain(
+              `\n### ${list.heading} (${offset + 1}–${offset + shown} of ${list.ids.length})\n`,
+            );
+            seen.push(...page.ids);
+            offset = page.nextOffset;
+            pages += 1;
+            if (pages > list.ids.length) throw new Error(`${list.name} walk did not end`);
+          }
+          expect(seen).toEqual(list.ids);
+          expect(pages).toBe(Math.ceil(list.ids.length / limit));
+        }
+      },
+    );
+
+    it.each([
+      {
+        input: { enforcement_conclusions_limit: 117 },
+        facilitiesNextOffset: 25,
+        enforcementConclusionsNextOffset: undefined,
+      },
+      {
+        input: { facilities_limit: 115, enforcement_conclusions_limit: 116 },
+        facilitiesNextOffset: undefined,
+        enforcementConclusionsNextOffset: 116,
+      },
+      {
+        input: { facilities_limit: 114, enforcement_conclusions_limit: 117 },
+        facilitiesNextOffset: 114,
+        enforcementConclusionsNextOffset: undefined,
+      },
+    ])(
+      'flags truncated when either list alone has more: $input',
+      async ({ input, facilitiesNextOffset, enforcementConclusionsNextOffset }) => {
+        serve(generatedCaseReport(115, 117));
+
+        const result = await runToolContract(echoGetCaseTool, {
+          case_id: 'TX-0000-0001',
+          ...input,
+        });
+
+        const sc = paged(result);
+        expect(sc.truncated).toBe(true);
+        expect(sc.facilitiesNextOffset).toBe(facilitiesNextOffset);
+        expect(sc.enforcementConclusionsNextOffset).toBe(enforcementConclusionsNextOffset);
+        expect(textOf(result.content)).toContain('**Truncated:** true');
+      },
+    );
+
+    it('an offset past the end of both lists returns empty pages that still state each total, never an error', async () => {
+      const urls = serve(generatedCaseReport(115, 117));
+
+      const result = await runToolContract(echoGetCaseTool, {
+        case_id: 'TX-0000-0001',
+        facilities_offset: 115,
+        enforcement_conclusions_offset: 500,
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(urls).toHaveLength(1);
+      const sc = paged(result);
+      expect(sc).toMatchObject({
+        caseId: 'TX-0000-0001',
+        facilities: [],
+        facilitiesTotal: 115,
+        enforcementConclusions: [],
+        enforcementConclusionsTotal: 117,
+      });
+      expect(sc).not.toHaveProperty('facilitiesNextOffset');
+      expect(sc).not.toHaveProperty('enforcementConclusionsNextOffset');
+      expect(sc).not.toHaveProperty('truncated');
+      const sections = readSections(textOf(result.content));
+      expect(sections.get('Facilities (none on this page of 115)')).toEqual([]);
+      expect(sections.get('Enforcement Conclusions (none on this page of 117)')).toEqual([]);
+      expect([...sections.keys()].some((heading) => heading.startsWith('Conclusion '))).toBe(false);
+    });
+
+    it('takes the largest safe integer as a limit or an offset', async () => {
+      serve(generatedCaseReport(115, 117));
+
+      const whole = paged(
+        await runToolContract(echoGetCaseTool, {
+          case_id: 'TX-0000-0001',
+          facilities_limit: Number.MAX_SAFE_INTEGER,
+          enforcement_conclusions_offset: Number.MAX_SAFE_INTEGER,
+        }),
+      );
+
+      expect(whole.facilities).toHaveLength(115);
+      expect(whole.enforcementConclusions).toEqual([]);
+      expect(whole).not.toHaveProperty('facilitiesNextOffset');
+      expect(whole).not.toHaveProperty('enforcementConclusionsNextOffset');
+    });
+
+    it('a case with no facilities and no conclusions reports both totals as 0', async () => {
+      serve(generatedCaseReport(0, 0));
+
+      const result = await runToolContract(echoGetCaseTool, {
+        case_id: 'TX-0000-0001',
+        facilities_offset: 5,
+      });
+
+      const sc = paged(result);
+      expect(sc).toMatchObject({
+        facilities: [],
+        facilitiesTotal: 0,
+        enforcementConclusions: [],
+        enforcementConclusionsTotal: 0,
+      });
+      expect(sc).not.toHaveProperty('facilitiesNextOffset');
+      expect(sc).not.toHaveProperty('truncated');
+      const sections = readSections(textOf(result.content));
+      expect(sections.get('Facilities (0)')).toEqual(['ECHO lists no facility for this case.']);
+      expect([...sections.keys()].some((heading) => heading.startsWith('Enforcement'))).toBe(false);
+    });
+
+    it.each([
+      { facilities_limit: 0 },
+      { facilities_offset: -1 },
+      { enforcement_conclusions_limit: 2.5 },
+      { enforcement_conclusions_offset: -3 },
+    ])('rejects %j at the schema, naming the input, without a request', async (input) => {
+      const urls = serve(generatedCaseReport(115, 117));
+
+      const result = await runToolContract(echoGetCaseTool, { case_id: 'TX-0000-0001', ...input });
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.InvalidParams,
+          data: { issues: [expect.objectContaining({ path: Object.keys(input) })] },
+        },
+      });
+      expect(urls).toHaveLength(0);
+    });
+  });
 
   describe('errors', () => {
     it.each(['CR_1270', 'cr_1270', ' CR_1270 '])(

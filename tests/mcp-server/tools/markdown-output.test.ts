@@ -36,6 +36,12 @@ const cases: Record<string, unknown> = {
       { contaminantName: value, enforcementActions: [{ description: value }] },
     ],
     drinkingWaterViolationsTotal: 1,
+    effluentExceedances: [{ parameterName: value, quarters: [{ value, status: value }] }],
+    effluentExceedancesTotal: 1,
+    rcraViolations: [{ violation: value, agency: value }],
+    rcraViolationsTotal: 1,
+    highPriorityViolations: [{ pollutants: value }],
+    programIds: [{ system: value, id: value, universe: value }],
   },
   epa_echo_search_violations: { cases: [{ caseName: value }], totalCount: 1, ...message },
   epa_echo_get_case: {
@@ -52,6 +58,7 @@ const cases: Record<string, unknown> = {
         programIds: [{ id: value }],
       },
     ],
+    facilitiesTotal: 1,
     defendants: [{ name: value }],
     pollutants: [{ name: value }],
     milestones: [{ event: value }],
@@ -64,6 +71,7 @@ const cases: Record<string, unknown> = {
         supplementalProjects: [{ text: value }],
       },
     ],
+    enforcementConclusionsTotal: 1,
   },
   epa_airnow_get_conditions: {
     mode: 'current',
@@ -128,7 +136,10 @@ describe('literal upstream Markdown', () => {
         definition.enrichment &&
         'notice' in definition.enrichment
       ) {
-        expect(definition.enrichmentTrailer?.notice?.render).toBe(formatNotice);
+        const trailer = definition.enrichmentTrailer;
+        expect(trailer && 'notice' in trailer ? trailer.notice?.render : undefined).toBe(
+          formatNotice,
+        );
       }
     },
   );

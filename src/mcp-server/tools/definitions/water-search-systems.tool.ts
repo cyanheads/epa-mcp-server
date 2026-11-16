@@ -35,8 +35,11 @@ import { bareCountyName } from '@/services/county-name.js';
 import { getDmapService } from '@/services/dmap/dmap-service.js';
 import { getEchoService } from '@/services/echo/echo-service.js';
 
-/** Most systems one call returns. */
-const SEARCH_CAP = 200;
+/**
+ * Most systems one call returns, set by has_violation's fan-out: a ZIP or county check reads
+ * 1,000 systems, and a state walk at 1,000 is at most six serial 200-PWSID reads.
+ */
+const SEARCH_CAP = 1000;
 
 export const waterSearchSystemsTool = tool('epa_water_search_systems', {
   title: 'Search Drinking Water Systems',
@@ -76,7 +79,7 @@ export const waterSearchSystemsTool = tool('epa_water_search_systems', {
       .describe(
         'When true, return only systems SDWIS lists as active (activity code A). The default false also returns inactive systems and ones changed to non-public.',
       ),
-    limit: limitSchema({ cap: SEARCH_CAP, defaultLimit: 50, noun: 'systems' }),
+    limit: limitSchema({ cap: SEARCH_CAP, defaultLimit: 25, noun: 'systems' }),
     offset: offsetSchema('systems'),
   }),
 
@@ -85,66 +88,48 @@ export const waterSearchSystemsTool = tool('epa_water_search_systems', {
       .array(
         z
           .object({
-            pwsid: z.string().describe('Public Water System ID (PWSID) — unique system identifier'),
-            name: z.string().describe('Water system name'),
+            pwsid: z.string().describe('Public water system ID'),
+            name: z.string().describe('System name'),
             state: z
               .string()
               .optional()
-              .describe(
-                'Primacy agency code: a 2-letter state abbreviation, or the EPA region code 01–10 of a tribal system',
-              ),
+              .describe('Primacy agency: state code, or EPA region 01–10 for a tribal system'),
             city: z
               .string()
               .optional()
               .describe(
-                "City of the water system's address of record — often its owner's or operator's office, not necessarily the area it serves",
+                "Of the address of record, often an owner's or operator's office, not the area served",
               ),
-            zip: z
-              .string()
-              .optional()
-              .describe(
-                "ZIP code of the water system's address of record (the value zip_code matches)",
-              ),
+            zip: z.string().optional().describe('Of the address of record, which zip_code matches'),
             type: z
               .string()
               .optional()
               .describe(
-                'PWS type code: CWS=Community, NTNCWS=Non-transient non-community, TNCWS=Transient non-community',
+                'CWS community, NTNCWS non-transient non-community, TNCWS transient non-community',
               ),
-            populationServed: z
-              .number()
-              .optional()
-              .describe('Estimated population served by this water system'),
+            populationServed: z.number().optional().describe('Estimated'),
             primarySourceCode: z
               .string()
               .optional()
-              .describe('Primary water source code (e.g. GW=groundwater, SW=surface water)'),
+              .describe('Such as GW groundwater or SW surface water'),
             hasViolation: z
               .boolean()
               .optional()
               .describe(
-                'True when ECHO reports a current SDWA violation for this system. Present only on has_violation searches, which return only such systems.',
+                'True when ECHO reports a current SDWA violation; only on has_violation searches',
               ),
-            isActive: z
-              .boolean()
-              .optional()
-              .describe('Whether this water system is currently active'),
+            isActive: z.boolean().optional().describe('Whether currently active'),
           })
-          .describe(
-            'Public water system record with PWSID, population served, and violation status',
-          ),
+          .describe('One water system'),
       )
-      .describe('Matching public water systems, in PWSID order'),
+      .describe('Matching systems, PWSID order'),
     totalCount: z
       .number()
       .optional()
       .describe(
-        "Systems matched before limit and offset. Present when the call saw the whole match: a search from offset 0 with no nextOffset, or a state has_violation search that checked ECHO's whole violator list. Absent otherwise, since EPA's DMAP service reports no match count (follow nextOffset instead).",
+        "Matches before limit and offset; present only when the call saw the whole match (offset 0 and no nextOffset, or a state has_violation search over ECHO's full violator list).",
       ),
-    message: z
-      .string()
-      .optional()
-      .describe('Recovery hint when no systems are found. Absent when systems are returned.'),
+    message: z.string().optional().describe('Recovery hint on an empty result; absent otherwise.'),
   }),
 
   enrichment: {
@@ -153,12 +138,12 @@ export const waterSearchSystemsTool = tool('epa_water_search_systems', {
     guidance: z
       .string()
       .optional()
-      .describe('Present when more systems may follow: the offset that continues the search.'),
+      .describe('Present when more systems may follow: the continuing offset.'),
     notice: z
       .string()
       .optional()
       .describe(
-        'Present when a check ended before the page filled: a ZIP or county has_violation check read its 1,000-system limit, or the county check reached its read limit with few whole-name matches. nextOffset continues from where it stopped.',
+        'Present when a check stopped early (a ZIP or county has_violation check hit 1,000 systems, or the county check its read limit); nextOffset continues.',
       ),
   },
   enrichmentTrailer: {
@@ -171,13 +156,13 @@ export const waterSearchSystemsTool = tool('epa_water_search_systems', {
     {
       reason: 'no_geographic_filter',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'Neither state nor zip_code was provided.',
+      when: 'Neither state nor zip_code was given.',
       recovery: 'Provide at least one of state or zip_code to search drinking water systems.',
     },
     {
       reason: 'county_requires_state',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'county was provided without state.',
+      when: 'county without state.',
       recovery:
         'Add state, the 2-letter code of the state the county is in, e.g. state "WA" with county "King".',
     },
@@ -185,14 +170,14 @@ export const waterSearchSystemsTool = tool('epa_water_search_systems', {
     {
       reason: 'unmatchable_filter',
       code: JsonRpcErrorCode.ValidationError,
-      when: "county has no letter or digit for EPA's DMAP service to match on.",
+      when: 'county has no letter or digit.',
       recovery: 'Include a letter or digit in county, or search by state or zip_code alone.',
       thrownBy: 'service',
     },
     {
       reason: 'filter_too_long',
       code: JsonRpcErrorCode.ValidationError,
-      when: "county makes a request longer than EPA's DMAP service accepts.",
+      when: 'county makes the request too long.',
       recovery: "Shorten county to the county's name alone and retry.",
       thrownBy: 'service',
     },
@@ -211,7 +196,9 @@ export const waterSearchSystemsTool = tool('epa_water_search_systems', {
     if (!state && !zipCode) {
       throw ctx.fail('no_geographic_filter', 'At least one of state or zip_code is required.');
     }
-    const { limit, notice: limitNotice } = clampLimit(input.limit, SEARCH_CAP);
+    const { limit, notice: limitNotice } = clampLimit(input.limit, SEARCH_CAP, {
+      tool: 'epa_water_search_systems',
+    });
     if (limitNotice) ctx.enrich({ limitNotice });
 
     ctx.log.info('epa_water_search_systems', {

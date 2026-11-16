@@ -9,7 +9,14 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { dollars } from '@/mcp-server/tools/format-dollars.js';
 import { formatHeading } from '@/mcp-server/tools/format-heading.js';
+import {
+  nextOffsetLine,
+  offsetSchema,
+  pageLabel,
+  wholeListLimitSchema,
+} from '@/mcp-server/tools/paging.js';
 import { getEchoService } from '@/services/echo/echo-service.js';
+import { slicePage } from '@/services/page.js';
 
 /** ECHO's criminal case numbers ("CR_1270"); its civil case report rejects them. */
 const CRIMINAL_CASE_NUMBER = /^CR_/i;
@@ -29,7 +36,7 @@ function moneyLine(fields: Array<[label: string, amount: number | undefined]>): 
 export const echoGetCaseTool = tool('epa_echo_get_case', {
   title: 'Get EPA Enforcement Case',
   description:
-    "ECHO: Retrieve one civil enforcement case by case number, with the facilities, defendants, and settlements behind it. Returns the case's category, enforcement type, status, lead agency, relief sought, outcome, court and DOJ docket numbers, summary, and penalty, cost-recovery, compliance-action, and SEP totals; the laws and sections cited; the facilities the case names, one per EPA Registry ID, with address, NAICS and SIC codes, and the program IDs the case links (pass a registryId to epa_echo_get_facility for its compliance profile); defendants; pollutants; milestones; and every enforcement conclusion (order, consent decree, or other settlement) with its facilities, dates, penalties and costs, complying actions, pollutant reductions, and Supplemental Environmental Projects. Take the case number from epa_echo_search_violations or from a formal action's caseId in epa_echo_get_facility. Civil cases only: a criminal CR_ case number fails before any request.",
+    "ECHO: Retrieve one civil enforcement case by case number, with the facilities, defendants, and settlements behind it. Returns the case's category, enforcement type, status, lead agency, relief sought, outcome, court and DOJ docket numbers, summary, and penalty, cost-recovery, compliance-action, and SEP totals; the laws and sections cited; the facilities the case names, one per EPA Registry ID, with address, NAICS and SIC codes, and the program IDs the case links (pass a registryId to epa_echo_get_facility for its compliance profile); defendants; pollutants; milestones; and the enforcement conclusions (orders, consent decrees, or other settlements), each with its facilities, dates, penalties and costs, complying actions, pollutant reductions, and Supplemental Environmental Projects. Facilities and enforcement conclusions come a page at a time and everything else whole on every page; each call re-reads the whole case report, so one call with a larger limit costs less than several pages. Take the case number from epa_echo_search_violations or from a formal action's caseId in epa_echo_get_facility. Civil cases only: a criminal CR_ case number fails before any request.",
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -40,93 +47,68 @@ export const echoGetCaseTool = tool('epa_echo_get_case', {
       .describe(
         'Civil enforcement case number: a caseId from epa_echo_search_violations (e.g. "03-2014-7010", "WA-100446") or a formal action\'s caseId from epa_echo_get_facility (e.g. "WAPSCAF000000000000000416"). Criminal case numbers ("CR_1270") are rejected.',
       ),
+    facilities_limit: wholeListLimitSchema({
+      defaultLimit: 25,
+      noun: 'facilities',
+      offsetParam: 'facilities_offset',
+      nextOffsetField: 'facilitiesNextOffset',
+    }),
+    facilities_offset: offsetSchema('facilities', 'facilitiesNextOffset'),
+    enforcement_conclusions_limit: wholeListLimitSchema({
+      defaultLimit: 10,
+      noun: 'enforcement conclusions',
+      offsetParam: 'enforcement_conclusions_offset',
+      nextOffsetField: 'enforcementConclusionsNextOffset',
+    }),
+    enforcement_conclusions_offset: offsetSchema(
+      'enforcement conclusions',
+      'enforcementConclusionsNextOffset',
+    ),
   }),
 
   output: z.object({
-    caseId: z.string().describe('Case number, as ECHO records it'),
-    caseName: z.string().optional().describe('Case name; absent when ECHO records none'),
+    caseId: z.string().describe('Case number'),
+    caseName: z.string().optional().describe('Absent when ECHO records none'),
     caseCategoryCode: z
       .string()
       .optional()
-      .describe('Case category code: "JDC" civil judicial, "AFR" administrative formal'),
-    enforcementType: z
-      .string()
-      .optional()
-      .describe(
-        'Kind of enforcement action, e.g. "Administrative Order", "Bankruptcy", "CERCLA 120E Federal Facility Agreement (FFA)"',
-      ),
-    caseStatus: z
-      .string()
-      .optional()
-      .describe('Case status, e.g. "Final Order Entered", "Resolved", "Closed"'),
-    caseStatusDate: z.string().optional().describe('Date caseStatus took effect (MM/DD/YYYY)'),
-    leadAgency: z.string().optional().describe('Agency leading the case: "EPA" or "State"'),
-    reliefSought: z
-      .string()
-      .optional()
-      .describe('Relief the case seeks, e.g. "Cost Recovery"; absent when ECHO records none'),
-    enforcementOutcome: z
-      .string()
-      .optional()
-      .describe('How the case was resolved, e.g. "Final Order No Penalty"'),
-    courtDocketNumber: z
-      .string()
-      .optional()
-      .describe('The court\'s or region\'s docket number, e.g. "18-195"'),
-    dojDocketNumber: z
-      .string()
-      .optional()
-      .describe('Department of Justice docket number, e.g. "90-11-3-06663/2"'),
-    violations: z
-      .string()
-      .optional()
-      .describe('Violation description ECHO records, e.g. "Oil Spill Violation Under CWA/OPA"'),
-    summary: z.string().optional().describe('Case summary as EPA wrote it'),
-    penaltyAssessedInDollars: z
-      .number()
-      .optional()
-      .describe('Federal penalty assessed across the case, in dollars'),
+      .describe('"JDC" civil judicial, "AFR" administrative formal'),
+    enforcementType: z.string().optional().describe('Kind of enforcement action'),
+    caseStatus: z.string().optional().describe('Case status'),
+    caseStatusDate: z.string().optional().describe('MM/DD/YYYY'),
+    leadAgency: z.string().optional().describe('"EPA" or "State"'),
+    reliefSought: z.string().optional().describe('Absent when ECHO records none'),
+    enforcementOutcome: z.string().optional().describe('How the case was resolved'),
+    courtDocketNumber: z.string().optional().describe("Court's or region's docket number"),
+    dojDocketNumber: z.string().optional().describe('DOJ docket number'),
+    violations: z.string().optional().describe('Violation description'),
+    summary: z.string().optional().describe('As EPA wrote it'),
+    penaltyAssessedInDollars: z.number().optional().describe('Federal, whole case, in dollars'),
     stateLocalPenaltyInDollars: z
       .number()
       .optional()
-      .describe('State or local penalty assessed across the case, in dollars'),
-    penaltyCollectedInDollars: z
-      .number()
-      .optional()
-      .describe('Penalty ECHO records as collected, in dollars'),
-    supplementalProjectCostInDollars: z
-      .number()
-      .optional()
-      .describe('Cost of the Supplemental Environmental Projects agreed, in dollars'),
+      .describe('State or local, whole case, in dollars'),
+    penaltyCollectedInDollars: z.number().optional().describe('Recorded as collected, in dollars'),
+    supplementalProjectCostInDollars: z.number().optional().describe('Agreed SEP cost, in dollars'),
     complianceActionCostInDollars: z
       .number()
       .optional()
-      .describe(
-        'Estimated cost of the injunctive relief and other actions required to return to compliance, in dollars',
-      ),
+      .describe('Estimated cost of injunctive relief to return to compliance, in dollars'),
     costRecoveryInDollars: z
       .number()
       .optional()
-      .describe(
-        'Response costs the parties agreed or were ordered to repay, in dollars — the outcome of a CERCLA cost-recovery case',
-      ),
+      .describe('Response costs agreed or ordered repaid (CERCLA), in dollars'),
     lawsAndSections: z
       .array(
         z
           .object({
-            law: z.string().optional().describe('Statute, e.g. "CERCLA", "CAA"'),
-            sections: z
-              .string()
-              .optional()
-              .describe('Sections cited, comma-separated, e.g. "107A: Cost Recovery"'),
-            programs: z
-              .string()
-              .optional()
-              .describe('Programs the sections fall under, e.g. "Cost Recovery/Financial"'),
+            law: z.string().optional().describe('Statute'),
+            sections: z.string().optional().describe('Comma-separated'),
+            programs: z.string().optional().describe('Programs the sections fall under'),
           })
-          .describe('One statute the case cites'),
+          .describe('One statute'),
       )
-      .describe('Statutes and sections the case cites'),
+      .describe('Statutes and sections cited'),
     facilities: z
       .array(
         z
@@ -135,70 +117,55 @@ export const echoGetCaseTool = tool('epa_echo_get_case', {
               .string()
               .optional()
               .describe(
-                'EPA FRS Registry ID — pass it as registry_id to epa_echo_get_facility for the compliance profile. Absent on a facility row ECHO records without one.',
+                'Pass as registry_id to epa_echo_get_facility; absent when ECHO records none',
               ),
             name: z.string().optional().describe('Facility name'),
             street: z.string().optional().describe('Street address'),
             city: z.string().optional().describe('City'),
-            state: z.string().optional().describe('2-letter state abbreviation'),
+            state: z.string().optional().describe('State code'),
             zip: z.string().optional().describe('ZIP code'),
-            naicsCodes: z
-              .array(z.string())
-              .describe(
-                "NAICS codes the case records for the facility, each once, in ECHO's order",
-              ),
-            sicCodes: z
-              .array(z.string())
-              .describe("SIC codes the case records for the facility, each once, in ECHO's order"),
+            naicsCodes: z.array(z.string()).describe("Each once, ECHO's order"),
+            sicCodes: z.array(z.string()).describe("Each once, ECHO's order"),
             programIds: z
               .array(
                 z
                   .object({
-                    id: z.string().describe('Program ID, e.g. an NPDES permit or SEMS site ID'),
-                    system: z
-                      .string()
-                      .optional()
-                      .describe('Program system the ID belongs to, e.g. "ICIS", "SEMS", "AIR"'),
+                    id: z.string().describe('Program ID'),
+                    system: z.string().optional().describe('System of the ID'),
                   })
-                  .describe('One program ID the case links to the facility'),
+                  .describe('One program ID'),
               )
-              .describe("Program-system IDs the case links to the facility, in ECHO's order"),
+              .describe("Linked program IDs, ECHO's order"),
             noLongerExists: z
               .boolean()
               .optional()
-              .describe('True when FRS marks the facility as no longer existing'),
+              .describe('True when FRS marks it no longer existing'),
           })
-          .describe('One facility the case names'),
+          .describe('One facility'),
       )
-      .describe(
-        "Facilities the case names, one per Registry ID in ECHO's order; a case can span several states",
-      ),
+      .describe('One per Registry ID, possibly in several states'),
+    facilitiesTotal: z.number().describe('Across every page'),
+    facilitiesNextOffset: z
+      .number()
+      .optional()
+      .describe('Next facilities_offset; absent on the last page'),
     defendants: z
       .array(
         z
           .object({
             name: z.string().optional().describe('Defendant name'),
-            namedInComplaint: z
-              .boolean()
-              .optional()
-              .describe('True when the complaint names the defendant'),
-            namedInSettlement: z
-              .boolean()
-              .optional()
-              .describe('True when a settlement names the defendant'),
+            namedInComplaint: z.boolean().optional().describe('True when the complaint names them'),
+            namedInSettlement: z.boolean().optional().describe('True when a settlement names them'),
           })
           .describe('One defendant'),
       )
-      .describe('Defendants the case names; empty when ECHO records none, as on many state cases'),
+      .describe('Empty when ECHO records none, as on many state cases'),
     pollutants: z
       .array(
         z
           .object({
             name: z.string().optional().describe('Pollutant name'),
-            casNumber: z
-              .string()
-              .optional()
-              .describe('Chemical Abstracts Service number, without hyphens (e.g. "7440382")'),
+            casNumber: z.string().optional().describe('CAS number without hyphens'),
           })
           .describe('One pollutant'),
       )
@@ -207,137 +174,108 @@ export const echoGetCaseTool = tool('epa_echo_get_case', {
       .array(
         z
           .object({
-            event: z.string().optional().describe('Milestone, e.g. "Complaint Filed With Court"'),
-            date: z.string().optional().describe('Date reached (MM/DD/YYYY)'),
+            event: z.string().optional().describe('Milestone'),
+            date: z.string().optional().describe('MM/DD/YYYY'),
           })
-          .describe('One case milestone'),
+          .describe('One milestone'),
       )
-      .describe("Case milestones in ECHO's order"),
+      .describe("ECHO's order"),
     enforcementConclusions: z
       .array(
         z
           .object({
-            conclusionId: z.string().optional().describe('Enforcement conclusion ID'),
-            conclusionNumber: z
-              .string()
-              .optional()
-              .describe("The conclusion's number within the case"),
-            type: z
-              .string()
-              .optional()
-              .describe(
-                'Kind of conclusion, e.g. "Consent Decree or Court Order Resolving a Civil Judicial Action", "State/Local Action"',
-              ),
+            conclusionId: z.string().optional().describe('Conclusion ID'),
+            conclusionNumber: z.string().optional().describe('Number within the case'),
+            type: z.string().optional().describe('Kind of conclusion'),
             name: z.string().optional().describe('Conclusion name'),
-            registryIds: z
-              .array(z.string())
-              .describe('Registry IDs of the facilities the conclusion covers'),
-            enteredDate: z.string().optional().describe('Settlement entered date (MM/DD/YYYY)'),
-            lodgedDate: z.string().optional().describe('Settlement lodged date (MM/DD/YYYY)'),
-            penaltyAssessedInDollars: z
-              .number()
-              .optional()
-              .describe('Federal penalty this conclusion assesses, in dollars'),
+            registryIds: z.array(z.string()).describe('Facilities it covers'),
+            enteredDate: z.string().optional().describe('Settlement entered, MM/DD/YYYY'),
+            lodgedDate: z.string().optional().describe('Settlement lodged, MM/DD/YYYY'),
+            penaltyAssessedInDollars: z.number().optional().describe('Federal, in dollars'),
             stateLocalPenaltyInDollars: z
               .number()
               .optional()
-              .describe('State or local penalty this conclusion assesses, in dollars'),
+              .describe('State or local, in dollars'),
             supplementalProjectCostInDollars: z
               .number()
               .optional()
-              .describe(
-                "Cost of this conclusion's Supplemental Environmental Projects, in dollars",
-              ),
-            complianceActionCostInDollars: z
-              .number()
-              .optional()
-              .describe("Estimated cost of this conclusion's compliance actions, in dollars"),
-            costRecoveryInDollars: z
-              .number()
-              .optional()
-              .describe('Response costs this conclusion recovers, in dollars'),
-            closedDate: z
-              .string()
-              .optional()
-              .describe('Date the enforcement action was closed (MM/DD/YYYY)'),
-            terminationDate: z
-              .string()
-              .optional()
-              .describe('Date the settlement terminated (MM/DD/YYYY)'),
+              .describe('SEP cost, in dollars'),
+            complianceActionCostInDollars: z.number().optional().describe('Estimated, in dollars'),
+            costRecoveryInDollars: z.number().optional().describe('Recovered, in dollars'),
+            closedDate: z.string().optional().describe('MM/DD/YYYY'),
+            terminationDate: z.string().optional().describe('Settlement termination, MM/DD/YYYY'),
             complyingActions: z
               .array(
                 z
                   .object({
-                    type: z.string().optional().describe('Action code, e.g. "WEM"'),
-                    description: z
-                      .string()
-                      .optional()
-                      .describe('Action, e.g. "Environmental Management Review"'),
-                    category: z
-                      .string()
-                      .optional()
-                      .describe('Action category, e.g. "Work Practices"'),
+                    type: z.string().optional().describe('Action code'),
+                    description: z.string().optional().describe('Action'),
+                    category: z.string().optional().describe('Action category'),
                   })
-                  .describe('One complying action'),
+                  .describe('One action'),
               )
-              .describe('Actions the conclusion requires to return to compliance'),
+              .describe('Actions required to return to compliance'),
             pollutantReductions: z
               .array(
                 z
                   .object({
                     pollutant: z.string().optional().describe('Pollutant reduced'),
-                    annualAmount: z.number().optional().describe('Annual amount reduced, in units'),
-                    units: z.string().optional().describe('Units of annualAmount, e.g. "gal"'),
-                    media: z
-                      .string()
-                      .optional()
-                      .describe('Medium the reduction is in, e.g. "Land", "Soil"'),
+                    annualAmount: z.number().optional().describe('Per year, in units'),
+                    units: z.string().optional().describe('Units of annualAmount'),
+                    media: z.string().optional().describe('Medium'),
                     source: z
                       .enum(['complying action', 'supplemental project'])
                       .optional()
-                      .describe('Whether a complying action or a SEP achieves the reduction'),
+                      .describe('Complying action or SEP'),
                   })
-                  .describe('One pollutant reduction'),
+                  .describe('One reduction'),
               )
-              .describe('Pollutant reductions the conclusion expects'),
+              .describe('Expected pollutant reductions'),
             supplementalProjects: z
               .array(
                 z
                   .object({
-                    category: z.string().optional().describe('SEP category code, e.g. "EPP"'),
-                    description: z
-                      .string()
-                      .optional()
-                      .describe('SEP category, e.g. "Emergency Planning and Preparedness"'),
-                    text: z
-                      .string()
-                      .optional()
-                      .describe('The project as the settlement describes it'),
-                    costInDollars: z.number().optional().describe('Project cost, in dollars'),
+                    category: z.string().optional().describe('SEP category code'),
+                    description: z.string().optional().describe('SEP category name'),
+                    text: z.string().optional().describe('As the settlement describes it'),
+                    costInDollars: z.number().optional().describe('In dollars'),
                   })
-                  .describe('One Supplemental Environmental Project'),
+                  .describe('One SEP'),
               )
-              .describe('Supplemental Environmental Projects (SEPs) the conclusion requires'),
+              .describe('Supplemental Environmental Projects (SEPs) required'),
           })
-          .describe(
-            'One order, consent decree, or other settlement that concluded part of the case',
-          ),
+          .describe('One settlement or order concluding part of the case'),
       )
-      .describe("Enforcement conclusions in ECHO's order; fields ECHO leaves empty are absent"),
+      .describe("ECHO's order; empty fields absent"),
+    enforcementConclusionsTotal: z.number().describe('Across every page'),
+    enforcementConclusionsNextOffset: z
+      .number()
+      .optional()
+      .describe('Next enforcement_conclusions_offset; absent on the last page'),
   }),
+
+  enrichment: {
+    truncated: z
+      .boolean()
+      .optional()
+      .describe('True when facilities or enforcementConclusions has more pages; absent otherwise.'),
+  },
+  enrichmentTrailer: {
+    truncated: { label: 'Truncated' },
+  },
 
   errors: [
     {
       reason: 'criminal_case',
       code: JsonRpcErrorCode.ValidationError,
-      when: "case_id is a criminal case number (CR_ prefix), which ECHO's civil case report rejects.",
+      when: 'case_id is a criminal (CR_) case number.',
       recovery:
         'Pass a civil case number instead; for a criminal case, use its row from epa_echo_search_violations with case_type criminal.',
     },
     {
       reason: 'case_not_found',
       code: JsonRpcErrorCode.NotFound,
-      when: 'ECHO has no civil case report for the case number.',
+      when: 'ECHO has no civil case report for case_id.',
       recovery:
         "Check the case number: find civil case IDs with epa_echo_search_violations, or a formal action's caseId with epa_echo_get_facility, then retry.",
       thrownBy: 'service',
@@ -356,13 +294,36 @@ export const echoGetCaseTool = tool('epa_echo_get_case', {
     ctx.log.info('epa_echo_get_case', { caseId });
 
     const report = await getEchoService().getCase(caseId, ctx);
+    const facilities = slicePage(report.facilities, {
+      limit: input.facilities_limit,
+      offset: input.facilities_offset,
+    });
+    const conclusions = slicePage(report.enforcementConclusions, {
+      limit: input.enforcement_conclusions_limit,
+      offset: input.enforcement_conclusions_offset,
+    });
+    if (facilities.nextOffset !== undefined || conclusions.nextOffset !== undefined) {
+      ctx.enrich({ truncated: true });
+    }
 
     ctx.log.info('epa_echo_get_case completed', {
       caseId: report.caseId,
-      facilities: report.facilities.length,
-      enforcementConclusions: report.enforcementConclusions.length,
+      facilities: facilities.items.length,
+      facilitiesTotal: facilities.totalCount,
+      enforcementConclusions: conclusions.items.length,
+      enforcementConclusionsTotal: conclusions.totalCount,
     });
-    return report;
+    return {
+      ...report,
+      facilities: facilities.items,
+      facilitiesTotal: facilities.totalCount,
+      ...(facilities.nextOffset !== undefined && { facilitiesNextOffset: facilities.nextOffset }),
+      enforcementConclusions: conclusions.items,
+      enforcementConclusionsTotal: conclusions.totalCount,
+      ...(conclusions.nextOffset !== undefined && {
+        enforcementConclusionsNextOffset: conclusions.nextOffset,
+      }),
+    };
   },
 
   format: (r) => {
@@ -403,10 +364,15 @@ export const echoGetCaseTool = tool('epa_echo_get_case', {
       }
     }
 
-    lines.push(`\n### Facilities (${r.facilities.length})`);
-    if (r.facilities.length === 0) {
+    lines.push(
+      `\n### Facilities (${pageLabel(r.facilities.length, r.facilitiesTotal, r.facilitiesNextOffset)})`,
+    );
+    if (r.facilitiesNextOffset !== undefined) {
+      lines.push(nextOffsetLine(r.facilitiesNextOffset, 'facilities_offset'));
+    }
+    if (r.facilitiesTotal === 0) {
       lines.push('ECHO lists no facility for this case.');
-    } else {
+    } else if (r.facilities.length > 0) {
       lines.push('Pass a Registry ID to epa_echo_get_facility for its compliance profile.');
     }
     for (const f of r.facilities) {
@@ -459,8 +425,18 @@ export const echoGetCaseTool = tool('epa_echo_get_case', {
       }
     }
 
-    if (r.enforcementConclusions.length > 0) {
-      lines.push(`\n### Enforcement Conclusions (${r.enforcementConclusions.length})`);
+    if (r.enforcementConclusionsTotal > 0) {
+      const shown = pageLabel(
+        r.enforcementConclusions.length,
+        r.enforcementConclusionsTotal,
+        r.enforcementConclusionsNextOffset,
+      );
+      lines.push(`\n### Enforcement Conclusions (${shown})`);
+      if (r.enforcementConclusionsNextOffset !== undefined) {
+        lines.push(
+          nextOffsetLine(r.enforcementConclusionsNextOffset, 'enforcement_conclusions_offset'),
+        );
+      }
     }
     for (const c of r.enforcementConclusions) {
       const title = [c.conclusionNumber && `Conclusion ${c.conclusionNumber}`, c.name ?? c.type]

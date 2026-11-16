@@ -8,6 +8,11 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { superfundSiteSchema } from '@/mcp-server/superfund-site-schema.js';
 import {
+  distanceMilesField,
+  formatDistanceLine,
+  roundMiles,
+} from '@/mcp-server/tools/distance-field.js';
+import {
   beginsWithTerm,
   containsTerm,
   echoQuery,
@@ -34,13 +39,13 @@ import {
 } from '@/mcp-server/tools/paging.js';
 import { getDmapService, NPL_STATUS_CODES } from '@/services/dmap/dmap-service.js';
 
-/** Most sites one call returns. */
-const SEARCH_CAP = 200;
+/** Most sites one call returns: a full CA page of 2,500 is about 0.9 MB on either surface. */
+const SEARCH_CAP = 2500;
 
 export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
   title: 'Search Superfund Sites',
   description:
-    'Superfund: Search Superfund (CERCLA/SEMS) sites by location or NPL listing status. Returns site identifiers, source NPL status labels, non-NPL assessment and archive metadata when available, coordinates, and county FIPS code. Accepts either state/city/ZIP, returned in SEMS site ID order, or latitude+longitude+radius for proximity searches, ordered nearest first; page through a large match with offset and nextOffset. Proximity searches match only sites with usable coordinates and share a 50-second deadline; narrow the radius or add filters if the search times out. Use epa_superfund_get_site with a returned siteId for contaminant associations.',
+    "Superfund: Search Superfund (CERCLA/SEMS) sites by location, site name, or NPL listing status. Returns site identifiers, source NPL status labels, non-NPL assessment and archive metadata when available, coordinates, and county FIPS code. A state, city, ZIP, or name search returns sites in SEMS site ID order; latitude+longitude+radius returns them nearest first with each site's distanceMiles, and name narrows either. Page through a large match with offset and nextOffset. Proximity searches match only sites with usable coordinates and share a 50-second deadline; narrow the radius or add filters if the search times out. Use epa_superfund_get_site with a returned siteId for contaminant associations.",
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -51,6 +56,13 @@ export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
       .optional()
       .describe(
         'City name (partial match within state, case-insensitive). Punctuation is matched as written ("St. Louis", "Coeur d\'Alene").',
+      ),
+    name: z
+      .string()
+      .max(4094)
+      .optional()
+      .describe(
+        'Site name (partial match, case-insensitive), alone or with any other filter. Punctuation is matched as written.',
       ),
     zip_code: optionalZipSchema(
       '5-digit ZIP code to filter sites; a ZIP+4 searches its 5-digit ZIP. Matches sites recorded under the ZIP or any ZIP+4 within it.',
@@ -87,22 +99,21 @@ export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
       .describe(
         'Exclude archived sites by requiring SEMS archived_ind=N; false retains all archive statuses',
       ),
-    limit: limitSchema({ cap: SEARCH_CAP, defaultLimit: 50, noun: 'sites' }),
+    limit: limitSchema({ cap: SEARCH_CAP, defaultLimit: 25, noun: 'sites' }),
     offset: offsetSchema('sites'),
   }),
 
   output: z.object({
-    sites: z.array(superfundSiteSchema).describe('Matching Superfund sites'),
+    sites: z
+      .array(superfundSiteSchema.extend({ distanceMiles: distanceMilesField }).describe('One site'))
+      .describe('Matching sites'),
     totalCount: z
       .number()
       .optional()
       .describe(
-        "Superfund sites matched before limit and offset. Present for a proximity search, which ranks every match; absent for a state, city, or ZIP search, whose match count EPA's DMAP service does not report (follow nextOffset instead).",
+        'Matches before limit and offset; present only on a proximity search (otherwise follow nextOffset).',
       ),
-    message: z
-      .string()
-      .optional()
-      .describe('Recovery hint when no sites are found. Absent when sites are returned.'),
+    message: z.string().optional().describe('Recovery hint on an empty result; absent otherwise.'),
   }),
 
   enrichment: {
@@ -111,12 +122,12 @@ export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
     guidance: z
       .string()
       .optional()
-      .describe('Present when more sites follow: the offset that continues the search.'),
+      .describe('Present when more sites follow: the continuing offset.'),
     notice: z
       .string()
       .optional()
       .describe(
-        "Proximity coordinate-coverage limitation, with the page's place in the nearest-first match when the page does not hold every match; also present when a non-proximity punctuated city filter reaches its page limit.",
+        "Proximity coordinate-coverage caveat with the page's place in the nearest-first match; also present when a punctuated city or name filter hits its page limit.",
       ),
   },
   enrichmentTrailer: {
@@ -129,36 +140,37 @@ export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
     {
       reason: 'incomplete_proximity',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'Only part of latitude, longitude, and radius_miles was supplied, except latitude+longitude without radius_miles.',
+      when: 'A proximity input came without both latitude and longitude.',
       recovery:
         'Provide latitude, longitude, and radius_miles together, or omit all three for an administrative search.',
     },
     {
       reason: 'no_location_filter',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'No location filter (state, city, zip_code, or latitude+longitude) was provided.',
+      when: 'No state, city, zip_code, name, or latitude+longitude.',
       recovery:
-        'Provide at least one location filter: state, city, zip_code, or latitude+longitude+radius_miles.',
+        'Provide at least one of state, city, zip_code, name, or latitude+longitude+radius_miles.',
     },
     {
       reason: 'radius_required',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'Latitude and longitude were provided without radius_miles.',
+      when: 'latitude and longitude without radius_miles.',
       recovery: 'Provide radius_miles together with latitude and longitude for a proximity search.',
     },
     invalidStateError,
     {
       reason: 'unmatchable_filter',
       code: JsonRpcErrorCode.ValidationError,
-      when: "city has no letter or digit for EPA's DMAP service to match on.",
-      recovery: 'Include a letter or digit in city, or search by state or zip_code instead.',
+      when: 'city or name has no letter or digit.',
+      recovery:
+        'Include a letter or digit in city or name, or search by state or zip_code instead.',
       thrownBy: 'service',
     },
     {
       reason: 'filter_too_long',
       code: JsonRpcErrorCode.ValidationError,
-      when: "city makes a request longer than EPA's DMAP service accepts.",
-      recovery: 'Shorten city to a distinctive part of its name and retry.',
+      when: 'city or name makes the request too long.',
+      recovery: 'Shorten city or name to a distinctive part of it and retry.',
       thrownBy: 'service',
     },
   ],
@@ -166,8 +178,9 @@ export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
   async handler(input, ctx) {
     const state = normalizeState(input.state);
     const city = input.city?.trim();
+    const name = input.name?.trim();
     const zipCode = normalizeZip(input.zip_code);
-    const hasGeo = !!state || !!city || !!zipCode;
+    const hasGeo = !!state || !!city || !!name || !!zipCode;
     const hasLatLng = input.latitude !== undefined && input.longitude !== undefined;
 
     if (hasLatLng && input.radius_miles === undefined) {
@@ -190,14 +203,17 @@ export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
     if (!hasGeo && !hasLatLng) {
       throw ctx.fail(
         'no_location_filter',
-        'At least one location filter is required to search Superfund sites.',
+        'At least one of state, city, zip_code, name, or latitude+longitude is required to search Superfund sites.',
       );
     }
 
-    const { limit, notice: limitNotice } = clampLimit(input.limit, SEARCH_CAP);
+    const { limit, notice: limitNotice } = clampLimit(input.limit, SEARCH_CAP, {
+      tool: 'epa_superfund_search_sites',
+    });
     if (limitNotice) ctx.enrich({ limitNotice });
     ctx.log.info('epa_superfund_search_sites', {
       state,
+      name,
       lat: input.latitude,
       nplStatus: input.npl_status,
       offset: input.offset,
@@ -207,6 +223,7 @@ export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
       {
         ...(state && { state }),
         ...(city && { city }),
+        ...(name && { name }),
         ...(zipCode && { zipCode }),
         ...(input.latitude !== undefined && { latitude: input.latitude }),
         ...(input.longitude !== undefined && { longitude: input.longitude }),
@@ -218,13 +235,18 @@ export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
       },
       ctx,
     );
-    const sites = page.items;
+    const sites = page.items.map((site) =>
+      site.distanceMiles === undefined
+        ? site
+        : { ...site, distanceMiles: roundMiles(site.distanceMiles) },
+    );
 
     ctx.log.info('epa_superfund_search_sites completed', { count: sites.length });
     const nplCodes = NPL_STATUS_CODES.get(input.npl_status);
     echoQuery(ctx, [
       state && equalsTerm('state', state),
       city && containsTerm('city', city),
+      name && containsTerm('name', name),
       zipCode && beginsWithTerm('zip_code', zipCode),
       ...(input.latitude !== undefined && input.longitude !== undefined
         ? [
@@ -252,8 +274,7 @@ export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
       return {
         sites: [],
         ...matched,
-        message:
-          'No Superfund sites found. Try expanding the area, removing NPL status filter, or using a different location.',
+        message: `No Superfund sites found. Try ${input.name ? 'a shorter name, ' : ''}expanding the area, removing NPL status filter, or using a different location.`,
       };
     }
 
@@ -272,6 +293,7 @@ export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
 
     for (const s of result.sites) {
       lines.push('', ...formatSuperfundSite(s));
+      if (s.distanceMiles !== undefined) lines.push(formatDistanceLine(s.distanceMiles));
     }
 
     return [{ type: 'text', text: lines.join('\n') }];

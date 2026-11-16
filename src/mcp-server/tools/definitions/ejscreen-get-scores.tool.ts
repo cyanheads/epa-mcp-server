@@ -41,175 +41,125 @@ export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
   output: z.object({
     location: z
       .object({
-        latitude: z.number().describe('Latitude of the queried point in decimal degrees.'),
-        longitude: z.number().describe('Longitude of the queried point in decimal degrees.'),
-        bufferMiles: z
-          .number()
-          .describe(
-            'Buffer radius in miles used for the query (kilometers inputs converted first).',
-          ),
-        state: z
-          .string()
-          .optional()
-          .describe(
-            '2-letter state abbreviation for the area (e.g. "MD"). Absent when EJScreen found no Census block for the buffer.',
-          ),
-        stateName: z
-          .string()
-          .optional()
-          .describe(
-            'Full state name (e.g. "Maryland"). Absent when EJScreen found no Census block for the buffer.',
-          ),
+        latitude: z.number().describe('Queried latitude, decimal degrees.'),
+        longitude: z.number().describe('Queried longitude, decimal degrees.'),
+        bufferMiles: z.number().describe('Buffer radius in miles (kilometer input converted).'),
+        state: z.string().optional().describe('2-letter state code.'),
+        stateName: z.string().optional().describe('State name.'),
         population: z
           .number()
           .optional()
-          .describe(
-            'Area-weighted population within the buffer; 0 when its blocks have no residents. Absent when EJScreen found no Census block for the buffer.',
-          ),
+          .describe('Area-weighted population in the buffer; 0 when its blocks have no residents.'),
         blockGroupCount: z
           .number()
           .optional()
-          .describe(
-            'Number of census block groups intersecting the buffer. Absent when EJScreen found no Census block for the buffer.',
-          ),
+          .describe('Census block groups intersecting the buffer.'),
       })
-      .describe('The queried location and buffer context.'),
+      .describe(
+        'Queried point and buffer; state, stateName, population, and blockGroupCount are absent when the buffer holds no Census block.',
+      ),
     environmental: z
       .array(
         z
           .object({
-            code: z
-              .string()
-              .describe(
-                'EJScreen environmental indicator code (e.g. "pm", "o3", "proximity.npl").',
-              ),
-            label: z.string().describe('Human-readable indicator name.'),
-            value: z.number().describe('Raw indicator value, in the unit given by the unit field.'),
-            unit: z.string().optional().describe('Unit or scale of the raw value.'),
-            usPercentile: z
-              .number()
-              .optional()
-              .describe('National percentile (0–100) for the raw value.'),
-            statePercentile: z
-              .number()
-              .optional()
-              .describe('State percentile (0–100) for the raw value.'),
+            code: z.string().describe('EJScreen environmental indicator code.'),
+            label: z.string().describe('Indicator name.'),
+            value: z.number().describe('Raw value, in unit.'),
+            unit: z.string().optional().describe('Unit or scale of value.'),
+            usPercentile: z.number().optional().describe('National percentile (0–100) of value.'),
+            statePercentile: z.number().optional().describe('State percentile (0–100) of value.'),
             ejIndex: z
               .number()
               .optional()
               .describe(
-                "EJ Index: the Demographic Index × this indicator's US percentile, computed per block group and population-weighted over the buffer.",
+                "EJ Index: the Demographic Index × this indicator's US percentile, per block group, population-weighted over the buffer.",
               ),
             ejIndexUsPercentile: z
               .number()
               .optional()
-              .describe('National percentile (0–100) of the EJ Index.'),
+              .describe('National percentile (0–100) of ejIndex.'),
             ejIndexStatePercentile: z
               .number()
               .optional()
-              .describe('State percentile (0–100) of the EJ Index.'),
+              .describe('State percentile (0–100) of ejIndex.'),
           })
-          .describe('One environmental indicator with percentiles and its EJ Index.'),
+          .describe('One environmental indicator.'),
       )
-      .describe(
-        'EJScreen environmental indicators present for the area. Empty when coverage.valid is false.',
-      ),
+      .describe('Empty when coverage.valid is false.'),
     demographic: z
       .array(
         z
           .object({
-            code: z
-              .string()
-              .describe('EJScreen demographic indicator code (e.g. "pctmin", "pctlowinc").'),
-            label: z.string().describe('Human-readable indicator name.'),
-            percent: z
-              .number()
-              .describe('Share of the buffer population, as a percentage (0–100).'),
-            usPercentile: z
-              .number()
-              .optional()
-              .describe('National percentile (0–100) for the share.'),
-            statePercentile: z
-              .number()
-              .optional()
-              .describe('State percentile (0–100) for the share.'),
+            code: z.string().describe('EJScreen demographic indicator code.'),
+            label: z.string().describe('Indicator name.'),
+            percent: z.number().describe('Share of the buffer population, 0–100.'),
+            usPercentile: z.number().optional().describe('National percentile (0–100) of percent.'),
+            statePercentile: z.number().optional().describe('State percentile (0–100) of percent.'),
           })
-          .describe('One demographic indicator with percentiles.'),
+          .describe('One demographic indicator.'),
       )
-      .describe(
-        'EJScreen demographic indicators present for the area. Empty when coverage.valid is false.',
-      ),
+      .describe('Empty when coverage.valid is false.'),
     demographicIndex: z
       .object({
         value: z
           .number()
           .describe(
-            'Demographic Index for the buffer: the mean of the national z-scores for percent low income and percent people of color, shifted so the lowest block group scores 0. Unitless; higher means more disadvantaged, and usAverage gives the national average to compare against.',
+            'Mean of the national z-scores for percent low income and percent people of color, shifted so the lowest block group scores 0. Unitless; higher is more disadvantaged.',
           ),
         usAverage: z
           .number()
           .optional()
-          .describe(
-            'National average of the Demographic Index. Absent when EJScreen did not report it.',
-          ),
-        usPercentile: z
-          .number()
-          .optional()
-          .describe('National percentile (0–100) of the Demographic Index.'),
+          .describe('National average; absent when EJScreen omits it.'),
+        usPercentile: z.number().optional().describe('National percentile (0–100).'),
         statePercentile: z
           .number()
           .optional()
           .describe(
-            'State percentile (0–100) of the state-normalized Demographic Index, which is built from z-scores within the state rather than nationally.',
+            'State percentile (0–100) of the state-normalized index, built from z-scores within the state.',
           ),
       })
       .optional()
-      .describe('EJScreen Demographic Index. Absent when coverage.valid is false.'),
+      .describe('Absent when coverage.valid is false.'),
     supplementalDemographicIndex: z
       .object({
         value: z
           .number()
           .describe(
-            'Supplemental Demographic Index for the buffer: the mean of the national z-scores for percent low income, percent limited English, percent less than high school education, percent with disabilities, and low life expectancy (four components when life expectancy is missing), shifted so the lowest block group scores 0. Unitless; higher means more disadvantaged, and usAverage gives the national average to compare against.',
+            'Mean of the national z-scores for percent low income, limited English, less than high school education, and with disabilities, plus low life expectancy (four when it is missing), shifted so the lowest block group scores 0. Unitless; higher is more disadvantaged.',
           ),
         usAverage: z
           .number()
           .optional()
-          .describe(
-            'National average of the Supplemental Demographic Index. Absent when EJScreen did not report it.',
-          ),
-        usPercentile: z
-          .number()
-          .optional()
-          .describe('National percentile (0–100) of the Supplemental Demographic Index.'),
+          .describe('National average; absent when EJScreen omits it.'),
+        usPercentile: z.number().optional().describe('National percentile (0–100).'),
         statePercentile: z
           .number()
           .optional()
           .describe(
-            'State percentile (0–100) of the state-normalized Supplemental Demographic Index, which is built from z-scores within the state rather than nationally.',
+            'State percentile (0–100) of the state-normalized index, built from z-scores within the state.',
           ),
       })
       .optional()
-      .describe('EJScreen Supplemental Demographic Index. Absent when coverage.valid is false.'),
+      .describe('Absent when coverage.valid is false.'),
     reportUrl: z
       .string()
       .optional()
-      .describe('Link (absolute URL) to the full EJScreen report for this point and buffer.'),
+      .describe('Absolute URL of the full EJScreen report for this point and buffer.'),
     coverage: z
       .object({
         valid: z
           .boolean()
           .describe(
-            'True when EJScreen returned indicators for the buffer; false when it has none because the point is outside its US bounds, the buffer holds no Census block, or its blocks have no residents.',
+            'False when EJScreen has no indicators: the point is outside its US bounds, or the buffer holds no Census block or no residents.',
           ),
         note: z
           .string()
           .optional()
           .describe(
-            'Present when valid is false: what EJScreen found for the buffer, and whether a larger distance may reach data.',
+            'Present when valid is false: what EJScreen found, and whether a larger distance may reach data.',
           ),
       })
-      .describe('Whether EJScreen data was available for the buffer.'),
+      .describe('Whether EJScreen had data for the buffer.'),
     dataSource: z.string().describe('Provenance and vintage of the data.'),
   }),
 
@@ -217,7 +167,7 @@ export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
     notice: z
       .string()
       .optional()
-      .describe('The coverage note, repeated as guidance, when no indicators were returned.'),
+      .describe('The coverage note as guidance, when no indicators were returned.'),
   },
   enrichmentTrailer: { notice: { render: formatNotice } },
 
@@ -225,14 +175,14 @@ export const ejscreenGetScoresTool = tool('epa_ejscreen_get_scores', {
     {
       reason: 'buffer_too_large',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'The buffer radius exceeds the EJAM API cap of 15 miles (after converting kilometers to miles).',
+      when: "The buffer exceeds the EJAM API's 15-mile cap (kilometers converted first).",
       recovery: 'Reduce distance so the miles-equivalent is 15 or less (about 24 km) and retry.',
     },
     {
       reason: 'upstream_rejected',
       thrownBy: 'service',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'The EJAM API answered HTTP 400 for a point inside the bounds it accepts, so the lookup failed at EJAM rather than on the coordinates.',
+      when: 'The EJAM API answered HTTP 400 for a point inside its accepted bounds, so the failure is at EJAM, not in the coordinates.',
       recovery:
         'Check that latitude and longitude name the intended point and retry; if EJAM rejects it again, the EJAM API is failing for this location.',
     },

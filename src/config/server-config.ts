@@ -34,6 +34,12 @@ const ServerConfigSchema = z.object({
     .url()
     .default('https://api.ejanalysis.com')
     .describe('EJScreen (EJAM) API base URL — the community-maintained EJScreen rehost'),
+  clampLimits: z
+    .stringbool()
+    .default(true)
+    .describe(
+      'Serve a count input above its cap at the cap with a notice. false advertises each cap as a strict schema maximum, so a larger value fails validation.',
+    ),
 });
 
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
@@ -47,6 +53,7 @@ export function getServerConfig(): ServerConfig {
     dmapBaseUrl: 'EPA_DMAP_BASE_URL',
     airNowBaseUrl: 'EPA_AIRNOW_BASE_URL',
     ejscreenBaseUrl: 'EJSCREEN_API_BASE_URL',
+    clampLimits: 'EPA_CLAMP_LIMITS',
   });
   return _config;
 }

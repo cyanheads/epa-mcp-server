@@ -55,7 +55,7 @@ describe('triSearchReleasesTool', () => {
     const input = triSearchReleasesTool.input.parse({ state: 'wa' });
     await triSearchReleasesTool.handler(input, ctx);
     expect(mockSearchTriReleases).toHaveBeenCalledWith(
-      { state: 'WA', offset: 0, limit: 50, includeReleaseBreakdown: false },
+      { state: 'WA', offset: 0, limit: 25, includeReleaseBreakdown: false },
       expect.anything(),
     );
   });
@@ -103,7 +103,7 @@ describe('triSearchReleasesTool', () => {
         county: 'KING',
         year: 2022,
         offset: 0,
-        limit: 50,
+        limit: 25,
         includeReleaseBreakdown: false,
       },
       expect.anything(),
@@ -257,9 +257,11 @@ describe('triSearchReleasesTool', () => {
       const flag = triSearchReleasesTool.input.shape.include_release_breakdown;
       expect(flag.parse(undefined)).toBe(false);
       expect(flag.description).toContain('20 seconds');
+      expect(flag.description).toContain('up to three extra upstream requests, made side by side');
       expect(triSearchReleasesTool.description).toContain('include_release_breakdown');
-      const item = triSearchReleasesTool.output.shape.releases.element.shape;
-      expect(item.releasesToAirInLbs.description).toContain('include_release_breakdown');
+      // Stated once on the record, since the per-medium fields are shared with the facility tool.
+      const record = triSearchReleasesTool.output.shape.releases.element;
+      expect(record.description).toContain('include_release_breakdown');
     });
 
     it.each([
@@ -499,18 +501,25 @@ describe('triSearchReleasesTool', () => {
       expect(textOf(call.content)).not.toContain('Next offset');
     });
 
-    it('clamps a limit above 200 to 200 with a notice instead of rejecting it', async () => {
+    it('clamps a limit above 699 to 699 with a notice instead of rejecting it', async () => {
       mockSearchTriReleases.mockResolvedValue({ items: [waRelease] });
 
+      const atCap = await runToolContract(triSearchReleasesTool, { state: 'WA', limit: 699 });
       const call = await runToolContract(triSearchReleasesTool, { state: 'WA', limit: 5000 });
 
+      expect(atCap.structuredContent).not.toHaveProperty('limitNotice');
       expect(call.isError).toBeFalsy();
-      expect(mockSearchTriReleases.mock.calls[0]![0]).toMatchObject({ limit: 200 });
+      expect(mockSearchTriReleases.mock.calls.map(([params]) => params.limit)).toEqual([699, 699]);
       const notice = (call.structuredContent as { limitNotice?: string }).limitNotice;
-      expect(notice).toContain('limit 5000');
+      expect(notice).toBe(
+        "limit 5000 is above this tool's cap of 699, so at most 699 records were returned.",
+      );
       expect(textOf(call.content)).toContain(`> ${notice}`);
       expect(triSearchReleasesTool.input.safeParse({ state: 'WA', limit: 5001 }).success).toBe(
-        false,
+        true,
+      );
+      expect(triSearchReleasesTool.input.shape.limit.description).toBe(
+        'Number of release records to return in one call. Default 25; a larger value returns at most 699 and says so. Page past it with offset and nextOffset.',
       );
     });
 
@@ -589,6 +598,130 @@ describe('triSearchReleasesTool', () => {
       expect(result.message).toMatch(/^No TRI releases found\. TRI data lags ~18 months\. /);
       expect(result.message).toContain('Remove county to search the whole state.');
       expect(result.message).not.toMatch(/NOWHERE|2023|BENZENE/);
+    });
+  });
+
+  describe('chemical_id', () => {
+    const benzene = {
+      ...waRelease,
+      chemicalName: 'Benzene',
+      chemicalId: '0000071432',
+      casNumber: '71-43-2',
+    };
+    const trimethyl = { ...waRelease, chemicalName: '1,2,4-Trimethylbenzene' };
+
+    it.each(['71-43-2', '71432', '0000071432'])(
+      'sends %j as 0000071432 beside chemical_name, county, year, and paging, and echoes it',
+      async (chemical_id) => {
+        mockSearchTriReleases.mockResolvedValue({ items: [benzene], nextOffset: 3 });
+
+        const call = await runToolContract(triSearchReleasesTool, {
+          state: 'TX',
+          county: 'Harris',
+          year: 2023,
+          chemical_id,
+          chemical_name: 'benzene',
+          offset: 2,
+          limit: 1,
+        });
+
+        expect(call.isError).toBeFalsy();
+        expect(mockSearchTriReleases.mock.calls[0]![0]).toEqual({
+          state: 'TX',
+          county: 'HARRIS',
+          year: 2023,
+          chemicalId: '0000071432',
+          chemicalName: 'benzene',
+          offset: 2,
+          limit: 1,
+          includeReleaseBreakdown: false,
+        });
+        const structured = call.structuredContent as { effectiveQuery: string; nextOffset: number };
+        expect(structured.effectiveQuery).toBe(
+          'state=TX; county contains HARRIS; year=2023; chemical_id=0000071432; chemical_name contains benzene',
+        );
+        expect(structured.nextOffset).toBe(3);
+        expect(textOf(call.content)).toContain('chemical_id=0000071432');
+      },
+    );
+
+    it.each([
+      ['n420', 'N420'],
+      ['N420', 'N420'],
+      ['MIXTURE', 'MIXTURE'],
+      ['100-41-4', '0000100414'],
+    ])('sends %j as %j', async (chemical_id, sent) => {
+      mockSearchTriReleases.mockResolvedValue({ items: [] });
+
+      await runToolContract(triSearchReleasesTool, { state: 'TX', chemical_id });
+
+      expect(mockSearchTriReleases.mock.calls[0]![0]).toMatchObject({ chemicalId: sent });
+    });
+
+    it.each(['71-43-1', '71431', '0000071431'])(
+      'rejects %j, whose check digit fails, before any request',
+      async (chemical_id) => {
+        const call = await runToolContract(triSearchReleasesTool, { state: 'TX', chemical_id });
+
+        expect(call.structuredContent).toMatchObject({
+          error: { code: JsonRpcErrorCode.InvalidParams },
+        });
+        expect(textOf(call.content)).toContain('fails its check digit');
+        expect(mockSearchTriReleases).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['benzene', 'N42', 'N4200', '71-432', '00000071-43-2', 'mixture', '1234'])(
+      'rejects %j at the schema, naming the accepted forms',
+      async (chemical_id) => {
+        const call = await runToolContract(triSearchReleasesTool, { state: 'TX', chemical_id });
+
+        expect(call.structuredContent).toMatchObject({
+          error: { code: JsonRpcErrorCode.InvalidParams },
+        });
+        const text = textOf(call.content);
+        expect(text).toContain('Expected a CAS Registry Number such as "71-43-2"');
+        expect(text).not.toContain('check digit');
+        expect(mockSearchTriReleases).not.toHaveBeenCalled();
+      },
+    );
+
+    it('carries chemicalId and casNumber on both surfaces, and neither when TRI records none', async () => {
+      mockSearchTriReleases.mockResolvedValue({ items: [benzene, trimethyl] });
+
+      const call = await runToolContract(triSearchReleasesTool, { state: 'TX' });
+
+      expect((call.structuredContent as { releases: unknown[] }).releases).toEqual([
+        benzene,
+        trimethyl,
+      ]);
+      const [benzeneText, trimethylText] = textOf(call.content).split('\n### ').slice(1);
+      expect(benzeneText).toContain('**Chemical ID:** 0000071432\n**CAS Number:** 71-43-2');
+      expect(trimethylText).not.toMatch(/Chemical ID|CAS Number/);
+    });
+
+    it('suggests removing chemical_id, beside chemical_name, on an empty result', async () => {
+      mockSearchTriReleases.mockResolvedValue({ items: [] });
+
+      const call = await runToolContract(triSearchReleasesTool, {
+        state: 'TX',
+        chemical_id: 'N420',
+        chemical_name: 'lead',
+      });
+
+      expect((call.structuredContent as { message: string }).message).toContain(
+        'Remove chemical_name or chemical_id to include other chemicals.',
+      );
+    });
+
+    it('describes chemicalId and casNumber with their absent-when rules', () => {
+      const item = triSearchReleasesTool.output.shape.releases.element.shape;
+      expect(item.chemicalId.description).toBe(
+        'TRI chemical ID (a 10-digit zero-padded CAS number, an N-prefixed category code, or a placeholder); pass it as chemical_id for an exact match. Absent when TRI records none.',
+      );
+      expect(item.casNumber.description).toBe(
+        'CAS Registry Number, hyphenated. Absent for a category code or placeholder.',
+      );
     });
   });
 

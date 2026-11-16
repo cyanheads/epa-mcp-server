@@ -34,8 +34,14 @@ import {
   CASE_REPORT_INVALID,
   CASE_REPORT_WA_100446,
   DFR_BOEING_110017848105,
+  DFR_BOEING_COMPLIANCE_SECTIONS_110017848105,
+  DFR_EFFLUENT_SERIES_S_R_AND_LIMIT_VIOLATION,
   DFR_EIS_ONLY_110000897646,
+  DFR_HPV_OPEN_110059763536,
+  DFR_HPV_RESOLVED_110008170237,
+  DFR_PERMITS_110008170237,
   DFR_RCRA_ONLY_110005318012,
+  DFR_RCRA_VIOLATION_SHAPES_110000459995,
   DFR_RMP_ONLY_110000536661,
   DFR_SDWIS_WA5300484,
   DFR_SDWIS_WA5389080,
@@ -119,7 +125,7 @@ describe('EchoService request identity', () => {
       );
     });
 
-    await newService().searchFacilities({ zipCode: '98108' }, createMockContext());
+    await newService().searchFacilities({ zipCodes: ['98108'] }, createMockContext());
 
     expect(userAgents).toEqual(['@cyanheads/epa-mcp-server/9.8.7']);
   });
@@ -161,8 +167,8 @@ describe('EchoService.searchFacilities', () => {
       };
     });
     const ctx = createMockContext();
-    await service.searchFacilities({ state: 'WA' }, ctx);
-    await service.searchViolations({ state: 'WA' }, ctx);
+    await service.searchFacilities({ states: ['WA'] }, ctx);
+    await service.searchViolations({ states: ['WA'] }, ctx);
 
     const calls = (ctx.log as MockContextLogger).calls;
     const logs = JSON.stringify(calls);
@@ -201,7 +207,7 @@ describe('EchoService.searchFacilities', () => {
     const urls = stubFetch(() => facilityResponse);
 
     await service.searchFacilities(
-      { zipCode: '98204', state: 'WA', city: 'EVERETT' },
+      { zipCodes: ['98204'], states: ['WA'], city: 'EVERETT' },
       createMockContext(),
     );
 
@@ -216,11 +222,42 @@ describe('EchoService.searchFacilities', () => {
     expect(params.has('p_long')).toBe(false);
   });
 
+  it('regression #73: sends a state or ZIP list as one comma-joined p_st or p_zip, beside the other filters', async () => {
+    const urls = stubFetch(() => facilityResponse);
+
+    await service.searchFacilities(
+      {
+        states: ['WA', 'OR'],
+        zipCodes: ['98660', '97217'],
+        county: 'CLARK',
+        latitude: 45.628,
+        longitude: -122.674,
+        radiusMiles: 5,
+      },
+      createMockContext(),
+    );
+
+    const params = urls[0]!.searchParams;
+    expect(params.getAll('p_st')).toEqual(['WA,OR']);
+    expect(params.getAll('p_zip')).toEqual(['98660,97217']);
+    expect(params.get('p_co')).toBe('CLARK');
+    expect(params.get('p_radius')).toBe('5');
+  });
+
+  it('regression #78: asks ECHO for 25 facilities when no limit is given, and for limit rows otherwise', async () => {
+    const urls = stubFetch(() => facilityResponse);
+
+    await service.searchFacilities({ states: ['WA'] }, createMockContext());
+    await service.searchFacilities({ states: ['WA'], limit: 2500 }, createMockContext());
+
+    expect(urls.map((url) => url.searchParams.get('responseset'))).toEqual(['25', '2500']);
+  });
+
   it('regression #38: has_violation sends p_cs=3 and active_only p_act=Y', async () => {
     const urls = stubFetch(() => facilityResponse);
 
     await service.searchFacilities(
-      { zipCode: '98108', hasViolation: true, activeOnly: true },
+      { zipCodes: ['98108'], hasViolation: true, activeOnly: true },
       createMockContext(),
     );
 
@@ -241,7 +278,7 @@ describe('EchoService.searchFacilities', () => {
     async (program, code) => {
       const urls = stubFetch(() => facilityResponse);
 
-      await service.searchFacilities({ zipCode: '98108', program }, createMockContext());
+      await service.searchFacilities({ zipCodes: ['98108'], program }, createMockContext());
 
       expect(urls[0]!.searchParams.get('p_med')).toBe(code);
       expect(urls[0]!.searchParams.has('p_naa')).toBe(false);
@@ -251,7 +288,7 @@ describe('EchoService.searchFacilities', () => {
   it('sends no p_cs, p_med, or p_act without those filters', async () => {
     const urls = stubFetch(() => facilityResponse);
 
-    await service.searchFacilities({ zipCode: '98108' }, createMockContext());
+    await service.searchFacilities({ zipCodes: ['98108'] }, createMockContext());
 
     const keys = [...urls[0]!.searchParams.keys()].sort();
     expect(keys).toEqual(['output', 'p_zip', 'qcolumns', 'responseset']);
@@ -265,7 +302,7 @@ describe('EchoService.searchFacilities', () => {
     );
 
     const result = await service.searchFacilities(
-      { zipCode: '98108', program: 'CAA', limit: 3 },
+      { zipCodes: ['98108'], program: 'CAA', limit: 3 },
       createMockContext(),
     );
 
@@ -339,7 +376,7 @@ describe('EchoService.searchFacilities', () => {
     const urls = stubFetch(() => FACILITY_SEARCH_SDWA_98108_INLINE);
 
     const result = await service.searchFacilities(
-      { zipCode: '98108', program: 'SDWA', limit: 3 },
+      { zipCodes: ['98108'], program: 'SDWA', limit: 3 },
       createMockContext(),
     );
 
@@ -362,7 +399,7 @@ describe('EchoService.searchFacilities', () => {
     }));
 
     const result = await service.searchFacilities(
-      { zipCode: '98108', hasViolation: true, program: 'SDWA' },
+      { zipCodes: ['98108'], hasViolation: true, program: 'SDWA' },
       createMockContext(),
     );
 
@@ -386,7 +423,7 @@ describe('EchoService.searchFacilities', () => {
     }));
 
     const error = await service
-      .searchFacilities({ state: 'WA', city: 'SEATTLE' }, createMockContext())
+      .searchFacilities({ states: ['WA'], city: 'SEATTLE' }, createMockContext())
       .catch((e: unknown) => e);
 
     expect(urls).toHaveLength(1);
@@ -414,7 +451,7 @@ describe('EchoService.searchFacilities', () => {
     );
 
     const result = await service.searchFacilities(
-      { zipCode: '98101', limit: 1 },
+      { zipCodes: ['98101'], limit: 1 },
       createMockContext(),
     );
 
@@ -476,7 +513,7 @@ describe('regression #53: EchoService.searchFacilities pages by offset', () => {
     BOEING_ROWS.slice(from, to).map((row) => row.RegistryID);
   const search = (offset: number, limit = 50) =>
     newService().searchFacilities(
-      { state: 'WA', facilityName: 'BOEING', limit, offset },
+      { states: ['WA'], facilityName: 'BOEING', limit, offset },
       createMockContext(),
     );
 
@@ -522,7 +559,7 @@ describe('regression #53: EchoService.searchFacilities pages by offset', () => {
 
     for (const offset of [0, 50]) {
       await service.searchFacilities(
-        { state: 'WA', facilityName: 'BOEING', limit: 50, offset },
+        { states: ['WA'], facilityName: 'BOEING', limit: 50, offset },
         createMockContext(),
       );
     }
@@ -632,7 +669,7 @@ describe('regression #61: facility name, county, FIPS, and NAICS filters', () =>
     const urls = stubFetch(() => facilityResponse);
 
     await newService().searchFacilities(
-      { state: 'WA', county: 'KING', facilityName: 'BOEING PLANT', naics: '3364' },
+      { states: ['WA'], county: 'KING', facilityName: 'BOEING PLANT', naics: '3364' },
       createMockContext(),
     );
 
@@ -675,7 +712,7 @@ describe('regression #61: facility name, county, FIPS, and NAICS filters', () =>
     );
 
     const page = await newService().searchFacilities(
-      { state: 'WA', facilityName: 'NUCOR', limit: 5 },
+      { states: ['WA'], facilityName: 'NUCOR', limit: 5 },
       createMockContext(),
     );
 
@@ -802,7 +839,7 @@ describe('EchoService.fetchJson retry classification', () => {
     const urls = stubFetch(() => ({ Results: { Error: { ErrorMessage: 'Unavailable' } } }));
 
     const error = await settle(
-      newService().searchFacilities({ zipCode: '98108' }, createMockContext()),
+      newService().searchFacilities({ zipCodes: ['98108'] }, createMockContext()),
     );
 
     expect(urls).toHaveLength(4);
@@ -845,7 +882,7 @@ describe('EchoService.fetchJson retry classification', () => {
     });
 
     const error = await settle(
-      newService().searchFacilities({ state: 'WA', limit: 1 }, createMockContext()),
+      newService().searchFacilities({ states: ['WA'], limit: 1 }, createMockContext()),
     );
 
     expect(urls).toHaveLength(1);
@@ -882,7 +919,9 @@ describe('EchoService.fetchJson retry classification', () => {
     ] as const)('%s is attempted four times', async (_label, respond) => {
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(respond);
 
-      await settle(newService().searchFacilities({ state: 'WA', limit: 1 }, createMockContext()));
+      await settle(
+        newService().searchFacilities({ states: ['WA'], limit: 1 }, createMockContext()),
+      );
 
       expect(fetchSpy).toHaveBeenCalledTimes(4);
     });
@@ -935,7 +974,9 @@ describe('EchoService.fetchJson retry classification', () => {
         : QUERY_ID_NOT_FOUND,
     );
 
-    const error = await settle(newService().searchViolations({ state: 'WA' }, createMockContext()));
+    const error = await settle(
+      newService().searchViolations({ states: ['WA'] }, createMockContext()),
+    );
 
     expect(urls.map(endpointOf)).toEqual([
       'case_rest_services.get_case_info',
@@ -1192,7 +1233,7 @@ describe('EchoService.getFacility profile from one get_dfr body', () => {
     ]);
   });
 
-  it('keeps the newest 100 compliance monitoring records and counts them all', async () => {
+  it('regression #78: keeps the newest 25 compliance monitoring records and counts them all', async () => {
     const Inspection = Array.from({ length: 150 }, (_, i) => ({
       Statute: 'CAA',
       SourceID: 'TX0000004824500018',
@@ -1212,9 +1253,10 @@ describe('EchoService.getFacility profile from one get_dfr body', () => {
     const profile = await newService().getFacility('110041990913', createMockContext());
 
     expect(profile.inspectionsTotal).toBe(150);
-    expect(profile.inspections).toHaveLength(100);
+    expect(profile.inspections).toHaveLength(25);
+    expect(profile.inspectionsNextOffset).toBe(25);
     expect(profile.inspections[0]!.activityDate).toBe('01/10/2027');
-    expect(profile.inspections.at(-1)!.activityDate).toBe('01/23/2023');
+    expect(profile.inspections.at(-1)!.activityDate).toBe('01/14/2026');
     expect(profile.inspections).not.toContainEqual(
       expect.objectContaining({ category: 'Information Request' }),
     );
@@ -1640,7 +1682,7 @@ describe('EchoService.searchViolations', () => {
     );
 
     const result = await newService().searchViolations(
-      { state: 'WA', limit: 1 },
+      { states: ['WA'], limit: 1 },
       createMockContext(),
     );
 
@@ -1660,7 +1702,7 @@ describe('EchoService.searchViolations', () => {
         : { Results: { Cases: [{ CaseNumber: 'FROM-GET-QID' }] } },
     );
 
-    const result = await newService().searchViolations({ state: 'WA' }, createMockContext());
+    const result = await newService().searchViolations({ states: ['WA'] }, createMockContext());
 
     expect(urls.map(endpointOf)).toEqual([
       'case_rest_services.get_case_info',
@@ -1676,7 +1718,7 @@ describe('EchoService.searchViolations', () => {
     const { QueryParameters: _recordedEcho, ...inline } = CASE_INFO_03_2014_7010_INLINE.Results;
     const urls = stubFetch(() => ({ Results: inline }));
 
-    const result = await newService().searchViolations({ state: 'WA' }, createMockContext());
+    const result = await newService().searchViolations({ states: ['WA'] }, createMockContext());
 
     expect(urls.map(endpointOf)).toEqual(['case_rest_services.get_case_info']);
     expect(result).toEqual({
@@ -1711,7 +1753,7 @@ describe('EchoService.searchViolations', () => {
     );
 
     const result = await newService().searchViolations(
-      { state: 'WA', caseType: 'criminal', limit: 2 },
+      { states: ['WA'], caseType: 'criminal', limit: 2 },
       createMockContext(),
     );
 
@@ -1761,7 +1803,7 @@ describe('EchoService.searchViolations', () => {
           },
     );
 
-    const result = await newService().searchViolations({ state: 'WA' }, createMockContext());
+    const result = await newService().searchViolations({ states: ['WA'] }, createMockContext());
 
     expect(result.items).toEqual([
       {
@@ -1780,7 +1822,7 @@ describe('EchoService.searchViolations', () => {
     const urls = stubFetch(() => ({ Results: { QueryID: '466', QueryRows: '0' } }));
 
     await newService().searchViolations(
-      { state: 'WA', zipCode: '98108', program: 'CERCLA' },
+      { states: ['WA'], zipCodes: ['98108'], program: 'CERCLA' },
       createMockContext(),
     );
 
@@ -1792,6 +1834,28 @@ describe('EchoService.searchViolations', () => {
     expect(params.has('p_act')).toBe(false);
   });
 
+  it('regression #73: sends a state or ZIP list as one comma-joined p_state or p_fac_zip', async () => {
+    const urls = stubFetch(() => ({ Results: { QueryID: '466', QueryRows: '0' } }));
+
+    await newService().searchViolations(
+      { states: ['RI', 'DE'], zipCodes: ['98108', '97201'] },
+      createMockContext(),
+    );
+
+    const params = urls[0]!.searchParams;
+    expect(params.getAll('p_state')).toEqual(['RI,DE']);
+    expect(params.getAll('p_fac_zip')).toEqual(['98108,97201']);
+    expect(urls[0]!.search).toContain('p_state=RI%2CDE');
+  });
+
+  it('regression #78: asks ECHO for 25 cases when no limit is given', async () => {
+    const urls = stubFetch(() => ({ Results: { QueryID: '466', QueryRows: '0' } }));
+
+    await newService().searchViolations({ states: ['WA'] }, createMockContext());
+
+    expect(urls[0]!.searchParams.get('responseset')).toBe('25');
+  });
+
   it.each([
     ['civil', 'CI'],
     ['criminal', 'CR'],
@@ -1801,7 +1865,7 @@ describe('EchoService.searchViolations', () => {
     async (caseType, code) => {
       const urls = stubFetch(() => ({ Results: { QueryID: '447', QueryRows: '0' } }));
 
-      await newService().searchViolations({ state: 'WA', caseType }, createMockContext());
+      await newService().searchViolations({ states: ['WA'], caseType }, createMockContext());
 
       expect(urls[0]!.searchParams.get('p_civil_criminal_indicator')).toBe(code);
       expect(urls[0]!.searchParams.has('p_case_category')).toBe(false);
@@ -1834,7 +1898,7 @@ describe('EchoService.searchViolations', () => {
       const urls = stubFetch(() => ({ Results: { QueryID: '410', QueryRows: '0' } }));
 
       const result = await newService().searchViolations(
-        { state: 'WA', ...dates },
+        { states: ['WA'], ...dates },
         createMockContext(),
       );
 
@@ -1852,7 +1916,7 @@ describe('EchoService.searchViolations', () => {
     it('sends no date or milestone parameter without a date bound', async () => {
       const urls = stubFetch(() => ({ Results: { QueryID: '380', QueryRows: '0' } }));
 
-      const result = await newService().searchViolations({ state: 'WA' }, createMockContext());
+      const result = await newService().searchViolations({ states: ['WA'] }, createMockContext());
 
       const params = urls[0]!.searchParams;
       expect(params.has('p_from_date')).toBe(false);
@@ -1879,7 +1943,7 @@ describe('EchoService.searchViolations', () => {
       }));
 
       const result = await newService().searchViolations(
-        { state: 'WA', ...dates },
+        { states: ['WA'], ...dates },
         createMockContext(),
       );
 
@@ -1897,7 +1961,7 @@ describe('EchoService.searchViolations', () => {
 
     const result = await newService().searchViolations(
       {
-        state: 'WA',
+        states: ['WA'],
         caseType: 'civil',
         dateFiledStart: '2024-01-01',
         dateFiledEnd: '2024-12-31',
@@ -1959,7 +2023,7 @@ describe('EchoService.searchViolations', () => {
     }));
 
     const error = await newService()
-      .searchViolations({ zipCode: '98108' }, createMockContext())
+      .searchViolations({ zipCodes: ['98108'] }, createMockContext())
       .catch((e: unknown) => e);
 
     expect(urls).toHaveLength(1);
@@ -1985,7 +2049,7 @@ describe('EchoService.searchViolations', () => {
     }));
 
     const result = await newService().searchViolations(
-      { state: 'WA', caseType: 'civil' },
+      { states: ['WA'], caseType: 'civil' },
       createMockContext(),
     );
 
@@ -1996,7 +2060,7 @@ describe('EchoService.searchViolations', () => {
   it('regression #60: sends program EPCRA as p_law', async () => {
     const urls = stubFetch(() => ({ Results: { QueryID: '25', QueryRows: '0' } }));
 
-    await newService().searchViolations({ state: 'WA', program: 'EPCRA' }, createMockContext());
+    await newService().searchViolations({ states: ['WA'], program: 'EPCRA' }, createMockContext());
 
     expect(urls[0]!.searchParams.get('p_law')).toBe('EPCRA');
   });
@@ -2022,7 +2086,7 @@ describe('EchoService.searchViolations', () => {
           },
     );
 
-    const result = await newService().searchViolations({ state: 'WA' }, createMockContext());
+    const result = await newService().searchViolations({ states: ['WA'] }, createMockContext());
 
     expect(result.items).toEqual([
       {
@@ -2053,7 +2117,7 @@ describe('regression #53: EchoService.searchViolations pages by offset', () => {
   const rowIds = (from: number, to: number) =>
     TX_CASE_ROWS.slice(from, to).map((row) => row.CaseNumber);
   const search = (offset: number, limit = 100) =>
-    newService().searchViolations({ state: 'TX', limit, offset }, createMockContext());
+    newService().searchViolations({ states: ['TX'], limit, offset }, createMockContext());
 
   it('reads the get_qid page an aligned offset starts, discovery sized to the limit', async () => {
     const urls = serveCaseSearch(TX_CASE_ROWS);
@@ -2355,9 +2419,9 @@ const echoJson = (url: URL, body: unknown, status = 200) =>
   new Response(JSON.stringify(withEcho(url, body)), { status });
 
 describe('regression #42: one deadline per ECHO search call', () => {
-  const airSearch = { zipCode: '98108', program: 'CAA', limit: 3 } as const;
+  const airSearch = { zipCodes: ['98108'], program: 'CAA', limit: 3 } as const;
   const civilSearch = {
-    state: 'WA',
+    states: ['WA'],
     caseType: 'civil',
     dateFiledStart: '2024-01-01',
     dateFiledEnd: '2024-12-31',
@@ -2410,6 +2474,43 @@ describe('regression #42: one deadline per ECHO search call', () => {
       'echo_rest_services.get_qid',
     ]);
   });
+
+  it.each([
+    [
+      'facility',
+      () =>
+        newService().searchFacilities(
+          { zipCodes: Array.from({ length: 200 }, (_, i) => String(98001 + i)), limit: 1 },
+          createMockContext(),
+        ),
+    ],
+    [
+      'case',
+      () =>
+        newService().searchViolations(
+          { states: ['CA', 'TX', 'FL', 'NY', 'PA'], limit: 1 },
+          createMockContext(),
+        ),
+    ],
+  ])(
+    'a timed-out %s search names a shorter state or zip_code list among its remedies',
+    async (_, search) => {
+      stubSearch(
+        (_url, signal) => hang(signal),
+        (_url, signal) => hang(signal),
+      );
+
+      const call = track(search());
+      await vi.advanceTimersByTimeAsync(58_000);
+
+      expect(call.error).toMatchObject({
+        code: JsonRpcErrorCode.Timeout,
+        message: expect.stringContaining(
+          'a shorter state or zip_code list (split a long one across calls)',
+        ),
+      });
+    },
+  );
 
   it('a hung facility discovery request ends as a Timeout at 58 s after one request', async () => {
     const urls = stubSearch(
@@ -2746,7 +2847,7 @@ describe('regression #62: drinking-water violations from the get_dfr report', ()
     expect(pages.map((p) => p.drinkingWaterViolationsTotal)).toEqual([17, 17, 17, 17, 17, 17]);
   });
 
-  it('returns the first 50 by default', async () => {
+  it('regression #78: returns the first 25 by default', async () => {
     const [row] = DFR_SDWIS_WA5389080.Results.ViolationsEnforcementActions.Sources[0]!.Violations;
     const many = Array.from({ length: 60 }, (_, i) => ({ ...row, ViolationID: String(1000 + i) }));
     stubFacility({
@@ -2758,9 +2859,10 @@ describe('regression #62: drinking-water violations from the get_dfr report', ()
 
     const profile = await newService().getFacility('WA5389080', createMockContext());
 
-    expect(profile.drinkingWaterViolations).toHaveLength(50);
+    expect(profile.drinkingWaterViolations).toHaveLength(25);
     expect(profile.drinkingWaterViolations[0]?.violationId).toBe('1059');
-    expect(profile.drinkingWaterViolationsNextOffset).toBe(50);
+    expect(profile.drinkingWaterViolations.at(-1)?.violationId).toBe('1035');
+    expect(profile.drinkingWaterViolationsNextOffset).toBe(25);
     expect(profile.drinkingWaterViolationsTotal).toBe(60);
   });
 
@@ -2824,6 +2926,389 @@ describe('regression #62: drinking-water violations from the get_dfr report', ()
     expect(profile.drinkingWaterViolations).toEqual([]);
     expect(profile.drinkingWaterViolationsTotal).toBe(0);
     expect(profile).not.toHaveProperty('drinkingWaterViolationsNextOffset');
+  });
+});
+
+describe('regression #75: effluent exceedances, RCRA violations, HPVs, and program IDs', () => {
+  const { Header } = DFR_BOEING_COMPLIANCE_SECTIONS_110017848105.CWAEffluentComplianceEXP;
+  const [copper] =
+    DFR_BOEING_COMPLIANCE_SECTIONS_110017848105.CWAEffluentComplianceEXP.Sources[0]!.Parameters;
+  const [rcraRow] =
+    DFR_BOEING_COMPLIANCE_SECTIONS_110017848105.RCRACompliance.Sources[0]!.Violations;
+  /** Boeing's report with its compliance sections replaced by `sections`. */
+  const report = (sections: Record<string, unknown>) => ({
+    Results: {
+      ...DFR_BOEING_110017848105.Results,
+      ...DFR_BOEING_COMPLIANCE_SECTIONS_110017848105,
+      ...sections,
+    },
+  });
+  const effluentReport = (rows: unknown[]) =>
+    report({ CWAEffluentComplianceEXP: { Header, Sources: [{ Parameters: rows }] } });
+  const rcraReport = (rows: unknown[]) =>
+    report({ RCRACompliance: { Sources: [{ Violations: rows }] } });
+  const profileOf = (slices: Parameters<EchoService['getFacility']>[2] = {}) =>
+    newService().getFacility('110017848105', createMockContext(), slices);
+
+  it("maps Boeing Plant 2's Copper exceedance, 7 RCRA violations, no HPVs, and 20 program IDs", async () => {
+    stubFacility(report({}));
+
+    const profile = await profileOf();
+
+    expect(profile.effluentExceedances).toEqual([
+      {
+        permitId: 'WAR314396',
+        parameterCode: '01042',
+        parameterName: 'Copper, total [as Cu]',
+        outfall: 'P33 - 01',
+        monitoringLocation: 'See Comments',
+        measurementType: 'NMth',
+        quarters: [{ start: '10/01/2025', end: '12/31/2025', value: '1061%' }],
+      },
+    ]);
+    expect(profile.effluentExceedancesTotal).toBe(1);
+    expect(profile).not.toHaveProperty('effluentExceedancesNextOffset');
+    expect(profile.rcraViolationsTotal).toBe(7);
+    expect(profile.rcraViolations[0]).toEqual({
+      handlerId: 'WAD009256819',
+      violationType: '262.A',
+      violation: 'Generators - General',
+      agency: 'WA',
+      determinedDate: '03/27/2025',
+      returnedToComplianceDate: '05/23/2025',
+      reportUrl:
+        'https://echo.epa.gov/violation-report?p_id=WAD009256819&p_viol_activity_location=WA&p_viol_seq=5002&p_viol_determined_by_agency=S',
+    });
+    // A violation determined and returned in one quarter arrives as one range cell.
+    expect(profile.rcraViolations.at(-1)).toMatchObject({
+      violationType: 'XXS',
+      determinedDate: '03/27/2025',
+      returnedToComplianceDate: '03/27/2025',
+    });
+    expect(profile.highPriorityViolations).toEqual([]);
+    expect(profile.programIds).toHaveLength(20);
+    expect(profile.programIds.map((p) => p.id)).not.toContain('110017848105');
+    expect(profile.programIds.slice(0, 4)).toEqual([
+      { system: 'ICIS', id: '600019551' },
+      { system: 'ICIS', id: '39469' },
+      {
+        system: 'ICIS-Air',
+        id: 'WAPSC0005303321147',
+        statute: 'CAA',
+        status: 'Operating',
+        universe: 'Major Emissions',
+      },
+      {
+        system: 'ICIS-Air',
+        id: 'WAPSC0005303300156',
+        statute: 'CAA',
+        status: 'Permanently Closed',
+        universe: 'Major Emissions',
+      },
+    ]);
+  });
+
+  it('relays each quarter value and S or R status verbatim, oldest quarter first', async () => {
+    stubFacility(effluentReport(DFR_EFFLUENT_SERIES_S_R_AND_LIMIT_VIOLATION));
+
+    const [limitViolation, switchesToS] = (await profileOf()).effluentExceedances;
+
+    expect(switchesToS!.quarters.map((q) => `${q.start} ${q.value} ${q.status}`)).toEqual([
+      '07/01/2023 7532% R',
+      '10/01/2023 16216% R',
+      '01/01/2024 12005% R',
+      '04/01/2024 269% R',
+      '10/01/2024 50% R',
+      '04/01/2025 1299% S',
+      '07/01/2025 114% S',
+      '10/01/2025 140% S',
+      '01/01/2026 3% S',
+      '04/01/2026 343% S',
+    ]);
+    expect(limitViolation).toMatchObject({ permitId: 'CO0049056', measurementType: 'Neither' });
+    expect(limitViolation!.quarters).toHaveLength(12);
+    expect(limitViolation!.quarters[11]).toEqual({
+      start: '04/01/2026',
+      end: '06/30/2026',
+      value: 'LIMIT VIOLATION',
+    });
+  });
+
+  it('dates the 13th quarter to the refresh date, and leaves quarter dates out without a Header', async () => {
+    const open = { ...copper, Qtr10Value: null, Qtr13Value: '5%', Qtr13Status: 'R' };
+    stubFacility(effluentReport([open]));
+    const dated = (await profileOf()).effluentExceedances[0]!.quarters;
+    vi.restoreAllMocks();
+    stubFacility(report({ CWAEffluentComplianceEXP: { Sources: [{ Parameters: [open] }] } }));
+    const undated = (await profileOf()).effluentExceedances[0]!.quarters;
+
+    expect(dated).toEqual([{ start: '07/01/2026', end: '11/13/2026', value: '5%', status: 'R' }]);
+    expect(undated).toEqual([{ value: '5%', status: 'R' }]);
+  });
+
+  describe('effluent pages', () => {
+    /**
+     * 32 series, every combination of two permits, outfalls, parameter codes, monitoring
+     * locations, and measurement types, so each key breaks the ties the keys before it leave.
+     * The permit varies fastest, so this listing is not in sort order. Each series carries two
+     * quarters, so a page re-slices nested lists.
+     */
+    const ordered = ['001 - A', '002 - A'].flatMap((DischargePoint) =>
+      ['00400', '01042'].flatMap((ParameterCode) =>
+        ['Effluent Gross', 'Raw Sewage Influent'].flatMap((MonitoringLocation) =>
+          ['Mthly', 'NMth'].flatMap((MeasurementType) =>
+            ['WA0000001', 'WA0000002'].map((SourceID) => ({
+              ...copper,
+              SourceID,
+              DischargePoint,
+              ParameterCode,
+              MonitoringLocation,
+              MeasurementType,
+              Qtr2Value: '12%',
+              Qtr2Status: 'R',
+            })),
+          ),
+        ),
+      ),
+    );
+    const keyOf = (s: {
+      permitId?: string;
+      outfall?: string;
+      parameterCode?: string;
+      monitoringLocation?: string;
+      measurementType?: string;
+    }) =>
+      [s.permitId, s.outfall, s.parameterCode, s.monitoringLocation, s.measurementType].join('|');
+    /** Their keys in the order every page reads from: permit first, then the rest as built. */
+    const expectedKeys = ['WA0000001', 'WA0000002'].flatMap((permit) =>
+      ordered
+        .filter((row) => row.SourceID === permit)
+        .map((row) =>
+          [
+            row.SourceID,
+            row.DischargePoint,
+            row.ParameterCode,
+            row.MonitoringLocation,
+            row.MeasurementType,
+          ].join('|'),
+        ),
+    );
+
+    it('pages 10 series by default, and orders them by key whatever order ECHO lists them in', async () => {
+      stubFacility(effluentReport(ordered));
+      const listed = await profileOf();
+      vi.restoreAllMocks();
+      stubFacility(effluentReport([...ordered].reverse()));
+      const reversed = await profileOf();
+
+      for (const profile of [listed, reversed]) {
+        expect(profile.effluentExceedances.map(keyOf)).toEqual(expectedKeys.slice(0, 10));
+        expect(profile.effluentExceedancesTotal).toBe(32);
+        expect(profile.effluentExceedancesNextOffset).toBe(10);
+      }
+      expect(listed.effluentExceedances[0]!.quarters).toEqual([
+        { start: '10/01/2023', end: '12/31/2023', value: '12%', status: 'R' },
+        { start: '10/01/2025', end: '12/31/2025', value: '1061%' },
+      ]);
+    });
+
+    it('walks every series once with its quarters, then answers past the end with the total', async () => {
+      stubFacility(effluentReport([...ordered].reverse()));
+      const seen: string[] = [];
+      const nextOffsets: Array<number | undefined> = [];
+      let quarters = 0;
+      for (let offset: number | undefined = 0; offset !== undefined; ) {
+        const profile = await profileOf({ effluentExceedances: { limit: 10, offset } });
+        seen.push(...profile.effluentExceedances.map(keyOf));
+        quarters += profile.effluentExceedances.flatMap((s) => s.quarters).length;
+        offset = profile.effluentExceedancesNextOffset;
+        nextOffsets.push(offset);
+      }
+      expect(seen).toEqual(expectedKeys);
+      expect(quarters).toBe(64);
+      expect(nextOffsets).toEqual([10, 20, 30, undefined]);
+
+      const past = await profileOf({ effluentExceedances: { limit: 10, offset: 32 } });
+      expect(past.effluentExceedances).toEqual([]);
+      expect(past.effluentExceedancesTotal).toBe(32);
+      expect(past).not.toHaveProperty('effluentExceedancesNextOffset');
+    });
+
+    it('a limit past the list returns the whole list', async () => {
+      stubFacility(effluentReport(ordered));
+
+      const profile = await profileOf({ effluentExceedances: { limit: 1000, offset: 0 } });
+
+      expect(profile.effluentExceedances.map(keyOf)).toEqual(expectedKeys);
+      expect(profile).not.toHaveProperty('effluentExceedancesNextOffset');
+    });
+  });
+
+  it('reads RCRA determined and return-to-compliance dates from every cell shape', async () => {
+    stubFacility(rcraReport(DFR_RCRA_VIOLATION_SHAPES_110000459995));
+    const listed = (await profileOf()).rcraViolations;
+    vi.restoreAllMocks();
+    stubFacility(rcraReport([...DFR_RCRA_VIOLATION_SHAPES_110000459995].reverse()));
+    const reversed = (await profileOf()).rcraViolations;
+
+    const dates = (v: (typeof listed)[number]) =>
+      `${v.reportUrl?.match(/seq=(\d+)/)?.[1]} ${v.determinedDate} → ${v.returnedToComplianceDate}`;
+    // Newest determination first; the two 06/04/2024 rows order by report URL (seq 22 before 25).
+    expect(listed.map(dates)).toEqual([
+      '320 03/25/2025 → 08/26/2025',
+      '22 06/04/2024 → undefined',
+      '25 06/04/2024 → 06/14/2024',
+      '21 06/03/2024 → 07/18/2024',
+    ]);
+    expect(reversed).toEqual(listed);
+    expect(listed[1]).not.toHaveProperty('returnedToComplianceDate');
+    expect(listed[0]).toMatchObject({ handlerId: 'TXR000081205', agency: 'UT' });
+  });
+
+  describe('RCRA pages', () => {
+    /** 50 violations listed in profile order: 5 determination dates, newest first, 10 per date. */
+    const ordered = Array.from({ length: 50 }, (_, i) => ({
+      ...rcraRow,
+      Qtr5Status: `0${5 - Math.floor(i / 10)}/01/2025`,
+      Qtr6Status: '--->',
+      RCRAViolReportURL: `https://echo.epa.gov/violation-report?p_id=WAD009256819&p_viol_seq=${String(i).padStart(4, '0')}`,
+    }));
+    const urls = ordered.map((row) => row.RCRAViolReportURL);
+
+    it('returns 25 of 50 by default, newest determination first, whatever order ECHO lists them in', async () => {
+      stubFacility(rcraReport([...ordered].reverse()));
+
+      const profile = await profileOf();
+
+      expect(profile.rcraViolations.map((v) => v.reportUrl)).toEqual(urls.slice(0, 25));
+      expect(profile.rcraViolationsTotal).toBe(50);
+      expect(profile.rcraViolationsNextOffset).toBe(25);
+      expect(profile.rcraViolations[0]).not.toHaveProperty('returnedToComplianceDate');
+    });
+
+    it('walks every violation once, and a limit past the list returns all 50', async () => {
+      stubFacility(rcraReport([...ordered].reverse()));
+      const seen: Array<string | undefined> = [];
+      for (let offset: number | undefined = 0; offset !== undefined; ) {
+        const profile = await profileOf({ rcraViolations: { limit: 20, offset } });
+        seen.push(...profile.rcraViolations.map((v) => v.reportUrl));
+        offset = profile.rcraViolationsNextOffset;
+      }
+      const whole = await profileOf({ rcraViolations: { limit: 1000, offset: 0 } });
+      const past = await profileOf({ rcraViolations: { limit: 20, offset: 50 } });
+
+      expect(seen).toEqual(urls);
+      expect(whole.rcraViolations.map((v) => v.reportUrl)).toEqual(urls);
+      expect(whole).not.toHaveProperty('rcraViolationsNextOffset');
+      expect(past.rcraViolations).toEqual([]);
+      expect(past.rcraViolationsTotal).toBe(50);
+    });
+  });
+
+  it('maps resolved HPVs told apart by violationId, and open ones without a resolvedDate', async () => {
+    stubFacility(
+      report({
+        AirCompliance: {
+          Sources: [
+            { HPVProgramsPollutants: DFR_HPV_RESOLVED_110008170237 },
+            { HPVProgramsPollutants: DFR_HPV_OPEN_110059763536 },
+          ],
+        },
+      }),
+    );
+
+    const { highPriorityViolations } = await profileOf();
+
+    const resolved = {
+      airProgramId: 'TX0000004803900041',
+      programs: 'CAATVP',
+      pollutants: 'FACIL',
+      agency: 'TX',
+      beginDate: '11/17/2017',
+      resolvedDate: '04/02/2025',
+    };
+    expect(highPriorityViolations).toEqual([
+      { ...resolved, violationId: '3601295927' },
+      { ...resolved, violationId: '3601490207' },
+      {
+        airProgramId: 'TX0000004816700001',
+        violationId: '3603017001',
+        programs: 'CAATVP',
+        pollutants: 'FACIL',
+        agency: 'TX',
+        beginDate: '09/08/2008',
+      },
+      {
+        airProgramId: 'TX0000004816700001',
+        violationId: '3603017010',
+        programs: 'CAATVP',
+        pollutants: 'FACIL',
+        agency: 'TX',
+        beginDate: '03/05/2007',
+      },
+    ]);
+  });
+
+  it('lists every program ID but the FRS entry, with statute, status, universe, and expiration', async () => {
+    stubFacility(report({ Permits: DFR_PERMITS_110008170237 }));
+
+    const profile = await profileOf();
+
+    expect(profile.programIds).toEqual([
+      { system: 'ICIS', id: '5870098' },
+      {
+        system: 'ICIS-Air',
+        id: 'TX0000004803900041',
+        statute: 'CAA',
+        status: 'Operating',
+        universe: 'Major Emissions',
+      },
+      {
+        system: 'ICIS-NPDES',
+        id: 'TXR1550CA',
+        statute: 'CWA',
+        status: 'Terminated; Compliance Tracking Off',
+        universe: 'Non-Major: General Permit Covered Facility',
+        expirationDate: '03/04/2023',
+      },
+    ]);
+  });
+
+  it.each([
+    [
+      'as {}, as a public water system sends them',
+      {
+        Results: {
+          ...DFR_SDWIS_WA5300484.Results,
+          CWAEffluentComplianceEXP: {},
+          RCRACompliance: {},
+          AirCompliance: {},
+        },
+      },
+    ],
+    [
+      'without Sources',
+      report({
+        CWAEffluentComplianceEXP: { Header },
+        RCRACompliance: { Qtr1Start: '01/01/2024' },
+        AirCompliance: { Header: {} },
+      }),
+    ],
+    ['not at all', DFR_SDWIS_WA5300484],
+  ])('a report sending the three sections %s lists none, with 0 totals', async (_label, body) => {
+    stubFacility(body);
+
+    const profile = await profileOf();
+
+    expect(profile).toMatchObject({
+      effluentExceedances: [],
+      effluentExceedancesTotal: 0,
+      rcraViolations: [],
+      rcraViolationsTotal: 0,
+      highPriorityViolations: [],
+    });
+    expect(profile).not.toHaveProperty('effluentExceedancesNextOffset');
+    expect(profile).not.toHaveProperty('rcraViolationsNextOffset');
   });
 });
 

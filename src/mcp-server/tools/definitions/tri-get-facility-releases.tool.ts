@@ -10,6 +10,11 @@ import { formatHeading } from '@/mcp-server/tools/format-heading.js';
 import { formatNotice } from '@/mcp-server/tools/format-notice.js';
 import { formatTriReleaseLines } from '@/mcp-server/tools/format-tri-release.js';
 import {
+  normalizeChemicalId,
+  normalizeTriFacilityId,
+  triFacilityIdSchema,
+} from '@/mcp-server/tools/input-formats.js';
+import {
   clampLimit,
   continueGuidance,
   limitSchema,
@@ -18,24 +23,30 @@ import {
   pagingTrailer,
   pastEndSuffix,
 } from '@/mcp-server/tools/paging.js';
+import {
+  chemicalNameSchema,
+  triChemicalIdSchema,
+  triEmptyResultHints,
+} from '@/mcp-server/tools/tri-filters.js';
+import { triReleaseSchema } from '@/mcp-server/tri-release-schema.js';
 import { getDmapService } from '@/services/dmap/dmap-service.js';
 
-/** Most filings one call returns, and the default. */
-const LOOKUP_CAP = 500;
+/**
+ * Most filings one call returns: the always-on breakdown of a full page is one wave, three
+ * side-by-side `doc_ctrl_num in` requests of 233 submissions (dmap-service BREAKDOWN_CONCURRENCY).
+ */
+const LOOKUP_CAP = 699;
 
 export const triGetFacilityReleasesTool = tool('epa_tri_get_facility_releases', {
   title: 'Get TRI Chemical Releases for Facility',
   description:
-    'TRI: Query Toxic Release Inventory annual chemical release data for a specific facility. Returns per-chemical release records with chemical name, reporting year, on-site releases by medium (air, water, land, underground injection) and their total, and the Form R one-time release quantity, newest reporting year first; page past 500 filings with offset and nextOffset. Quantities are in pounds; dioxin and dioxin-like compounds, which TRI has facilities report in grams, are converted and marked with reportedUnit. TRI data lags ~18 months — the most recent available year is typically 2 years prior to the current calendar year. facility_id is the 15-character TRI facility ID: take it from the facilityId field of epa_tri_search_releases, or from the triFacilityIds of epa_echo_get_facility for a facility you already hold a Registry ID for. A 12-digit EPA Registry ID is a different identifier and matches no TRI records.',
+    'TRI: Query Toxic Release Inventory annual chemical release data for a specific facility. Returns per-chemical release records with chemical name, TRI chemical ID and CAS number, reporting year, on-site releases by medium (air, water, land, underground injection) and their total, and the Form R one-time release quantity, newest reporting year first; page through them with offset and nextOffset. Quantities are in pounds; dioxin and dioxin-like compounds, which TRI has facilities report in grams, are converted and marked with reportedUnit. TRI data lags ~18 months — the most recent available year is typically 2 years prior to the current calendar year. facility_id is the 15-character TRI facility ID: take it from the facilityId field of epa_tri_search_releases, or from the triFacilityIds of epa_echo_get_facility for a facility you already hold a Registry ID for. A 12-digit EPA Registry ID is a different identifier and fails validation.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
-    facility_id: z
-      .string()
-      .min(1)
-      .describe(
-        '15-character TRI facility ID (e.g. "9867WSNRWD1981S") — the facilityId field returned by epa_tri_search_releases, or an entry of epa_echo_get_facility triFacilityIds. A 12-digit EPA Registry ID matches no TRI records.',
-      ),
+    facility_id: triFacilityIdSchema(
+      '15-character TRI facility ID (e.g. "9867WSNRWD1981S") — the facilityId field returned by epa_tri_search_releases, or an entry of epa_echo_get_facility triFacilityIds. Case, surrounding whitespace, and end slashes are ignored; a 12-digit EPA Registry ID fails validation.',
+    ),
     year: z
       .number()
       .int()
@@ -45,14 +56,9 @@ export const triGetFacilityReleasesTool = tool('epa_tri_get_facility_releases', 
       .describe(
         'Reporting year to retrieve. Omit for all available years, newest first. TRI data is typically available through ~2 years prior to the current year.',
       ),
-    chemical_name: z
-      .string()
-      .max(4094)
-      .optional()
-      .describe(
-        'Optional filter to restrict results to a specific chemical (partial match, case-insensitive). Commas, apostrophes, brackets, and Greek letters are matched as written, e.g. "4,4\'-Methylenedianiline".',
-      ),
-    limit: limitSchema({ cap: LOOKUP_CAP, defaultLimit: LOOKUP_CAP, noun: 'filings' }),
+    chemical_name: chemicalNameSchema,
+    chemical_id: triChemicalIdSchema,
+    limit: limitSchema({ cap: LOOKUP_CAP, defaultLimit: 25, noun: 'filings' }),
     offset: offsetSchema('filings'),
   }),
 
@@ -61,62 +67,14 @@ export const triGetFacilityReleasesTool = tool('epa_tri_get_facility_releases', 
       .array(
         z
           .object({
-            facilityId: z.string().describe('TRI facility identifier'),
-            chemicalName: z.string().describe('Chemical name as reported to TRI'),
-            reportingYear: z.number().describe('Year of the TRI submission'),
-            reportedUnit: z
-              .literal('grams')
-              .optional()
-              .describe(
-                'Present as "grams" when TRI had the facility report this chemical in grams (dioxin and dioxin-like compounds); its quantities here are converted to pounds (1 lb = 453.59237 g). Absent for chemicals reported in pounds.',
-              ),
-            oneTimeReleaseInLbs: z
-              .number()
-              .optional()
-              .describe(
-                'Form R Section 8.8 one-time release quantity in pounds (remedial actions, catastrophic events, and other one-time events not associated with production). It is already counted in the per-medium releases and the off-site transfers, so it is never added to them.',
-              ),
-            releasesToAirInLbs: z
-              .number()
-              .optional()
-              .describe(
-                'On-site air releases (fugitive + stack emissions) in pounds, summed across air release types for this submission.',
-              ),
-            releasesToWaterInLbs: z
-              .number()
-              .optional()
-              .describe(
-                'On-site releases to surface water in pounds, summed across all reported outfalls for this submission.',
-              ),
-            releasesToLandInLbs: z
-              .number()
-              .optional()
-              .describe(
-                'On-site land releases in pounds — landfills, land treatment, surface impoundment, and other on-site disposal, summed for this submission.',
-              ),
-            releasesToUndergroundInjectionInLbs: z
-              .number()
-              .optional()
-              .describe(
-                'On-site releases via underground injection wells in pounds, summed across injection well classes for this submission.',
-              ),
-            totalOnSiteReleasesInLbs: z
-              .number()
-              .optional()
-              .describe(
-                "Sum of the per-medium on-site releases present on this record (Form R Sections 5.1–5.5.4), in pounds. A medium TRI recorded only as a range code is left out, as it is from the per-medium fields; TRI's published on-site total counts a range at its midpoint, so it can be higher. Absent when no medium has a quantity.",
-              ),
+            facilityId: z.string().describe('TRI facility ID'),
+            ...triReleaseSchema.shape,
           })
-          .describe('Per-chemical TRI release record for this facility and year'),
+          .describe('One chemical-year filing'),
       )
-      .describe('Per-chemical annual TRI release records for the queried facility'),
-    facilityId: z.string().describe('TRI facility ID queried'),
-    message: z
-      .string()
-      .optional()
-      .describe(
-        'Recovery hint when no releases are found — suggests alternative years or checking the facility ID. Absent when releases are returned.',
-      ),
+      .describe('Per-chemical annual filings'),
+    facilityId: z.string().describe('ID queried, uppercased, without whitespace or slashes'),
+    message: z.string().optional().describe('Recovery hint on an empty result; absent otherwise.'),
   }),
 
   enrichment: {
@@ -124,23 +82,18 @@ export const triGetFacilityReleasesTool = tool('epa_tri_get_facility_releases', 
     truncated: z
       .boolean()
       .optional()
-      .describe(
-        'True when more filings may follow this page; nextOffset continues it. Absent on the last page.',
-      ),
-    shown: z
+      .describe('True when more filings may follow; absent on the last page.'),
+    shown: z.number().optional().describe('Present only when truncated.'),
+    cap: z
       .number()
       .optional()
-      .describe('Number of filings returned. Present only when truncated.'),
-    cap: z.number().optional().describe('The limit that was applied. Present only when truncated.'),
-    guidance: z
-      .string()
-      .optional()
-      .describe('Present when truncated: the offset that continues the lookup.'),
+      .describe('Requested limit after the cap; present only when truncated.'),
+    guidance: z.string().optional().describe('Present when truncated: the continuing offset.'),
     notice: z
       .string()
       .optional()
       .describe(
-        'Present when a punctuated chemical_name filter read its page limit before finding every filing spelled as given, so more matching records may exist.',
+        'Present when a punctuated chemical_name filter hit its read limit first, so more matches may exist.',
       ),
   },
   enrichmentTrailer: {
@@ -153,35 +106,38 @@ export const triGetFacilityReleasesTool = tool('epa_tri_get_facility_releases', 
     {
       reason: 'unmatchable_filter',
       code: JsonRpcErrorCode.ValidationError,
-      when: "facility_id holds a character EPA's DMAP service cannot match exactly, or chemical_name has no letter or digit.",
-      recovery:
-        'Pass one 15-character TRI facility ID from epa_tri_search_releases, and include a letter or digit in chemical_name.',
+      when: 'chemical_name has no letter or digit.',
+      recovery: 'Include a letter or digit in chemical_name, or remove it.',
       thrownBy: 'service',
     },
     {
       reason: 'filter_too_long',
       code: JsonRpcErrorCode.ValidationError,
-      when: "facility_id and chemical_name make a request longer than EPA's DMAP service accepts.",
-      recovery:
-        'Pass one 15-character TRI facility ID and shorten chemical_name to a distinctive part of the name.',
+      when: 'chemical_name makes the request too long.',
+      recovery: 'Shorten chemical_name to a distinctive part of the name and retry.',
       thrownBy: 'service',
     },
   ],
 
   async handler(input, ctx) {
-    const { limit, notice: limitNotice } = clampLimit(input.limit, LOOKUP_CAP);
+    const { limit, notice: limitNotice } = clampLimit(input.limit, LOOKUP_CAP, {
+      tool: 'epa_tri_get_facility_releases',
+    });
     if (limitNotice) ctx.enrich({ limitNotice });
+    const facilityId = normalizeTriFacilityId(input.facility_id);
     ctx.log.info('epa_tri_get_facility_releases', {
-      facilityId: input.facility_id,
+      facilityId,
       year: input.year,
       offset: input.offset,
     });
 
     const chemicalName = input.chemical_name?.trim();
+    const chemicalId = normalizeChemicalId(input.chemical_id);
     const page = await getDmapService().getTriReleases(
       {
-        facilityId: input.facility_id.trim(),
+        facilityId,
         ...(input.year !== undefined && { year: input.year }),
+        ...(chemicalId && { chemicalId }),
         ...(chemicalName && { chemicalName }),
         offset: input.offset,
         limit,
@@ -205,36 +161,29 @@ export const triGetFacilityReleasesTool = tool('epa_tri_get_facility_releases', 
       if (input.offset > 0) {
         return {
           releases: [],
-          facilityId: input.facility_id,
-          message: `No TRI releases found for facility "${input.facility_id}" at offset ${input.offset}${pastEndSuffix(page.nextOffset, 'lookup', 'records')}`,
+          facilityId,
+          message: `No TRI releases found for facility "${facilityId}" at offset ${input.offset}${pastEndSuffix(page.nextOffset, 'lookup', 'records')}`,
         };
       }
       const yearNote = input.year ? ` for year ${input.year}` : '';
-      const chemNote = input.chemical_name ? ` matching chemical "${input.chemical_name}"` : '';
-      const earlierYear =
-        input.year === undefined
-          ? undefined
-          : Math.min(input.year - 1, new Date().getFullYear() - 2);
-      const hints = ['TRI data lags ~18 months.'];
-      if (earlierYear !== undefined) {
-        hints.push(
-          earlierYear >= 1987
-            ? `For an earlier reporting period, try year ${earlierYear}, or remove year to search all available years.`
-            : 'Remove year to search all available years.',
-        );
-      }
-      if (chemicalName) hints.push('Remove chemical_name to include other chemicals.');
+      const chemNote = [
+        input.chemical_name && ` matching chemical "${input.chemical_name}"`,
+        chemicalId && ` with chemical ID ${chemicalId}`,
+      ]
+        .filter(Boolean)
+        .join('');
+      const hints = triEmptyResultHints({ year: input.year, chemicalName, chemicalId });
       hints.push(
         "Verify the facility ID with epa_tri_search_releases — facility_id is its 15-character facilityId, not a 12-digit EPA Registry ID; epa_echo_get_facility returns a Registry ID's TRI IDs as triFacilityIds.",
       );
       return {
         releases: [],
-        facilityId: input.facility_id,
-        message: `No TRI releases found for facility "${input.facility_id}"${yearNote}${chemNote}. ${hints.join(' ')}`,
+        facilityId,
+        message: `No TRI releases found for facility "${facilityId}"${yearNote}${chemNote}. ${hints.join(' ')}`,
       };
     }
 
-    return { releases, facilityId: input.facility_id };
+    return { releases, facilityId };
   },
 
   format: (result) => {

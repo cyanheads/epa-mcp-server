@@ -62,14 +62,17 @@ describe('echoSearchFacilitiesTool', () => {
   it('returns facilities for valid state filter', async () => {
     mockSearchFacilities.mockResolvedValue({ items: [boeingFacility], totalCount: 412 });
     const { result, ctx } = await run({ state: ' WA ' });
-    expect(mockSearchFacilities).toHaveBeenCalledWith({ state: 'WA', limit: 50, offset: 0 }, ctx);
+    expect(mockSearchFacilities).toHaveBeenCalledWith(
+      { states: ['WA'], limit: 25, offset: 0 },
+      ctx,
+    );
     expect(result).toEqual({ facilities: [boeingFacility], totalCount: 412 });
   });
 
   it('returns facilities for valid zip_code filter', async () => {
     const { result, ctx } = await run({ zip_code: '98204' });
     expect(mockSearchFacilities).toHaveBeenCalledWith(
-      { zipCode: '98204', limit: 50, offset: 0 },
+      { zipCodes: ['98204'], limit: 25, offset: 0 },
       ctx,
     );
     expect(result.facilities).toEqual([boeingFacility]);
@@ -78,7 +81,7 @@ describe('echoSearchFacilitiesTool', () => {
   it('returns facilities for city+state filter', async () => {
     const { result, ctx } = await run({ city: 'EVERETT', state: 'WA' });
     expect(mockSearchFacilities).toHaveBeenCalledWith(
-      { state: 'WA', city: 'EVERETT', limit: 50, offset: 0 },
+      { states: ['WA'], city: 'EVERETT', limit: 25, offset: 0 },
       ctx,
     );
     expect(result.facilities).toEqual([boeingFacility]);
@@ -93,11 +96,11 @@ describe('echoSearchFacilitiesTool', () => {
     });
     expect(mockSearchFacilities).toHaveBeenCalledWith(
       {
-        state: 'WA',
+        states: ['WA'],
         program: 'TRI',
         hasViolation: true,
         activeOnly: true,
-        limit: 50,
+        limit: 25,
         offset: 0,
       },
       ctx,
@@ -118,7 +121,10 @@ describe('echoSearchFacilitiesTool', () => {
 
   it('sends no program for an empty programs list', async () => {
     const { ctx } = await run({ state: 'WA', programs: [] });
-    expect(mockSearchFacilities).toHaveBeenCalledWith({ state: 'WA', limit: 50, offset: 0 }, ctx);
+    expect(mockSearchFacilities).toHaveBeenCalledWith(
+      { states: ['WA'], limit: 25, offset: 0 },
+      ctx,
+    );
   });
 
   it('throws no_geographic_filter when no location provided', async () => {
@@ -207,7 +213,7 @@ describe('echoSearchFacilitiesTool', () => {
     it('sends county without its suffix, uppercased, alongside state', async () => {
       const { ctx } = await run({ state: 'wa', county: ' King County ' });
       expect(mockSearchFacilities).toHaveBeenCalledWith(
-        { state: 'WA', county: 'KING', limit: 50, offset: 0 },
+        { states: ['WA'], county: 'KING', limit: 25, offset: 0 },
         ctx,
       );
     });
@@ -223,7 +229,7 @@ describe('echoSearchFacilitiesTool', () => {
     it('scopes a search with county_fips alone', async () => {
       const { ctx } = await run({ county_fips: ' 53033 ' });
       expect(mockSearchFacilities).toHaveBeenCalledWith(
-        { countyFips: '53033', limit: 50, offset: 0 },
+        { countyFips: '53033', limit: 25, offset: 0 },
         ctx,
       );
     });
@@ -239,7 +245,7 @@ describe('echoSearchFacilitiesTool', () => {
     it('sends facility_name and naics trimmed', async () => {
       const { ctx } = await run({ state: 'WA', facility_name: ' BOEING PLANT ', naics: '3364' });
       expect(mockSearchFacilities).toHaveBeenCalledWith(
-        { state: 'WA', facilityName: 'BOEING PLANT', naics: '3364', limit: 50, offset: 0 },
+        { states: ['WA'], facilityName: 'BOEING PLANT', naics: '3364', limit: 25, offset: 0 },
         ctx,
       );
     });
@@ -283,19 +289,192 @@ describe('echoSearchFacilitiesTool', () => {
     it('normalizes a lowercase, padded state and searches a ZIP+4 by its first five digits', async () => {
       const { ctx } = await run({ state: ' wa ', zip_code: '98108-1234' });
       expect(mockSearchFacilities).toHaveBeenCalledWith(
-        { state: 'WA', zipCode: '98108', limit: 50, offset: 0 },
+        { states: ['WA'], zipCodes: ['98108'], limit: 25, offset: 0 },
         ctx,
       );
     });
 
     it('sends a 2-character code outside the USPS set to ECHO, which files offshore platforms under DM', async () => {
       const { ctx } = await run({ state: ' dm ' });
-      expect(mockSearchFacilities).toHaveBeenCalledWith({ state: 'DM', limit: 50, offset: 0 }, ctx);
+      expect(mockSearchFacilities).toHaveBeenCalledWith(
+        { states: ['DM'], limit: 25, offset: 0 },
+        ctx,
+      );
       expect(echoSearchFacilitiesTool.errors?.map((e) => e.reason)).not.toContain('invalid_state');
     });
 
     it.each([{ state: 'Washington' }, { zip_code: '9810' }])('rejects %o at the schema', (args) => {
       expect(echoSearchFacilitiesTool.input.safeParse(args).success).toBe(false);
+    });
+
+    // Through the framework's own argument parser, as a client's call arrives.
+    it.each([
+      [{ state: '', zip_code: '98108' }, 'zip_code=98108'],
+      [{ state: '   ', zip_code: '98108' }, 'zip_code=98108'],
+      [{ state: ' wa ' }, 'state=WA'],
+      [{ state: 'WA' }, 'state=WA'],
+      [{ state: 'WA', zip_code: '' }, 'state=WA'],
+      [{ zip_code: '98108-1234' }, 'zip_code=98108'],
+      [{ zip_code: '981081234' }, 'zip_code=98108'],
+      [{ zip_code: ' 98108 ' }, 'zip_code=98108'],
+      [{ zip_code: 98108 }, 'zip_code=98108'],
+    ])('answers the single-value form %o as 0.8.0 does', async (args, effectiveQuery) => {
+      const result = await runToolContract(echoSearchFacilitiesTool, args as never);
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({ effectiveQuery });
+    });
+
+    it.each([{ state: 'WA OR' }, { state: 'Washington' }, { state: 'W' }, { zip_code: '9810' }])(
+      'rejects %o before any request, as 0.8.0 does',
+      async (args) => {
+        const result = await runToolContract(echoSearchFacilitiesTool, args);
+        expect(result.isError).toBe(true);
+        expect(mockSearchFacilities).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  describe('regression #73: state and ZIP lists', () => {
+    const sent = () => mockSearchFacilities.mock.calls[0]![0] as Record<string, unknown>;
+
+    it.each([
+      ['an array', ['WA', 'OR']],
+      ['a comma-joined string', 'WA,OR'],
+      ['a JSON-stringified array', '["WA","OR"]'],
+      ['a padded, mixed-case list with a repeat', ['wa', ' OR ', 'WA']],
+    ])('sends state as %s once per code, and echoes state=WA,OR', async (_, state) => {
+      const result = await runToolContract(echoSearchFacilitiesTool, { state } as never);
+      expect(result.isError).toBeFalsy();
+      expect(sent()).toMatchObject({ states: ['WA', 'OR'] });
+      expect(result.structuredContent).toMatchObject({ effectiveQuery: 'state=WA,OR' });
+      const text = (result.content as Array<{ text?: string }>).map((b) => b.text).join('\n');
+      expect(text).toContain('`state=WA,OR`');
+    });
+
+    it('sends each ZIP+4 in a list as its first five digits', async () => {
+      const result = await runToolContract(echoSearchFacilitiesTool, {
+        zip_code: ['98108-1234', '98109'],
+      } as never);
+      expect(sent()).toMatchObject({ zipCodes: ['98108', '98109'] });
+      expect(result.structuredContent).toMatchObject({ effectiveQuery: 'zip_code=98108,98109' });
+    });
+
+    it.each([
+      ['a 101st state', { state: Array.from({ length: 101 }, (_, i) => `${i % 10}${i % 9}`) }],
+      [
+        'a 301st ZIP',
+        { zip_code: Array.from({ length: 301 }, (_, i) => String(10000 + i)).join(',') },
+      ],
+    ])('rejects %s before any request', async (_, args) => {
+      const result = await runToolContract(echoSearchFacilitiesTool, args as never);
+      expect(result.isError).toBe(true);
+      expect(mockSearchFacilities).not.toHaveBeenCalled();
+    });
+
+    it('reads an empty list as omitted, so the search still needs a geographic filter', async () => {
+      await expect(run({ state: [], zip_code: [''] })).rejects.toMatchObject({
+        data: { reason: 'no_geographic_filter' },
+      });
+      await expect(run({ state: [], county: 'CLARK' })).rejects.toMatchObject({
+        data: { reason: 'county_requires_state' },
+      });
+      expect(mockSearchFacilities).not.toHaveBeenCalled();
+    });
+
+    it('sends county with every listed state, and a list alongside a proximity search', async () => {
+      const { enrichment } = await run({ state: 'WA,NV', county: 'Clark County' });
+      expect(sent()).toMatchObject({ states: ['WA', 'NV'], county: 'CLARK' });
+      expect(enrichment.effectiveQuery).toBe('state=WA,NV; county begins with CLARK');
+
+      mockSearchFacilities.mockClear();
+      await run({
+        zip_code: '98660,97217',
+        latitude: 45.628,
+        longitude: -122.674,
+        radius_miles: 5,
+      });
+      expect(sent()).toMatchObject({
+        zipCodes: ['98660', '97217'],
+        latitude: 45.628,
+        longitude: -122.674,
+        radiusMiles: 5,
+      });
+    });
+
+    it('advertises state and zip_code as arrays of the single-value forms', () => {
+      const json = z.toJSONSchema(echoSearchFacilitiesTool.input, { io: 'input' }) as {
+        properties: Record<string, { type?: string; maxItems?: number }>;
+        required?: string[];
+      };
+      expect(json.properties.state).toMatchObject({ type: 'array', maxItems: 100 });
+      expect(json.properties.zip_code).toMatchObject({ type: 'array', maxItems: 200 });
+      expect(json.required ?? []).not.toContain('state');
+      expect(json.required ?? []).not.toContain('zip_code');
+    });
+  });
+
+  describe('regression #80: distanceMiles on proximity rows', () => {
+    // ECHO's rows within 1 mile of 47.527, -122.318, in its alphabetical order.
+    const kenyon = {
+      registryId: '110008221904',
+      name: '1ST KENYON DRUM',
+      latitude: 47.53192,
+      longitude: -122.33513,
+      programs: noPrograms,
+      triFacilityIds: [],
+    };
+    const fifthAve = {
+      registryId: '110005387161',
+      name: '5TH AVE S SITE',
+      latitude: 47.529941,
+      longitude: -122.328552,
+      programs: noPrograms,
+      triFacilityIds: [],
+    };
+    const noCoordinates = {
+      registryId: '110000000001',
+      name: 'NO COORDINATES',
+      programs: noPrograms,
+      triFacilityIds: [],
+    };
+    const near = { latitude: 47.527, longitude: -122.318, radius_miles: 1 };
+
+    it("adds each row's great-circle miles to two decimals, keeping ECHO's order, on both surfaces", async () => {
+      mockSearchFacilities.mockResolvedValue({ items: [kenyon, fifthAve], totalCount: 274 });
+      const result = await runToolContract(echoSearchFacilitiesTool, near);
+      const rows = (result.structuredContent as { facilities: Array<Record<string, unknown>> })
+        .facilities;
+      expect(rows.map((row) => [row.name, row.distanceMiles])).toEqual([
+        ['1ST KENYON DRUM', 0.87],
+        ['5TH AVE S SITE', 0.53],
+      ]);
+      const text = (result.content as Array<{ text?: string }>).map((b) => b.text).join('\n');
+      const kenyonBlock = text.slice(text.indexOf('### 1ST KENYON DRUM'), text.indexOf('### 5TH'));
+      expect(kenyonBlock).toContain('**Distance:** 0.87 mi');
+      expect(text.slice(text.indexOf('### 5TH'))).toContain('**Distance:** 0.53 mi');
+    });
+
+    it('leaves a proximity row without coordinates without a distance', async () => {
+      mockSearchFacilities.mockResolvedValue({ items: [noCoordinates, kenyon], totalCount: 2 });
+      const { result } = await run(near);
+      expect(result.facilities[0]).not.toHaveProperty('distanceMiles');
+      expect(result.facilities[1]).toMatchObject({ distanceMiles: 0.87 });
+    });
+
+    it.each([
+      { state: 'WA' },
+      { zip_code: '98108' },
+      { city: 'SEATTLE', state: 'WA' },
+      { county: 'KING', state: 'WA' },
+      { county_fips: '53033' },
+    ])('adds no distance on the administrative search %o', async (args) => {
+      mockSearchFacilities.mockResolvedValue({ items: [kenyon], totalCount: 1 });
+      const result = await runToolContract(echoSearchFacilitiesTool, args);
+      const [row] = (result.structuredContent as { facilities: Array<Record<string, unknown>> })
+        .facilities;
+      expect(row).not.toHaveProperty('distanceMiles');
+      const text = (result.content as Array<{ text?: string }>).map((b) => b.text).join('\n');
+      expect(text).not.toContain('**Distance:**');
     });
   });
 
@@ -340,7 +519,7 @@ describe('echoSearchFacilitiesTool', () => {
       });
       const { enrichment, ctx } = await run({ state: 'WA', facility_name: 'BOEING', offset: 50 });
       expect(mockSearchFacilities).toHaveBeenCalledWith(
-        { state: 'WA', facilityName: 'BOEING', limit: 50, offset: 50 },
+        { states: ['WA'], facilityName: 'BOEING', limit: 25, offset: 50 },
         ctx,
       );
       expect(enrichment).toMatchObject({
@@ -355,20 +534,43 @@ describe('echoSearchFacilitiesTool', () => {
       expect(enrichment).not.toHaveProperty('notice');
     });
 
-    it('clamps a limit above the cap to 100 with a notice, and rejects one above 5,000', async () => {
-      const { enrichment, ctx } = await run({ state: 'WA', limit: 1000 });
+    it('regression #78: serves a limit up to the 2,500 cap as asked, with no notice', async () => {
+      const { enrichment } = await run({ state: 'WA', limit: 2500 });
       expect(mockSearchFacilities).toHaveBeenCalledWith(
-        { state: 'WA', limit: 100, offset: 0 },
-        ctx,
+        expect.objectContaining({ limit: 2500 }),
+        expect.anything(),
+      );
+      expect(enrichment).not.toHaveProperty('limitNotice');
+    });
+
+    it('regression #78: clamps a limit above the cap to 2,500 with a notice, with no schema maximum above it', async () => {
+      const { enrichment } = await run({ state: 'WA', limit: 2501 });
+      expect(mockSearchFacilities).toHaveBeenCalledWith(
+        expect.objectContaining({ limit: 2500 }),
+        expect.anything(),
       );
       expect(enrichment.limitNotice).toBe(
-        "limit 1000 is above this tool's cap of 100, so at most 100 records were returned.",
+        "limit 2501 is above this tool's cap of 2500, so at most 2500 records were returned.",
       );
       expect(echoSearchFacilitiesTool.input.safeParse({ state: 'WA', limit: 5001 }).success).toBe(
-        false,
+        true,
       );
       expect(echoSearchFacilitiesTool.input.safeParse({ state: 'WA', offset: -1 }).success).toBe(
         false,
+      );
+    });
+
+    it('regression #78: never asks ECHO for more rows than its 5,000-row responseset maximum', async () => {
+      await run({ state: 'WA', limit: Number.MAX_SAFE_INTEGER });
+      const [params] = mockSearchFacilities.mock.calls[0]!;
+      expect(params.limit).toBeLessThanOrEqual(5000);
+    });
+
+    it('regression #78: returns 25 facilities when limit is omitted', async () => {
+      await run({ state: 'WA' });
+      expect(mockSearchFacilities).toHaveBeenCalledWith(
+        expect.objectContaining({ limit: 25 }),
+        expect.anything(),
       );
     });
 

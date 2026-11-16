@@ -26,7 +26,7 @@ describe('TRI successful empty-result recovery', () => {
   });
 
   const tools = [
-    { tool: triGetFacilityReleasesTool, input: { facility_id: 'NOFACILITY' } },
+    { tool: triGetFacilityReleasesTool, input: { facility_id: 'NOFACILITY00000' } },
     { tool: triSearchReleasesTool, input: { state: 'WA' } },
   ];
 

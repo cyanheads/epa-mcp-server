@@ -1,5 +1,5 @@
 /**
- * @fileoverview Resource for fetching a Superfund site record by SEMS site ID.
+ * @fileoverview Resource for fetching a Superfund site record by SEMS site ID or EPA ID.
  * @module mcp-server/resources/definitions/superfund-site.resource
  */
 
@@ -12,15 +12,16 @@ import { getDmapService } from '@/services/dmap/dmap-service.js';
 export const superfundSiteResource = resource('epa://superfund/{site_id}', {
   name: 'epa-superfund-site',
   description:
-    'Superfund site record from EPA SEMS by exact site ID. Returns source status and assessment metadata, location, coordinates, and every contaminant association. Associations do not establish current exposure or concentrations.',
+    'Superfund site record from EPA SEMS by exact site ID or EPA ID. Returns source status and assessment metadata, location, coordinates, and every contaminant association. Associations do not establish current exposure or concentrations.',
   mimeType: 'application/json',
   output: superfundSiteSchema.extend({ contaminants: superfundContaminantsSchema }),
   errors: [
     {
       reason: 'site_not_found',
       code: JsonRpcErrorCode.NotFound,
-      when: 'No SEMS site matches the exact ID.',
-      recovery: 'Use epa_superfund_search_sites to discover valid SEMS site IDs and retry.',
+      when: 'No SEMS site matches the exact site ID or EPA ID.',
+      recovery:
+        'Pass a SEMS site ID (7 digits) or an EPA ID (2 letters and 10 letters or digits), or find the site with epa_superfund_search_sites by name or location, and retry.',
       thrownBy: 'service',
     },
     {
@@ -41,7 +42,9 @@ export const superfundSiteResource = resource('epa://superfund/{site_id}', {
   params: z.object({
     site_id: z
       .string()
-      .describe('EPA SEMS Superfund site ID (obtained from epa_superfund_search_sites)'),
+      .describe(
+        "EPA SEMS Superfund site ID (obtained from epa_superfund_search_sites), or the site's EPA ID",
+      ),
   }),
 
   async handler(params, ctx) {

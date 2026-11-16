@@ -135,6 +135,41 @@ describe('service errors', () => {
     },
   );
 
+  it.each([
+    {
+      name: 'ECHO',
+      call: () => runToolContract(echoSearchFacilitiesTool, { state: 'WA' }),
+      status: 503,
+      code: JsonRpcErrorCode.ServiceUnavailable,
+    },
+    {
+      name: 'DMAP',
+      call: () => runToolContract(waterSearchSystemsTool, { state: 'WA' }),
+      status: 500,
+      code: JsonRpcErrorCode.ServiceUnavailable,
+    },
+    {
+      name: 'EJAM',
+      call: () => runToolContract(ejscreenGetScoresTool, { latitude: 40, longitude: -75 }),
+      status: 403,
+      code: JsonRpcErrorCode.Forbidden,
+    },
+  ])(
+    'keeps the $name HTTP $status error body off both surfaces',
+    async ({ call, status, code }) => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(
+        async () => new Response('{"error":"upstream operator detail"}', { status }),
+      );
+      const pending = call();
+      await vi.runAllTimersAsync();
+      const result = await pending;
+      expect(result.structuredContent).toMatchObject({ error: { code, data: { status } } });
+      expect(result.structuredContent).not.toHaveProperty('error.data.body');
+      expect(result.structuredContent).not.toHaveProperty('error.data.responseBody');
+      expect(JSON.stringify(result)).not.toContain('upstream operator detail');
+    },
+  );
+
   it('answers an ECHO invalid-ID body with facility_not_found after one request', async () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
