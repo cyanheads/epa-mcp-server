@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.8.1](changelog/0.8.x/0.8.1.md) — 2026-11-15
+
+Several states or ZIP codes per ECHO search, effluent exceedances and RCRA violations on the facility profile, Superfund lookup by EPA ID and name, TRI chemical IDs, paged case reports, per-tool limit caps, and distanceMiles on proximity rows.
+
 ## [0.8.0](changelog/0.8.x/0.8.0.md) — 2026-11-01 · ⚠️ Breaking
 
 New epa_echo_get_case tool, offset paging on every list, shared state/ZIP/date checks, deterministic result order, and corrected TRI, drinking-water, and EJScreen data.

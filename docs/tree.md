@@ -1,6 +1,6 @@
 # epa-mcp-server - Directory Structure
 
-Generated on: 2026-11-01 10:43:42
+Generated on: 2026-11-16 07:05:32
 
 ```text
 epa-mcp-server/
@@ -171,6 +171,7 @@ epa-mcp-server/
 │   │   │   │   ├── tri-get-facility-releases.tool.ts
 │   │   │   │   ├── tri-search-releases.tool.ts
 │   │   │   │   └── water-search-systems.tool.ts
+│   │   │   ├── distance-field.ts
 │   │   │   ├── effective-query.ts
 │   │   │   ├── format-dollars.ts
 │   │   │   ├── format-heading.ts
@@ -180,9 +181,11 @@ epa-mcp-server/
 │   │   │   ├── format-superfund-site.ts
 │   │   │   ├── format-tri-release.ts
 │   │   │   ├── input-formats.ts
-│   │   │   └── paging.ts
+│   │   │   ├── paging.ts
+│   │   │   └── tri-filters.ts
 │   │   ├── superfund-contaminants-schema.ts
-│   │   └── superfund-site-schema.ts
+│   │   ├── superfund-site-schema.ts
+│   │   └── tri-release-schema.ts
 │   ├── services/
 │   │   ├── airnow/
 │   │   │   ├── airnow-service.ts
@@ -198,8 +201,10 @@ epa-mcp-server/
 │   │   │   └── types.ts
 │   │   ├── call-budget.ts
 │   │   ├── county-name.ts
+│   │   ├── great-circle.ts
 │   │   └── page.ts
-│   └── index.ts
+│   ├── index.ts
+│   └── load-env.ts
 ├── tests/
 │   ├── config/
 │   │   └── server-config.test.ts
@@ -216,11 +221,13 @@ epa-mcp-server/
 │   │       │   ├── echo-search-facilities.tool.test.ts
 │   │       │   ├── echo-search-violations.tool.test.ts
 │   │       │   ├── ejscreen-get-scores.tool.test.ts
+│   │       │   ├── output-description-budget.test.ts
 │   │       │   ├── superfund-search-sites.tool.test.ts
 │   │       │   ├── tool-definitions.test.ts
 │   │       │   ├── tri-get-facility-releases.tool.test.ts
 │   │       │   ├── tri-search-releases.tool.test.ts
 │   │       │   └── water-search-systems.tool.test.ts
+│   │       ├── distance-field.test.ts
 │   │       ├── effective-query.test.ts
 │   │       ├── input-formats.test.ts
 │   │       ├── markdown-output.test.ts
@@ -238,6 +245,7 @@ epa-mcp-server/
 │   │   │   │   ├── newark-superfund-coordinates.json
 │   │   │   │   └── seattle-superfund-coordinates.json
 │   │   │   ├── dmap-service.test.ts
+│   │   │   ├── epa-id-failure-map.test.ts
 │   │   │   ├── proximity-contract.test.ts
 │   │   │   └── superfund-detail.test.ts
 │   │   ├── echo/
@@ -247,7 +255,8 @@ epa-mcp-server/
 │   │   │   ├── ejam-fixtures.ts
 │   │   │   └── ejscreen-service.test.ts
 │   │   ├── county-name.test.ts
-│   │   └── error-responses.test.ts
+│   │   ├── error-responses.test.ts
+│   │   └── great-circle.test.ts
 │   ├── tools/
 │   ├── helpers.ts
 │   ├── http-session.test.ts
