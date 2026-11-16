@@ -55,10 +55,7 @@ const KEYLESS_TOOL_NAMES = [
 ];
 
 async function inspectSession(mode: string | undefined, expected: 'stateful' | 'stateless') {
-  const { origin, stop } = await startHttpServer({
-    LOGS_DIR: '/tmp/epa-maintenance-http-logs',
-    MCP_SESSION_MODE: mode,
-  });
+  const { origin, stop } = await startHttpServer({ MCP_SESSION_MODE: mode });
   try {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',

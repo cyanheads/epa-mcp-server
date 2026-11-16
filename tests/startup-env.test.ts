@@ -3,31 +3,47 @@
  * @module tests/startup-env.test
  */
 import { execFileSync, spawn } from 'node:child_process';
-import { copyFile, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
 
-it.each([undefined, '1.5'])(
-  'loads .env and preserves framework config startup errors under Node, port=%s',
-  async (port) => {
+/* One Node bundle of src/index.ts, built once and copied into each case's working directory. */
+let bundleDir: string;
+const bundle = () => join(bundleDir, 'index.mjs');
+
+beforeAll(async () => {
+  bundleDir = await mkdtemp(join(tmpdir(), 'epa-startup-bundle-'));
+  execFileSync(
+    'bun',
+    ['build', 'src/index.ts', '--target=node', '--packages=external', `--outfile=${bundle()}`],
+    { stdio: 'pipe' },
+  );
+});
+
+afterAll(async () => {
+  await rm(bundleDir, { recursive: true, force: true });
+});
+
+it.each([
+  { port: undefined, envFile: 'file' },
+  { port: '1.5', envFile: 'file' },
+  { port: undefined, envFile: 'directory' },
+] as const)(
+  'loads .env and preserves framework config startup errors under Node, port=$port, .env=$envFile',
+  async ({ port, envFile }) => {
     const scratch = await mkdtemp(join(tmpdir(), 'epa-startup-env-'));
     try {
       await symlink(resolve('node_modules'), join(scratch, 'node_modules'));
       await symlink(resolve('skills'), join(scratch, 'skills'));
       await copyFile(resolve('package.json'), join(scratch, 'package.json'));
-      await writeFile(join(scratch, '.env'), 'AIRNOW_API_KEY=startup-test-placeholder\n');
-      execFileSync(
-        'bun',
-        [
-          'build',
-          'src/index.ts',
-          '--target=node',
-          '--packages=external',
-          `--outfile=${join(scratch, 'index.mjs')}`,
-        ],
-        { stdio: 'pipe' },
-      );
+      if (envFile === 'directory') await mkdir(join(scratch, '.env'));
+      else
+        await writeFile(
+          join(scratch, '.env'),
+          'AIRNOW_API_KEY=startup-test-placeholder\nEPA_CLAMP_LIMITS=false\n',
+        );
+      await copyFile(bundle(), join(scratch, 'index.mjs'));
       const env: NodeJS.ProcessEnv = {
         ...process.env,
         MCP_TRANSPORT_TYPE: 'stdio',
@@ -37,6 +53,7 @@ it.each([undefined, '1.5'])(
         LOGS_DIR: join(scratch, 'logs'),
       };
       delete env.AIRNOW_API_KEY;
+      delete env.EPA_CLAMP_LIMITS;
       if (port !== undefined) env.MCP_HTTP_PORT = port;
       const child = spawn('node', [join(scratch, 'index.mjs')], {
         cwd: scratch,
@@ -68,8 +85,34 @@ it.each([undefined, '1.5'])(
         );
         child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' })}\n`);
         const result = await output;
-        if (port === undefined) expect(result.stdout).toContain('epa_airnow_get_conditions');
-        else {
+        if (envFile === 'directory') {
+          /* An unreadable .env reaches createApp(), which reports it with its banner. */
+          expect(result.code).toBe(1);
+          expect(stderr).toContain('Configuration error — server failed to start');
+          expect(stderr).toContain('Failed to load .env');
+          expect(stderr).not.toContain('at process.loadEnvFile');
+        } else if (port === undefined) {
+          expect(result.stdout).toContain('epa_airnow_get_conditions');
+          /* `.env`'s EPA_CLAMP_LIMITS=false reached the count-input schemas, which are built
+             while the tool modules load: each limit advertises its cap as a strict maximum. */
+          const list = result.stdout
+            .split('\n')
+            .filter((line) => line.includes('"id":2'))
+            .map(
+              (line) =>
+                JSON.parse(line) as {
+                  result: {
+                    tools: {
+                      name: string;
+                      inputSchema: { properties: Record<string, { maximum?: number }> };
+                    }[];
+                  };
+                },
+            )[0];
+          const superfund = list?.result.tools.find((t) => t.name === 'epa_superfund_search_sites');
+          const maximum = superfund?.inputSchema.properties.limit?.maximum;
+          expect(maximum).toBeLessThan(Number.MAX_SAFE_INTEGER);
+        } else {
           expect(result.code).toBe(1);
           expect(stderr).toContain('Configuration error — server failed to start');
           expect(stderr).toContain('MCP_HTTP_PORT');

@@ -8,7 +8,10 @@
 
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { describe, expect, it } from 'vitest';
@@ -151,12 +154,14 @@ export type HttpServer = { origin: string; stop: () => Promise<void> };
 
 /**
  * Spawn `src/index.ts` over HTTP without auth or telemetry on a free loopback port and wait for
- * `/healthz`. `env` overrides the defaults; an `undefined` value removes the variable. Callers
- * stop the server in a `finally`; a server that fails to start is stopped before this throws.
+ * `/healthz`. `env` overrides the defaults; an `undefined` value removes the variable. The server
+ * logs to its own temporary directory, which `stop` removes. Callers stop the server in a
+ * `finally`; a server that fails to start is stopped before this throws.
  */
 export async function startHttpServer(
   env: Record<string, string | undefined>,
 ): Promise<HttpServer> {
+  const logsDir = await mkdtemp(join(tmpdir(), 'epa-test-server-logs-'));
   const reservation = createServer();
   reservation.listen(0, '127.0.0.1');
   await once(reservation, 'listening');
@@ -172,6 +177,7 @@ export async function startHttpServer(
     AIRNOW_API_KEY: '',
     OTEL_ENABLED: 'false',
     MCP_LOG_LEVEL: 'error',
+    LOGS_DIR: logsDir,
   };
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined) delete childEnv[key];
@@ -192,6 +198,7 @@ export async function startHttpServer(
   const stop = async () => {
     child.kill('SIGTERM');
     await exited;
+    await rm(logsDir, { recursive: true, force: true });
   };
   const origin = `http://127.0.0.1:${address.port}`;
   try {

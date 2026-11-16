@@ -4,6 +4,8 @@
  * @module index
  */
 
+// First import: loads .env before the tool modules below build their schemas.
+import './load-env.js';
 import { createApp } from '@cyanheads/mcp-ts-core';
 import { getServerConfig } from './config/server-config.js';
 import { allResourceDefinitions } from './mcp-server/resources/definitions/index.js';
@@ -15,12 +17,7 @@ import { initEjscreenService } from './services/ejscreen/ejscreen-service.js';
 
 // AirNow is the only key-gated service. When AIRNOW_API_KEY is absent the server
 // starts without epa_airnow_get_conditions, leaving the 10 keyless tools available.
-// Read the optional-tool gate from .env on Node; framework validation stays inside createApp().
-try {
-  process.loadEnvFile();
-} catch (error) {
-  if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
-}
+// Framework config validation stays inside createApp().
 const airNowEnabled = getServerConfig().airNowApiKey !== undefined;
 
 /** Server instructions, omitting AirNow guidance when the air quality tool is disabled. */
