@@ -17,8 +17,32 @@
       "command": "npx",
       "args": ["-y", "@cyanheads/epa-mcp-server"],
       "env": {
-        "MCP_TRANSPORT_TYPE": "stdio"
+        "MCP_TRANSPORT_TYPE": "stdio",
+        "AIRNOW_API_KEY": "${user_config.AIRNOW_API_KEY}",
+        "EJSCREEN_API_BASE_URL": "${user_config.EJSCREEN_API_BASE_URL}",
+        "EPA_CLAMP_LIMITS": "${user_config.EPA_CLAMP_LIMITS}"
       }
+    }
+  },
+  "userConfig": {
+    "AIRNOW_API_KEY": {
+      "type": "string",
+      "title": "AirNow API Key",
+      "description": "Optional. Enables the epa_airnow_get_conditions tool when set; the other tools work without it. Free registration at docs.airnowapi.org.",
+      "sensitive": true,
+      "default": ""
+    },
+    "EJSCREEN_API_BASE_URL": {
+      "type": "string",
+      "title": "EJScreen (EJAM) API Base URL",
+      "description": "Optional. Override the EJScreen data endpoint used by epa_ejscreen_get_scores. Defaults to https://api.ejanalysis.com — the community-maintained EJScreen rehost by Public Environmental Data Partners.",
+      "default": "https://api.ejanalysis.com"
+    },
+    "EPA_CLAMP_LIMITS": {
+      "type": "string",
+      "title": "Clamp Count Inputs",
+      "description": "Optional. true (default) serves a count input such as limit above its cap at the cap with a notice; false makes each cap a strict maximum, so a larger value fails validation.",
+      "default": "true"
     }
   }
 }

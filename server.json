@@ -35,6 +35,13 @@
           "default": "https://api.ejanalysis.com"
         },
         {
+          "name": "EPA_CLAMP_LIMITS",
+          "description": "Optional. true (default) serves a count input such as limit above its cap at the cap with a notice; false advertises each cap as a strict maximum, so a larger value fails validation.",
+          "format": "string",
+          "isRequired": false,
+          "default": "true"
+        },
+        {
           "name": "MCP_LOG_LEVEL",
           "description": "Sets the minimum log level for output (e.g., 'debug', 'info', 'warn').",
           "format": "string",
@@ -71,6 +78,13 @@
           "format": "string",
           "isRequired": false,
           "default": "https://api.ejanalysis.com"
+        },
+        {
+          "name": "EPA_CLAMP_LIMITS",
+          "description": "Optional. true (default) serves a count input such as limit above its cap at the cap with a notice; false advertises each cap as a strict maximum, so a larger value fails validation.",
+          "format": "string",
+          "isRequired": false,
+          "default": "true"
         },
         {
           "name": "MCP_HTTP_HOST",

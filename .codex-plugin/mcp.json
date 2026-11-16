@@ -4,6 +4,7 @@
     "args": ["-y", "@cyanheads/epa-mcp-server"],
     "env": {
       "MCP_TRANSPORT_TYPE": "stdio"
-    }
+    },
+    "env_vars": ["AIRNOW_API_KEY", "EJSCREEN_API_BASE_URL", "EPA_CLAMP_LIMITS"]
   }
 }

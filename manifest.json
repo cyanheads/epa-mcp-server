@@ -23,7 +23,8 @@
         "MCP_AUTH_MODE": "none",
         "NODE_ENV": "production",
         "AIRNOW_API_KEY": "${user_config.AIRNOW_API_KEY}",
-        "EJSCREEN_API_BASE_URL": "${user_config.EJSCREEN_API_BASE_URL}"
+        "EJSCREEN_API_BASE_URL": "${user_config.EJSCREEN_API_BASE_URL}",
+        "EPA_CLAMP_LIMITS": "${user_config.EPA_CLAMP_LIMITS}"
       }
     }
   },
@@ -48,6 +49,13 @@
       "description": "Optional. Override the EJScreen data endpoint used by epa_ejscreen_get_scores. Defaults to https://api.ejanalysis.com — the community-maintained EJScreen rehost by Public Environmental Data Partners.",
       "required": false,
       "default": "https://api.ejanalysis.com"
+    },
+    "EPA_CLAMP_LIMITS": {
+      "type": "string",
+      "title": "Clamp Count Inputs",
+      "description": "Optional. true (default) serves a count input such as limit above its cap at the cap with a notice; false makes each cap a strict maximum, so a larger value fails validation.",
+      "required": false,
+      "default": "true"
     }
   }
 }
