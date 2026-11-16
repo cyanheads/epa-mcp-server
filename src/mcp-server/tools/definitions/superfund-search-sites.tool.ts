@@ -274,7 +274,7 @@ export const superfundSearchSitesTool = tool('epa_superfund_search_sites', {
       return {
         sites: [],
         ...matched,
-        message: `No Superfund sites found. Try ${input.name ? 'a shorter name, ' : ''}expanding the area, removing NPL status filter, or using a different location.`,
+        message: `No Superfund sites found. Try ${name ? 'a shorter name, ' : ''}expanding the area, removing NPL status filter, or using a different location.`,
       };
     }
 

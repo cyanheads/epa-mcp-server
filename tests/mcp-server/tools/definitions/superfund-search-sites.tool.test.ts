@@ -284,6 +284,19 @@ describe('superfundSearchSitesTool', () => {
     });
   });
 
+  it('suggests no shorter name when a blank name was left out of the search', async () => {
+    mockSearchSuperfund.mockResolvedValue({ items: [] });
+    const ctx = createMockContext({ errors: superfundSearchSitesTool.errors });
+    const input = superfundSearchSitesTool.input.parse({ state: 'HI', name: '   ' });
+    const result = await superfundSearchSitesTool.handler(input, ctx);
+    expect(mockSearchSuperfund.mock.calls[0]![0]).not.toHaveProperty('name');
+    expect(result).toEqual({
+      sites: [],
+      message:
+        'No Superfund sites found. Try expanding the area, removing NPL status filter, or using a different location.',
+    });
+  });
+
   describe('query echo', () => {
     const echoOf = async (args: Record<string, unknown>, items: unknown[] = [hanfordSite]) => {
       mockSearchSuperfund.mockResolvedValue({ items });
